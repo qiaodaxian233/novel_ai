@@ -5165,12 +5165,27 @@ class MainWindow(QMainWindow):
         chapter_kws    = ["章节大纲", "分章大纲", "章节梗概", "章节列表"]
         intro_kws      = ["简介", "作品简介", "故事简介"]
 
-        seed       = extract_block(seed_kws, text)
-        worldview  = extract_block(worldview_kws, text)
-        lo_layer   = extract_block(lo_kws, text)
-        structure  = extract_block(structure_kws, text)
+        def extract_kv(keywords, text):
+            """兜底：匹配 **关键词**：内容 / 关键词：内容 这种键值对（单行）"""
+            kw_pattern = '|'.join(re.escape(k) for k in keywords)
+            pattern = (
+                r'(?:\*\*\s*)?'                 # 可选 **
+                r'(?:' + kw_pattern + r')'         # 关键词
+                r'(?:\s*\*\*)?'                 # 可选 **
+                r'\s*[:：]\s*'                   # 冒号
+                r'(.+?)'                           # 内容
+                r'(?=\n|\Z)'                     # 行尾或文末
+            )
+            m = re.search(pattern, text)
+            return m.group(1).strip() if m else ""
+
+        # 先尝试段落标题，再降级到键值对
+        seed       = extract_block(seed_kws, text)       or extract_kv(seed_kws + ["题材", "故事题材"], text)
+        worldview  = extract_block(worldview_kws, text)  or extract_kv(worldview_kws, text)
+        lo_layer   = extract_block(lo_kws, text)         or extract_kv(lo_kws, text)
+        structure  = extract_block(structure_kws, text)  or extract_kv(structure_kws + ["节奏", "升级逻辑"], text)
         ch_outline = extract_block(chapter_kws, text, is_chapter=True)
-        intro      = extract_block(intro_kws, text)
+        intro      = extract_block(intro_kws, text)      or extract_kv(intro_kws, text)
 
         # 兜底：如果章节大纲没识别到，但文本里有大量 "1." "2." "第X章" 这种列表
         # 就把列表部分作为章节大纲
