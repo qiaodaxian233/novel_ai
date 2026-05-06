@@ -3210,9 +3210,14 @@ class GenerationControl(QWidget):
         gbox = QGroupBox("批量生成参数")
         glay = QVBoxLayout(gbox)
         crow = QHBoxLayout()
+        self.btn_gen_one = QPushButton("📖 生成第一章")
+        self.btn_gen_one.setStyleSheet(
+            "background:#27ae60;color:white;padding:6px 14px;font-weight:bold;border-radius:3px;")
         self.btn_gen_three = QPushButton("生成黄金三章")
         self.btn_regen_three = QPushButton("不想要,重生成黄金三章")
-        crow.addWidget(self.btn_gen_three); crow.addWidget(self.btn_regen_three)
+        crow.addWidget(self.btn_gen_one)
+        crow.addWidget(self.btn_gen_three)
+        crow.addWidget(self.btn_regen_three)
 
         crow.addWidget(QLabel("连续生成:"))
         self.batch_count = QSpinBox()
@@ -3638,6 +3643,7 @@ class MainWindow(QMainWindow):
         # 生成控制 - 任务
         self.tab_generation.btn_start.clicked.connect(self.start_generation)
         self.tab_generation.btn_pause.clicked.connect(self.pause_generation)
+        self.tab_generation.btn_gen_one.clicked.connect(self.gen_first_chapter)
         self.tab_generation.btn_gen_three.clicked.connect(self.gen_golden_three)
         self.tab_generation.btn_regen_three.clicked.connect(self.gen_golden_three)
 
@@ -5265,6 +5271,29 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请先填写大纲内容"); return
         prompt = PROMPTS["intro"].format(seed=seed, worldview=wv, structure=st)
         self._send_to_ai(prompt, "作品简介", target="intro")
+
+    def gen_first_chapter(self):
+        """单独生成第一章（要求已有章节大纲）"""
+        co = self.tab_outline.chapter_outline_edit.toPlainText()
+        if not co.strip():
+            QMessageBox.warning(self, "提示", "请先生成或填写章节大纲")
+            return
+        if not self.worker.is_ready():
+            QMessageBox.information(
+                self, "请先启动浏览器",
+                "请先在『生成控制』页点『🚀 启动浏览器』并完成 AI 网站登录。")
+            return
+        # 重置章节列表（如果用户想重新从第一章开始）
+        if self.chapters:
+            reply = QMessageBox.question(
+                self, "确认", 
+                f"已有 {len(self.chapters)} 章，是否清空后从第 1 章开始？\n（选「否」则继续生成下一章）",
+                QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self.chapters.clear()
+                self.tab_generation.log("已清空已生成章节，准备生成第 1 章", "info")
+        self.tab_generation.log("▶ 开始生成第 1 章...", "info")
+        self._send_next_chapter()
 
     def gen_golden_three(self):
         genres = self.tab_settings.get_selected_genres() or ["言情"]
