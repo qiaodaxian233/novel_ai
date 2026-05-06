@@ -3068,13 +3068,11 @@ class GenerationControl(QWidget):
         # 内核 0: standalone Chrome,自有 profile(简单,但同 profile 不能再开 Chrome)
         # 内核 1: attach 模式,自动起调试 Chrome 后 attach(最稳)
         # 内核 2: standalone Edge
-        rb_chromium = QRadioButton("Chrome 独立(standalone)"); rb_chromium.setChecked(True)
-        rb_chrome = QRadioButton("Chrome 调试(attach,推荐)")
+        rb_chrome = QRadioButton("Chrome 调试(attach,推荐)"); rb_chrome.setChecked(True)
         rb_edge = QRadioButton("系统 Edge")
-        self.kernel_group.addButton(rb_chromium, 0)
         self.kernel_group.addButton(rb_chrome, 1)
         self.kernel_group.addButton(rb_edge, 2)
-        for rb in (rb_chromium, rb_chrome, rb_edge):
+        for rb in (rb_chrome, rb_edge):
             b1.addWidget(rb)
         b1.addStretch()
         self.btn_launch = QPushButton("🚀 启动浏览器(首次请登录)")
@@ -3201,11 +3199,11 @@ class GenerationControl(QWidget):
         self.log_signal.connect(self._append_log)
 
     def selected_kernel_channel(self):
-        """0=Chrome 独立(standalone) / 1=Chrome 调试 attach / 2=系统 Edge"""
+        """1=Chrome 调试 attach / 2=系统 Edge (standalone 已移除)"""
         idx = self.kernel_group.checkedId()
-        if idx < 0:
-            idx = 0
-        return [None, "chrome", "msedge"][idx]
+        if idx == 2:
+            return "msedge"
+        return "chrome"  # 默认 attach
 
     def critique_config(self):
         """返回当前启用的章节校验维度"""
