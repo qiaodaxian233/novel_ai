@@ -2500,9 +2500,11 @@ class BrowserWorker(QObject):
 
         # ── 快速路径: ProseMirror / #prompt-textarea
         # 实测最有效: focus → selectAll → delete → execCommand insertText → 触发 React 事件
+        # 优先用 #prompt-textarea，不依赖可能含特殊字符的多选择器字符串
+        _pm_sel = json.dumps('#prompt-textarea, div.ProseMirror[contenteditable="true"], div[contenteditable="true"]')
         try:
             result = self.driver.execute_script(f"""
-                const box = document.querySelector({sel});
+                const box = document.querySelector({_pm_sel});
                 if (!box || !box.isContentEditable) return 'SKIP';
                 box.focus();
                 document.execCommand('selectAll', false, null);
@@ -2515,6 +2517,7 @@ class BrowserWorker(QObject):
                 const content = (box.innerText || box.textContent || '').trim();
                 return content ? 'OK' : 'EMPTY';
             """)
+            self.log_signal.emit(f"注入结果: {result}", "info")
             if result == 'OK':
                 # 等待发送按钮出现（输入框为空时按钮不在DOM，有内容后才渲染）
                 _btn_sel = json.dumps(
@@ -2533,8 +2536,38 @@ class BrowserWorker(QObject):
                 _t_inj.sleep(0.2)
                 self.log_signal.emit("✓ insertText 注入成功，发送按钮已就绪", "info")
                 return True
-            elif result == 'EMPTY':
-                self.log_signal.emit("insertText 后内容为空，尝试其他方法", "warn")
+            elif result in ('EMPTY', 'SKIP'):
+                self.log_signal.emit(f"insertText 结果={result}，尝试 CDP 注入", "warn")
+                # CDP Input.insertText — Selenium attach模式下最可靠
+                try:
+                    self.driver.execute_script(f"""
+                        const box = document.querySelector({_pm_sel});
+                        if (box) {{ box.focus(); document.execCommand('selectAll'); document.execCommand('delete'); }}
+                    """)
+                    _t_inj.sleep(0.1)
+                    self.driver.execute_cdp_cmd('Input.insertText', {{'text': text}})
+                    _t_inj.sleep(0.3)
+                    # 触发 React 事件
+                    cdp_ok = self.driver.execute_script(f"""
+                        const box = document.querySelector({_pm_sel});
+                        if (!box) return false;
+                        box.dispatchEvent(new InputEvent('input', {{bubbles:true, cancelable:true}}));
+                        box.dispatchEvent(new CompositionEvent('compositionend', {{bubbles:true, data:' '}}));
+                        return (box.innerText || box.textContent || '').trim().length > 0;
+                    """)
+                    if cdp_ok:
+                        self.log_signal.emit("✓ CDP insertText 注入成功", "info")
+                        # 等发送按钮出现
+                        _btn_sel2 = json.dumps('button.composer-submit-btn, [data-testid="send-button"]')
+                        for _wi2 in range(20):
+                            if self.driver.execute_script(f"return !!document.querySelector({_btn_sel2});"):
+                                break
+                            _t_inj.sleep(0.15)
+                        _t_inj.sleep(0.2)
+                        return True
+                    self.log_signal.emit("CDP 注入后内容仍为空", "warn")
+                except Exception as _cdp_e:
+                    self.log_signal.emit(f"CDP 注入失败: {_cdp_e}", "warn")
         except Exception as e:
             self.log_signal.emit(f"快速注入异常: {e}，降级处理", "warn")
 
