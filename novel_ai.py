@@ -6538,33 +6538,12 @@ class MainWindow(QMainWindow):
         self.tab_generation.log("一键生成对话记忆已中止", "warn")
 
     def _popup_choose_target(self, content):
-        """没指定 target 时让用户选回填位置"""
-        if not content.strip(): return
-        box = QMessageBox(self)
-        box.setWindowTitle("抓取成功")
-        box.setText(f"已抓取 {len(content)} 字符,填到哪里?")
-        b1 = box.addButton("当前章节正文", QMessageBox.AcceptRole)
-        b2 = box.addButton("创意灵感", QMessageBox.AcceptRole)
-        b3 = box.addButton("章节大纲", QMessageBox.AcceptRole)
-        b4 = box.addButton("作品简介", QMessageBox.AcceptRole)
-        b5 = box.addButton("仅复制到剪贴板", QMessageBox.RejectRole)
-        box.exec_()
-        c = box.clickedButton()
-        if c is b1:
-            self.tab_editor.content_edit.setPlainText(content)
-            self.tabs.setCurrentWidget(self.tab_editor)
-        elif c is b2:
-            self.tab_settings.inspiration_edit.setPlainText(content)
-            self.tabs.setCurrentWidget(self.tab_settings)
-        elif c is b3:
-            self.tab_outline.chapter_outline_edit.setPlainText(content)
-            self.tabs.setCurrentWidget(self.tab_outline)
-        elif c is b4:
-            self.tab_outline.intro_edit.setPlainText(content)
-            self.tabs.setCurrentWidget(self.tab_outline)
-        else:
-            QApplication.clipboard().setText(content)
-            self.tab_generation.log("已复制到剪贴板", "info")
+        """没指定 target 时:直接复制到剪贴板,不弹窗打扰"""
+        if not content.strip():
+            return
+        QApplication.clipboard().setText(content)
+        self.tab_generation.log(
+            f"✓ 已抓取 {len(content)} 字符,内容已复制到剪贴板", "success")
 
     def gen_inspiration(self):
         genres = self.tab_settings.get_selected_genres()
