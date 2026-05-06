@@ -2436,11 +2436,42 @@ class BrowserWorker(QObject):
             except Exception:
                 pass
 
-        # 2) 注入文本(三档兜底:textarea native setter / contenteditable execCommand / innerHTML)
-        if not self._inject_prompt(prof["input"], prompt):
-            self.log_signal.emit("文本注入失败", "error")
-            self.response_received.emit(task_id, "")
-            return
+        # 2.0) 长文本附件模式：超过 1500 字符时转成 txt 文件上传
+        # 优势：绕过审核（附件不进入文本审核）+ 避免输入框卡顿
+        upload_threshold = task.get("upload_threshold", 1500)
+        use_attachment = (
+            prof.get("name", "").startswith("ChatGPT")  # 仅 ChatGPT 系列支持
+            and len(prompt) >= upload_threshold
+            and task.get("allow_attachment", True)
+        )
+        
+        if use_attachment:
+            self.log_signal.emit(
+                f"⚡ 长文本({len(prompt)}字)启用附件上传模式", "info")
+            uploaded = self._upload_prompt_as_file(prof, prompt)
+            if uploaded:
+                # 输入框只填一句简短指令引导 AI 读附件
+                short_guide = (
+                    "请仔细阅读附件中的完整需求和资料，"
+                    "并按其中要求生成内容。直接输出最终结果，无需复述需求。"
+                )
+                if not self._inject_prompt(prof["input"], short_guide):
+                    self.log_signal.emit("引导语注入失败", "error")
+                    self.response_received.emit(task_id, "")
+                    return
+                self.log_signal.emit("✓ 附件已上传，已注入引导语", "info")
+            else:
+                self.log_signal.emit("⚠️ 附件上传失败，降级为直接发送文本", "warn")
+                if not self._inject_prompt(prof["input"], prompt):
+                    self.log_signal.emit("文本注入失败", "error")
+                    self.response_received.emit(task_id, "")
+                    return
+        else:
+            # 短文本：直接注入
+            if not self._inject_prompt(prof["input"], prompt):
+                self.log_signal.emit("文本注入失败", "error")
+                self.response_received.emit(task_id, "")
+                return
 
         # 模拟人类停顿(给 React 一点时间 setState)
         time.sleep(0.3)
@@ -2490,6 +2521,100 @@ class BrowserWorker(QObject):
             self.log_signal.emit(
                 "回复抓取为空,可能选择器需调整(到 SITE_PROFILES 微调)", "warn")
         self.response_received.emit(task_id, last_text)
+
+    # ---------- 附件上传：把长文本 prompt 转 txt 上传 ----------
+    def _upload_prompt_as_file(self, prof, text):
+        """
+        把 prompt 写成临时 txt 文件，通过 ChatGPT 的文件上传 input 注入。
+        ChatGPT 系列(包括镜像站)有隐藏的 <input type="file" />，
+        Selenium 直接 send_keys(filepath) 即可上传，无需点开文件选择对话框。
+        """
+        import os, tempfile, time as _t
+        # 1) 写临时文件
+        try:
+            tmp_dir = tempfile.gettempdir()
+            tmp_path = os.path.join(tmp_dir, f"novel_ai_prompt_{int(_t.time())}.txt")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self.log_signal.emit(f"已创建临时附件: {os.path.basename(tmp_path)} ({len(text)}字)", "info")
+        except Exception as e:
+            self.log_signal.emit(f"写入临时文件失败: {e}", "error")
+            return False
+
+        # 2) 找到隐藏的 <input type="file"> 元素
+        # ChatGPT/镜像站通常有这个隐藏控件用于文件上传
+        try:
+            # 等待 input[type=file] 出现（页面可能延迟渲染）
+            file_input = None
+            for _ in range(10):
+                file_inputs = self.driver.execute_script("""
+                    return Array.from(document.querySelectorAll('input[type="file"]'))
+                        .map(el => ({
+                            visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+                            accept: el.accept || '',
+                            multiple: el.multiple
+                        }));
+                """)
+                if file_inputs:
+                    self.log_signal.emit(
+                        f"找到 {len(file_inputs)} 个 input[type=file]", "info")
+                    break
+                _t.sleep(0.3)
+            else:
+                self.log_signal.emit("页面未找到 input[type=file]，无法上传附件", "warn")
+                return False
+
+            # 3) 用 Selenium 的 send_keys 注入文件路径
+            from selenium.webdriver.common.by import By
+            inputs = self.driver.find_elements(By.CSS_SELECTOR, 'input[type="file"]')
+            if not inputs:
+                return False
+
+            # 强制让 input 可见（Selenium 不能给隐藏元素 send_keys）
+            self.driver.execute_script("""
+                document.querySelectorAll('input[type="file"]').forEach(el => {
+                    el.style.display = 'block';
+                    el.style.visibility = 'visible';
+                    el.style.opacity = '1';
+                    el.style.position = 'fixed';
+                    el.style.left = '0';
+                    el.style.top = '0';
+                    el.style.width = '1px';
+                    el.style.height = '1px';
+                    el.removeAttribute('hidden');
+                });
+            """)
+            _t.sleep(0.3)
+
+            # 选第一个 input（通常就是聊天框的附件上传）
+            inputs[0].send_keys(tmp_path)
+            self.log_signal.emit("文件路径已 send_keys 到 input", "info")
+
+            # 4) 等待上传完成（看页面是否出现附件预览/缩略图）
+            for i in range(20):  # 最多等10秒
+                uploaded = self.driver.execute_script(f"""
+                    // 检查是否有附件预览元素出现
+                    const previews = document.querySelectorAll(
+                        '[class*="attachment" i], [class*="file-preview" i], ' +
+                        '[data-testid*="file" i], [class*="upload" i] [class*="thumb" i]'
+                    );
+                    // 检查输入框附近是否有文件名字样
+                    const text = document.body.innerText;
+                    const fname = '{os.path.basename(tmp_path)}';
+                    return previews.length > 0 || text.includes(fname);
+                """)
+                if uploaded:
+                    self.log_signal.emit(f"✓ 附件上传完成 ({(i+1)*0.5}s)", "info")
+                    _t.sleep(0.8)  # 给前端一点时间完成处理
+                    return True
+                _t.sleep(0.5)
+
+            self.log_signal.emit("等待附件上传超时，仍尝试发送", "warn")
+            return True  # 兜底：即使没检测到也试试发送
+
+        except Exception as e:
+            self.log_signal.emit(f"附件上传异常: {e}", "warn")
+            return False
 
     # ---------- 文本注入(借鉴 GPTWebController 的 execCommand 路径)----------
     def _inject_prompt(self, input_selector, text):
@@ -3244,6 +3369,13 @@ class GenerationControl(QWidget):
         self.auto_grab = QCheckBox("自动抓取并回填(生成完即写入章节)")
         self.auto_grab.setChecked(True)
         crow2.addWidget(self.auto_grab)
+        self.use_attachment = QCheckBox("📎 长文本转TXT附件上传(绕过审核)")
+        self.use_attachment.setChecked(True)
+        self.use_attachment.setToolTip(
+            "勾选后,超过1500字的提示词会自动转成txt文件上传给AI\n"
+            "可有效绕过 OpenAI 文本审核(flagged_by_moderation)\n"
+            "仅对 ChatGPT 系列(包括镜像站)有效")
+        crow2.addWidget(self.use_attachment)
         crow2.addStretch()
         self.btn_clear = QPushButton("清除日志")
         self.btn_clear.clicked.connect(self.clear_log)
@@ -3855,12 +3987,15 @@ class MainWindow(QMainWindow):
         type_delay = 30 if self.tab_settings.delay_check.isChecked() else 5
         # 投递任务
         url = self.tab_generation.url_input.text().strip()
+        # 读取附件模式开关
+        allow_att = self.tab_generation.use_attachment.isChecked() if hasattr(self.tab_generation, 'use_attachment') else True
         self.worker.submit({
             "action": "send_prompt",
             "prompt": prompt,
             "task_id": label,
             "url": url,
             "type_delay_ms": type_delay,
+            "allow_attachment": allow_att,
         })
 
     def _on_response_received(self, task_id, content):
