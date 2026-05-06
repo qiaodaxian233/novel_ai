@@ -1486,6 +1486,547 @@ DEFAULT_SKILLS = [
 ]
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 角色库 + 关系图谱 + 时间线 + 物品/法器库 + 伏笔追踪
+# ═══════════════════════════════════════════════════════════════════
+class CharacterLibrary(QWidget):
+    """
+    全方位角色与世界状态管理：
+      - 角色库: 主角/配角/反派,每人含详细档案
+      - 关系图谱: 师徒/敌对/暗恋/血缘
+      - 时间线: 主角境界/年龄/势力/重大事件
+      - 物品库: 法器/丹药/秘籍及来源
+      - 伏笔追踪: 已埋伏笔与回收状态
+    数据自动持久化到项目 JSON, 写章节时按需注入提示词。
+    """
+    
+    def __init__(self):
+        super().__init__()
+        # 数据结构
+        self.characters = []   # [{name, role, appearance, personality, ability, ...}]
+        self.relations  = []   # [{from, to, type, note}]
+        self.timeline   = []   # [{ch_num, event, hero_state}]
+        self.items      = []   # [{name, owner, source, ability, status}]
+        self.foreshadows= []   # [{ch_num, content, plan_pay_at, paid, paid_at}]
+        
+        self._build_ui()
+    
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        
+        # 顶部: 内嵌标签页 (5个子模块)
+        self.sub_tabs = QTabWidget()
+        layout.addWidget(self.sub_tabs)
+        
+        self._build_characters_tab()
+        self._build_relations_tab()
+        self._build_timeline_tab()
+        self._build_items_tab()
+        self._build_foreshadows_tab()
+        
+        # 底部: 操作按钮
+        btn_row = QHBoxLayout()
+        self.chk_inject = QCheckBox("写章节时自动注入到提示词")
+        self.chk_inject.setChecked(True)
+        self.chk_inject.setToolTip(
+            "勾选后,每次生成新章节会把:\n"
+            " - 本章可能出场的角色档案\n"
+            " - 主角当前状态(境界/位置/装备)\n"
+            " - 待回收的伏笔\n"
+            "自动拼到提示词里,有效防止人设崩坏与前后矛盾。")
+        btn_row.addWidget(self.chk_inject)
+        btn_row.addStretch()
+        
+        self.btn_extract_from_chapters = QPushButton("🔍 从已写章节提取角色")
+        self.btn_extract_from_chapters.setStyleSheet(
+            "background:#3498db;color:white;padding:6px 12px;border-radius:3px;")
+        btn_row.addWidget(self.btn_extract_from_chapters)
+        
+        self.btn_export = QPushButton("📥 导出库")
+        btn_row.addWidget(self.btn_export)
+        self.btn_import = QPushButton("📤 导入库")
+        btn_row.addWidget(self.btn_import)
+        
+        layout.addLayout(btn_row)
+        
+        self.btn_export.clicked.connect(self._export_lib)
+        self.btn_import.clicked.connect(self._import_lib)
+    
+    # ── 1. 角色库子页 ──────────────────────────────────────
+    def _build_characters_tab(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        
+        # 顶部按钮
+        top = QHBoxLayout()
+        btn_add = QPushButton("➕ 新增角色")
+        btn_add.clicked.connect(self._add_character)
+        btn_del = QPushButton("➖ 删除选中")
+        btn_del.clicked.connect(self._del_character)
+        top.addWidget(btn_add); top.addWidget(btn_del); top.addStretch()
+        lay.addLayout(top)
+        
+        # 表格
+        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+        self.tbl_chars = QTableWidget(0, 8)
+        self.tbl_chars.setHorizontalHeaderLabels([
+            "姓名", "角色定位", "外貌", "性格", "口头禅/标志",
+            "能力/职业", "当前状态", "首次出场"
+        ])
+        self.tbl_chars.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.tbl_chars.horizontalHeader().setStretchLastSection(True)
+        self.tbl_chars.verticalHeader().setVisible(False)
+        self.tbl_chars.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_chars.setColumnWidth(0, 100)
+        self.tbl_chars.setColumnWidth(1, 80)
+        self.tbl_chars.setColumnWidth(2, 150)
+        self.tbl_chars.setColumnWidth(3, 150)
+        self.tbl_chars.setColumnWidth(4, 120)
+        self.tbl_chars.setColumnWidth(5, 120)
+        self.tbl_chars.setColumnWidth(6, 120)
+        lay.addWidget(self.tbl_chars)
+        
+        tip = QLabel(
+            "💡 提示: 双击单元格直接编辑。【角色定位】填:主角/女主/配角/导师/反派/路人。\n"
+            "    【当前状态】会随剧情更新,写章节时自动注入此字段保证前后一致。")
+        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+        
+        self.sub_tabs.addTab(w, "👤 角色库")
+    
+    def _add_character(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_chars.rowCount()
+        self.tbl_chars.insertRow(r)
+        defaults = ["新角色", "配角", "", "", "", "", "", ""]
+        for c, v in enumerate(defaults):
+            self.tbl_chars.setItem(r, c, QTableWidgetItem(v))
+    
+    def _del_character(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_chars.selectedIndexes()), reverse=True)
+        for r in rows:
+            self.tbl_chars.removeRow(r)
+    
+    # ── 2. 关系图谱子页 ────────────────────────────────────
+    def _build_relations_tab(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        
+        top = QHBoxLayout()
+        btn_add = QPushButton("➕ 新增关系")
+        btn_add.clicked.connect(self._add_relation)
+        btn_del = QPushButton("➖ 删除选中")
+        btn_del.clicked.connect(self._del_relation)
+        top.addWidget(btn_add); top.addWidget(btn_del); top.addStretch()
+        lay.addLayout(top)
+        
+        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+        self.tbl_relations = QTableWidget(0, 4)
+        self.tbl_relations.setHorizontalHeaderLabels([
+            "角色A", "关系类型", "角色B", "备注"
+        ])
+        self.tbl_relations.horizontalHeader().setStretchLastSection(True)
+        self.tbl_relations.verticalHeader().setVisible(False)
+        self.tbl_relations.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_relations.setColumnWidth(0, 120)
+        self.tbl_relations.setColumnWidth(1, 100)
+        self.tbl_relations.setColumnWidth(2, 120)
+        lay.addWidget(self.tbl_relations)
+        
+        tip = QLabel(
+            "💡 关系类型示例: 师父/师弟/师妹/对手/暗恋对象/恋人/血缘/宿敌/同盟/上下级")
+        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        lay.addWidget(tip)
+        
+        self.sub_tabs.addTab(w, "🔗 关系图谱")
+    
+    def _add_relation(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_relations.rowCount()
+        self.tbl_relations.insertRow(r)
+        defaults = ["", "师父", "", ""]
+        for c, v in enumerate(defaults):
+            self.tbl_relations.setItem(r, c, QTableWidgetItem(v))
+    
+    def _del_relation(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_relations.selectedIndexes()), reverse=True)
+        for r in rows:
+            self.tbl_relations.removeRow(r)
+    
+    # ── 3. 时间线子页 ──────────────────────────────────────
+    def _build_timeline_tab(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        
+        # 主角当前状态总览
+        from PyQt5.QtWidgets import QFormLayout
+        state_box = QGroupBox("📊 主角当前状态(写章节时自动注入)")
+        sf = QFormLayout(state_box)
+        self.hero_age = QLineEdit("18")
+        self.hero_realm = QLineEdit("练气期一层")
+        self.hero_location = QLineEdit("青云山·李家村")
+        self.hero_faction = QLineEdit("无门无派")
+        self.hero_mood = QLineEdit("平静")
+        sf.addRow("主角年龄:", self.hero_age)
+        sf.addRow("修为/境界:", self.hero_realm)
+        sf.addRow("当前位置:", self.hero_location)
+        sf.addRow("所属势力:", self.hero_faction)
+        sf.addRow("近期心境:", self.hero_mood)
+        lay.addWidget(state_box)
+        
+        # 重大事件时间线
+        evt_label = QLabel("📅 重大事件时间线 (按章节顺序):")
+        evt_label.setStyleSheet("font-weight:bold;margin-top:6px")
+        lay.addWidget(evt_label)
+        
+        top = QHBoxLayout()
+        btn_add = QPushButton("➕ 新增事件")
+        btn_add.clicked.connect(self._add_event)
+        btn_del = QPushButton("➖ 删除选中")
+        btn_del.clicked.connect(self._del_event)
+        top.addWidget(btn_add); top.addWidget(btn_del); top.addStretch()
+        lay.addLayout(top)
+        
+        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+        self.tbl_timeline = QTableWidget(0, 3)
+        self.tbl_timeline.setHorizontalHeaderLabels(["章节", "事件", "状态变化"])
+        self.tbl_timeline.horizontalHeader().setStretchLastSection(True)
+        self.tbl_timeline.verticalHeader().setVisible(False)
+        self.tbl_timeline.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_timeline.setColumnWidth(0, 60)
+        self.tbl_timeline.setColumnWidth(1, 350)
+        lay.addWidget(self.tbl_timeline)
+        
+        self.sub_tabs.addTab(w, "📅 时间线")
+    
+    def _add_event(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_timeline.rowCount()
+        self.tbl_timeline.insertRow(r)
+        defaults = [str(r+1), "新事件", ""]
+        for c, v in enumerate(defaults):
+            self.tbl_timeline.setItem(r, c, QTableWidgetItem(v))
+    
+    def _del_event(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_timeline.selectedIndexes()), reverse=True)
+        for r in rows:
+            self.tbl_timeline.removeRow(r)
+    
+    # ── 4. 物品库子页 ──────────────────────────────────────
+    def _build_items_tab(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        
+        top = QHBoxLayout()
+        btn_add = QPushButton("➕ 新增物品")
+        btn_add.clicked.connect(self._add_item)
+        btn_del = QPushButton("➖ 删除选中")
+        btn_del.clicked.connect(self._del_item)
+        top.addWidget(btn_add); top.addWidget(btn_del); top.addStretch()
+        lay.addLayout(top)
+        
+        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+        self.tbl_items = QTableWidget(0, 5)
+        self.tbl_items.setHorizontalHeaderLabels([
+            "物品名", "类型", "持有者", "来源章节", "能力/状态"
+        ])
+        self.tbl_items.horizontalHeader().setStretchLastSection(True)
+        self.tbl_items.verticalHeader().setVisible(False)
+        self.tbl_items.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_items.setColumnWidth(0, 120)
+        self.tbl_items.setColumnWidth(1, 80)
+        self.tbl_items.setColumnWidth(2, 100)
+        self.tbl_items.setColumnWidth(3, 80)
+        lay.addWidget(self.tbl_items)
+        
+        tip = QLabel(
+            "💡 类型示例: 法器/灵器/丹药/秘籍/材料/信物/防具/坐骑\n"
+            "    防止 AI 漏掉主角已有装备,或重复让主角『获得』同一件东西")
+        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+        
+        self.sub_tabs.addTab(w, "💎 物品库")
+    
+    def _add_item(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_items.rowCount()
+        self.tbl_items.insertRow(r)
+        defaults = ["新物品", "法器", "李远", "1", "未启用"]
+        for c, v in enumerate(defaults):
+            self.tbl_items.setItem(r, c, QTableWidgetItem(v))
+    
+    def _del_item(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_items.selectedIndexes()), reverse=True)
+        for r in rows:
+            self.tbl_items.removeRow(r)
+    
+    # ── 5. 伏笔追踪子页 ────────────────────────────────────
+    def _build_foreshadows_tab(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        
+        top = QHBoxLayout()
+        btn_add = QPushButton("➕ 新增伏笔")
+        btn_add.clicked.connect(self._add_fore)
+        btn_del = QPushButton("➖ 删除选中")
+        btn_del.clicked.connect(self._del_fore)
+        top.addWidget(btn_add); top.addWidget(btn_del); top.addStretch()
+        lay.addLayout(top)
+        
+        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+        self.tbl_fore = QTableWidget(0, 5)
+        self.tbl_fore.setHorizontalHeaderLabels([
+            "埋设章节", "伏笔内容", "计划回收章节", "已回收?", "回收章节"
+        ])
+        self.tbl_fore.horizontalHeader().setStretchLastSection(True)
+        self.tbl_fore.verticalHeader().setVisible(False)
+        self.tbl_fore.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_fore.setColumnWidth(0, 70)
+        self.tbl_fore.setColumnWidth(1, 280)
+        self.tbl_fore.setColumnWidth(2, 90)
+        self.tbl_fore.setColumnWidth(3, 70)
+        lay.addWidget(self.tbl_fore)
+        
+        tip = QLabel(
+            "💡 已埋伏笔越久未回收越扣读者分。生成新章节时,程序会优先提醒『接近回收期』的伏笔。\n"
+            "    『已回收?』填 是/否,回收后填上回收章节号。")
+        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+        
+        self.sub_tabs.addTab(w, "🪤 伏笔追踪")
+    
+    def _add_fore(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_fore.rowCount()
+        self.tbl_fore.insertRow(r)
+        defaults = ["1", "新伏笔", "30", "否", ""]
+        for c, v in enumerate(defaults):
+            self.tbl_fore.setItem(r, c, QTableWidgetItem(v))
+    
+    def _del_fore(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_fore.selectedIndexes()), reverse=True)
+        for r in rows:
+            self.tbl_fore.removeRow(r)
+    
+    # ── 数据序列化(保存/加载到项目JSON) ────────────────────
+    def serialize(self):
+        """导出全部数据为 dict, 用于持久化"""
+        def tbl_to_list(tbl, ncol):
+            out = []
+            for r in range(tbl.rowCount()):
+                row = []
+                for c in range(ncol):
+                    item = tbl.item(r, c)
+                    row.append(item.text() if item else "")
+                out.append(row)
+            return out
+        
+        return {
+            "characters": tbl_to_list(self.tbl_chars, 8),
+            "relations":  tbl_to_list(self.tbl_relations, 4),
+            "timeline":   tbl_to_list(self.tbl_timeline, 3),
+            "items":      tbl_to_list(self.tbl_items, 5),
+            "foreshadows":tbl_to_list(self.tbl_fore, 5),
+            "hero_state": {
+                "age":      self.hero_age.text(),
+                "realm":    self.hero_realm.text(),
+                "location": self.hero_location.text(),
+                "faction":  self.hero_faction.text(),
+                "mood":     self.hero_mood.text(),
+            },
+            "auto_inject": self.chk_inject.isChecked(),
+        }
+    
+    def load(self, data):
+        """从 dict 加载数据"""
+        from PyQt5.QtWidgets import QTableWidgetItem
+        if not data:
+            return
+        
+        def list_to_tbl(tbl, rows, ncol):
+            tbl.setRowCount(0)
+            for row in rows:
+                r = tbl.rowCount()
+                tbl.insertRow(r)
+                for c in range(ncol):
+                    val = row[c] if c < len(row) else ""
+                    tbl.setItem(r, c, QTableWidgetItem(str(val)))
+        
+        list_to_tbl(self.tbl_chars,     data.get("characters", []), 8)
+        list_to_tbl(self.tbl_relations, data.get("relations", []), 4)
+        list_to_tbl(self.tbl_timeline,  data.get("timeline", []), 3)
+        list_to_tbl(self.tbl_items,     data.get("items", []), 5)
+        list_to_tbl(self.tbl_fore,      data.get("foreshadows", []), 5)
+        
+        hs = data.get("hero_state", {})
+        self.hero_age.setText(hs.get("age", "18"))
+        self.hero_realm.setText(hs.get("realm", "练气期一层"))
+        self.hero_location.setText(hs.get("location", ""))
+        self.hero_faction.setText(hs.get("faction", ""))
+        self.hero_mood.setText(hs.get("mood", "平静"))
+        
+        self.chk_inject.setChecked(data.get("auto_inject", True))
+    
+    # ── 注入到提示词 ───────────────────────────────────────
+    def build_inject_block(self, current_chapter=None, mentioned_names=None):
+        """
+        生成给 AI 的注入文本块。可按当前章节智能筛选最相关的内容。
+        
+        参数:
+          current_chapter: 即将生成的章节号(int),用于伏笔提醒
+          mentioned_names: 提示词中已提到的角色名集合(set),只注入相关角色
+        
+        返回:
+          str: 拼好的注入文本块,直接 append 到提示词后面
+        """
+        if not self.chk_inject.isChecked():
+            return ""
+        
+        parts = []
+        
+        # 1. 主角当前状态
+        hs = (
+            f"年龄 {self.hero_age.text()}, "
+            f"修为 {self.hero_realm.text()}, "
+            f"位置 {self.hero_location.text()}, "
+            f"势力 {self.hero_faction.text()}, "
+            f"心境 {self.hero_mood.text()}"
+        )
+        parts.append(f"【主角当前状态】\n{hs}")
+        
+        # 2. 角色档案(只取主角+前5个配角,避免提示词过长)
+        chars = []
+        for r in range(self.tbl_chars.rowCount()):
+            row = [self.tbl_chars.item(r, c).text() if self.tbl_chars.item(r, c) else "" 
+                   for c in range(8)]
+            if not row[0].strip():
+                continue
+            chars.append(row)
+        
+        if chars:
+            char_lines = []
+            # 主角和女主优先
+            chars.sort(key=lambda x: 0 if "主角" in x[1] or "女主" in x[1] else 1)
+            for row in chars[:8]:
+                name, role, look, pers, mark, ability, state, _ = row
+                line = f"  • {name}({role}): "
+                bits = []
+                if look:    bits.append(f"外貌-{look}")
+                if pers:    bits.append(f"性格-{pers}")
+                if mark:    bits.append(f"标志-{mark}")
+                if ability: bits.append(f"能力-{ability}")
+                if state:   bits.append(f"状态-{state}")
+                line += "; ".join(bits)
+                char_lines.append(line)
+            parts.append("【角色档案】\n" + "\n".join(char_lines))
+        
+        # 3. 关系图谱(简洁)
+        rels = []
+        for r in range(self.tbl_relations.rowCount()):
+            a    = self.tbl_relations.item(r, 0).text() if self.tbl_relations.item(r, 0) else ""
+            tp   = self.tbl_relations.item(r, 1).text() if self.tbl_relations.item(r, 1) else ""
+            b    = self.tbl_relations.item(r, 2).text() if self.tbl_relations.item(r, 2) else ""
+            note = self.tbl_relations.item(r, 3).text() if self.tbl_relations.item(r, 3) else ""
+            if a and b and tp:
+                rels.append(f"  • {a} -[{tp}]- {b}" + (f" ({note})" if note else ""))
+        if rels:
+            parts.append("【人物关系】\n" + "\n".join(rels[:15]))
+        
+        # 4. 主角已有物品
+        items = []
+        for r in range(self.tbl_items.rowCount()):
+            name  = self.tbl_items.item(r, 0).text() if self.tbl_items.item(r, 0) else ""
+            tp    = self.tbl_items.item(r, 1).text() if self.tbl_items.item(r, 1) else ""
+            owner = self.tbl_items.item(r, 2).text() if self.tbl_items.item(r, 2) else ""
+            ability = self.tbl_items.item(r, 4).text() if self.tbl_items.item(r, 4) else ""
+            if name and ("主角" in owner or owner == "" or "李远" in owner):
+                items.append(f"  • {name}({tp}): {ability}")
+        if items:
+            parts.append("【主角已有物品/法器】\n" + "\n".join(items[:10]))
+        
+        # 5. 待回收的伏笔(按距离回收期排序)
+        if current_chapter is not None:
+            pending = []
+            for r in range(self.tbl_fore.rowCount()):
+                ch_set = self.tbl_fore.item(r, 0).text() if self.tbl_fore.item(r, 0) else "0"
+                content= self.tbl_fore.item(r, 1).text() if self.tbl_fore.item(r, 1) else ""
+                ch_pay = self.tbl_fore.item(r, 2).text() if self.tbl_fore.item(r, 2) else "0"
+                paid   = self.tbl_fore.item(r, 3).text() if self.tbl_fore.item(r, 3) else "否"
+                if paid == "是" or not content:
+                    continue
+                try:
+                    ch_pay_int = int(ch_pay)
+                    distance = ch_pay_int - current_chapter
+                    if -5 <= distance <= 10:  # 接近回收期或已超期
+                        pending.append((distance, ch_set, content, ch_pay))
+                except ValueError:
+                    pending.append((999, ch_set, content, ch_pay))
+            pending.sort(key=lambda x: x[0])
+            if pending:
+                lines = []
+                for dist, cs, ct, cp in pending[:5]:
+                    flag = "⚠️超期" if dist < 0 else ("🎯本章可回收" if dist <= 2 else f"还有{dist}章")
+                    lines.append(f"  • 第{cs}章埋: {ct} → 第{cp}章回收[{flag}]")
+                parts.append("【待回收伏笔(优先考虑)】\n" + "\n".join(lines))
+        
+        # 6. 最近时间线事件(防剧情漂移)
+        events = []
+        for r in range(self.tbl_timeline.rowCount()):
+            ch     = self.tbl_timeline.item(r, 0).text() if self.tbl_timeline.item(r, 0) else "0"
+            evt    = self.tbl_timeline.item(r, 1).text() if self.tbl_timeline.item(r, 1) else ""
+            change = self.tbl_timeline.item(r, 2).text() if self.tbl_timeline.item(r, 2) else ""
+            try:
+                ch_int = int(ch)
+                events.append((ch_int, evt, change))
+            except ValueError:
+                continue
+        events.sort()
+        if events and current_chapter:
+            recent = [e for e in events if e[0] <= current_chapter][-5:]
+            if recent:
+                lines = [f"  • 第{c}章: {e}" + (f" [{ch}]" if ch else "") for c, e, ch in recent]
+                parts.append("【最近重大事件】\n" + "\n".join(lines))
+        
+        if not parts:
+            return ""
+        
+        return "\n\n" + "═" * 30 + "\n📚 角色与世界状态(必须严格遵守):\n" + "═" * 30 + "\n\n" + "\n\n".join(parts)
+    
+    # ── 导入/导出 ──────────────────────────────────────────
+    def _export_lib(self):
+        from PyQt5.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出角色库", "character_lib.json", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.serialize(), f, ensure_ascii=False, indent=2)
+            QMessageBox.information(self, "成功", f"已导出到:\n{path}")
+        except Exception as e:
+            QMessageBox.warning(self, "失败", str(e))
+    
+    def _import_lib(self):
+        from PyQt5.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入角色库", "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            self.load(data)
+            QMessageBox.information(self, "成功", "导入完成")
+        except Exception as e:
+            QMessageBox.warning(self, "失败", str(e))
+
+
 class CanonGuard(QWidget):
     """B 模块:核心设定守护
     维护一个 Canon 表(锁定项 / 演化项),写章节前注入硬约束,
@@ -3679,6 +4220,7 @@ class MainWindow(QMainWindow):
         self.tab_outline = StoryOutline()
         self.tab_memory = DialogMemory()
         self.tab_canon = CanonGuard()
+        self.tab_charlib = CharacterLibrary()  # 新增: 角色库+关系+时间线+物品+伏笔
         # 寿元/伏笔(可选模块)
         if LIFESPAN_LOOPS_AVAILABLE:
             self.tab_lifespan = LifespanLoopsPanel(mw=self)
@@ -3697,6 +4239,7 @@ class MainWindow(QMainWindow):
             (self.tab_outline, "故事大纲"),
             (self.tab_memory, "对话记忆"),
             (self.tab_canon, "Canon 设定"),
+            (self.tab_charlib, "🎭 角色与世界"),
         ]
         if self.tab_lifespan is not None:
             tab_list.append((self.tab_lifespan, "寿元/伏笔"))
@@ -4522,6 +5065,14 @@ class MainWindow(QMainWindow):
                     prompt += f"\n\n{canon_block}"
                     self.tab_generation.log(
                         f"已注入 Canon 约束({len(canon_block)} 字符)到第 {ch_num} 章提示词", "info")
+
+            # ★ 角色库 + 关系 + 时间线 + 物品 + 伏笔 一键注入
+            if hasattr(self, "tab_charlib"):
+                charlib_block = self.tab_charlib.build_inject_block(current_chapter=ch_num)
+                if charlib_block:
+                    prompt += charlib_block
+                    self.tab_generation.log(
+                        f"已注入角色与世界状态({len(charlib_block)} 字符)到第 {ch_num} 章提示词", "info")
 
         if self.workflow:
             # ★ 新路径:PRE_WRITE 阶段负责注入,workflow 接管完整生命周期
@@ -5433,12 +5984,20 @@ class MainWindow(QMainWindow):
     def gen_golden_three(self):
         genres = self.tab_settings.get_selected_genres() or ["言情"]
         full = self.tab_settings.get_full_settings_block()
+        # 角色库 + 时间线 + 伏笔 一键注入
+        charlib_block = ""
+        if hasattr(self, "tab_charlib"):
+            charlib_block = self.tab_charlib.build_inject_block(current_chapter=1)
         prompt = PROMPTS["golden_three"].format(
             title=self.tab_settings.get_title(),
             genre="/".join(genres),
             inspiration=self.tab_settings.get_inspiration(),
             ch_outline=self.tab_outline.chapter_outline_edit.toPlainText()[:3000]
         ) + f"\n\n【完整设定】\n{full}"
+        if charlib_block:
+            prompt += charlib_block
+            self.tab_generation.log(
+                f"已注入角色与世界状态({len(charlib_block)} 字符)到黄金三章", "info")
         self._send_to_ai(prompt, "黄金三章", target="golden_three")
 
     def start_generation(self):
@@ -5613,6 +6172,8 @@ class MainWindow(QMainWindow):
                 self.tab_memory.summary_len.setValue(int(mem.get("summary_len", 80)))
             if d.get("canon"):
                 self.tab_canon.load_from_dict(d["canon"])
+            if d.get("charlib") and hasattr(self, "tab_charlib"):
+                self.tab_charlib.load(d["charlib"])
             if d.get("skills"):
                 self.tab_skills.load_from_dict(d["skills"])
             crit = d.get("critique", {})
@@ -5786,6 +6347,8 @@ class MainWindow(QMainWindow):
             },
             # B 模块:Canon 设定档
             "canon": self.tab_canon.serialize_for_save(),
+            # 🎭 角色库 + 关系 + 时间线 + 物品 + 伏笔
+            "charlib": self.tab_charlib.serialize() if hasattr(self, "tab_charlib") else {},
             # D 模块:技能库
             "skills": self.tab_skills.serialize_for_save(),
             # C 模块:章节质量校验配置
