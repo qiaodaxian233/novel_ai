@@ -2763,7 +2763,7 @@ class BrowserWorker(QObject):
         _before_cnt = 0
         try:
             _before_cnt = self.driver.execute_script(
-                "return document.querySelectorAll('div.markdown,[data-message-author-role="assistant"]').length;"
+                "return document.querySelectorAll('div.markdown,[data-message-author-role=\"assistant\"]').length;"
             ) or 0
         except Exception:
             pass
@@ -2785,7 +2785,7 @@ class BrowserWorker(QObject):
                 self.log_signal.emit("已点击发送按钮，等待响应...", "info")
                 time.sleep(1.5)
                 _after_cnt = self.driver.execute_script(
-                    "return document.querySelectorAll('div.markdown,[data-message-author-role="assistant"]').length;"
+                    "return document.querySelectorAll('div.markdown,[data-message-author-role=\"assistant\"]').length;"
                 ) or 0
                 if _after_cnt > _before_cnt:
                     self.log_signal.emit(f"✓ 发送成功(消息数 {_before_cnt}→{_after_cnt})", "info")
@@ -2811,7 +2811,7 @@ class BrowserWorker(QObject):
             _AC(self.driver).send_keys(_K.RETURN).perform()
             time.sleep(1.5)
             _after_cnt2 = self.driver.execute_script(
-                "return document.querySelectorAll('div.markdown,[data-message-author-role="assistant"]').length;"
+                "return document.querySelectorAll('div.markdown,[data-message-author-role=\"assistant\"]').length;"
             ) or 0
             if _after_cnt2 > _before_cnt:
                 self.log_signal.emit(f"✓ Enter键发送成功(消息数 {_before_cnt}→{_after_cnt2})", "info")
