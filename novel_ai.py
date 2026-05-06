@@ -3741,57 +3741,51 @@ class BrowserWorker(QObject):
         except Exception:
             pass
 
-        # 策略A: 找到按钮直接 click（去掉 disabled 检测误判）
-        try:
-            hit = self.driver.execute_script("""
-                const btn = document.querySelector('button.composer-submit-btn')
-                         || document.querySelector('[data-testid="send-button"]')
-                         || document.querySelector('button[aria-label*="发送"]')
-                         || document.querySelector('button[aria-label*="Send" i]');
-                if (!btn) return 'NO_BTN';
-                btn.removeAttribute('disabled');
-                btn.removeAttribute('aria-disabled');
-                btn.click();
-                return 'CLICKED';
-            """)
-            if hit == 'CLICKED':
-                self.log_signal.emit("已点击发送按钮，等待响应...", "info")
-                time.sleep(1.5)
-                _after_cnt = self.driver.execute_script(
-                    "return document.querySelectorAll('div.markdown,[data-message-author-role=\"assistant\"]').length;"
-                ) or 0
-                if _after_cnt > _before_cnt:
-                    self.log_signal.emit(f"✓ 发送成功(消息数 {_before_cnt}→{_after_cnt})", "info")
-                    return True
-                self.log_signal.emit(f"按钮已点但消息数未增加({_before_cnt}→{_after_cnt})，尝试其他方式", "warn")
-        except Exception as e:
-            self.log_signal.emit(f"策略A异常: {e}", "warn")
-
-        # 策略B: 模拟真实键盘 Enter（通过 ActionChains，非 JS 事件）
+        # 策略A: focus 输入框 + Enter (实测最稳定的方式)
         try:
             from selenium.webdriver.common.action_chains import ActionChains as _AC
             from selenium.webdriver.common.keys import Keys as _K
-            # 先 focus 输入框再按 Enter
             self.driver.execute_script("""
                 const box = document.querySelector('#prompt-textarea')
                          || document.querySelector('div[contenteditable="true"]');
                 if (box) box.focus();
             """)
             time.sleep(0.2)
-            _AC(self.driver).key_down(_K.CONTROL).send_keys(_K.RETURN).key_up(_K.CONTROL).perform()
-            time.sleep(0.3)
-            # Ctrl+Enter 不行就直接 Enter（部分镜像站用 Enter 提交）
             _AC(self.driver).send_keys(_K.RETURN).perform()
+            self.log_signal.emit("已按 Enter 发送，等待响应...", "info")
+            time.sleep(1.5)
+            _after_cnt = self.driver.execute_script(
+                "return document.querySelectorAll('div.markdown,[data-message-author-role=\"assistant\"]').length;"
+            ) or 0
+            if _after_cnt > _before_cnt:
+                self.log_signal.emit(f"✓ 发送成功(消息数 {_before_cnt}→{_after_cnt})", "info")
+                return True
+            self.log_signal.emit(f"Enter后消息数未增加({_before_cnt}→{_after_cnt})，尝试按钮", "warn")
+        except Exception as e:
+            self.log_signal.emit(f"Enter发送异常: {e}", "warn")
+
+        # 策略B: 强制点击按钮(即使 disabled)
+        try:
+            self.driver.execute_script("""
+                const btn = document.querySelector('button.composer-submit-btn')
+                         || document.querySelector('[data-testid="send-button"]')
+                         || document.querySelector('button[aria-label*="发送"]')
+                         || document.querySelector('button[aria-label*="Send" i]');
+                if (btn) {
+                    btn.removeAttribute('disabled');
+                    btn.removeAttribute('aria-disabled');
+                    btn.click();
+                }
+            """)
             time.sleep(1.5)
             _after_cnt2 = self.driver.execute_script(
                 "return document.querySelectorAll('div.markdown,[data-message-author-role=\"assistant\"]').length;"
             ) or 0
             if _after_cnt2 > _before_cnt:
-                self.log_signal.emit(f"✓ Enter键发送成功(消息数 {_before_cnt}→{_after_cnt2})", "info")
+                self.log_signal.emit(f"✓ 按钮发送成功(消息数 {_before_cnt}→{_after_cnt2})", "info")
                 return True
-            self.log_signal.emit(f"Enter键后消息数未增加({_before_cnt}→{_after_cnt2})", "warn")
         except Exception as e:
-            self.log_signal.emit(f"策略B异常: {e}", "warn")
+            self.log_signal.emit(f"按钮发送异常: {e}", "warn")
 
         # 2) 等按钮可点(每 0.25s 轮询,最多 10s)
         sel = json.dumps(send_btn_selector)
