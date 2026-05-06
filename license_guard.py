@@ -198,7 +198,31 @@ class VerifyThread(QThread):
                 json=payload, timeout=TIMEOUT,
                 headers={"Content-Type": "application/json; charset=utf-8"}
             )
-            data = resp.json()
+            # 先检查响应内容是否为 JSON
+            raw_text = resp.text.strip()
+            try:
+                data = resp.json()
+            except Exception:
+                # 服务器返回非 JSON（如 IP 白名单拦截、CDN 错误页等）
+                if "allowlist" in raw_text.lower() or "whitelist" in raw_text.lower():
+                    self.done.emit(False, {"msg": (
+                        "验证服务器拒绝了本机IP连接\n"
+                        "请联系作者将您的IP加入白名单，\n"
+                        f"或使用授权服务器允许的网络环境。\n"
+                        f"(服务器返回: {raw_text[:80]})"
+                    )})
+                elif resp.status_code == 403:
+                    self.done.emit(False, {"msg": (
+                        f"验证服务器返回 403 拒绝访问\n"
+                        f"可能原因：IP未授权 / 请求被拦截\n"
+                        f"(服务器返回: {raw_text[:80]})"
+                    )})
+                else:
+                    self.done.emit(False, {"msg": (
+                        f"验证服务器响应异常 (HTTP {resp.status_code})\n"
+                        f"返回内容: {raw_text[:120]}"
+                    )})
+                return
             if data.get("ok"):
                 d = data.get("data", {})
                 save_license(
@@ -710,7 +734,10 @@ class LicenseGuard:
         try:
             resp = requests.post(f"{SERVER_BASE}/api/verify.php",
                                  json=payload, timeout=timeout)
-            data = resp.json()
+            try:
+                data = resp.json()
+            except Exception:
+                return False, {"msg": f"服务器响应异常: {resp.text.strip()[:80]}"}
             return data.get("ok", False), data.get("data", {})
         except Exception:
             return False, {}
