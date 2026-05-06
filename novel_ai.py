@@ -133,21 +133,26 @@ PROMPTS = {
     ),
 
     "chapter": (
-        "请作为资深网文作者,生成《{title}》第 {chapter_num} 章的小说正文。\n\n"
-        "⚠️ 重要:必须输出完整章节正文,不要询问、不要简介、不要分点列表、不要『以下是章节』等开场白。\n"
-        "直接从场景描写或人物动作开始写,一气呵成完成全部 {target_words} 字。\n\n"
+        "请作为资深网文作者,生成《{title}》第 {chapter_num} 章。\n\n"
+        "⚠️ 重要:必须输出完整章节,不要询问、不要简介、不要分点列表、不要『以下是章节』等开场白。\n\n"
         "【题材】{genre}\n"
         "【整体世界观/结构】\n{outline}\n\n"
         "【本章大纲】\n{chapter_outline}\n\n"
+        "【输出格式-严格遵守】\n"
+        "第一行: 第 {chapter_num} 章 章节名(章节名不超过15字,要有吸引力,概括本章核心冲突)\n"
+        "第二行: 空行\n"
+        "第三行起: 正文内容\n\n"
+        "示例格式:\n"
+        "第 {chapter_num} 章 觉醒之夜\n"
+        "\n"
+        "(正文第一句开始...)\n\n"
         "【写作要求】\n"
-        "1. 本章字数严格控制在 {min_words}-{target_words} 字之间(必须达到)\n"
+        "1. 本章字数严格控制在 {min_words}-{target_words} 字之间(必须达到,不含标题)\n"
         "2. 与上一章衔接顺畅,人物性格一致\n"
         "3. 对话生动、描写细腻、情节有节奏感\n"
         "4. 严禁血腥、暴力、色情、侮辱女性等违规内容\n"
-        "5. 直接输出章节正文,不要任何解释、不要章节标题\n"
-        "6. 章末必须留有钩子(问号/省略号/转折词/新悬念)\n"
-        "7. 如果上下文不足,请基于现有信息合理创作,不要询问用户\n\n"
-        "现在开始正文(请直接以正文第一句话开头,字数{target_words}字):\n"
+        "5. 章末必须留有钩子(问号/省略号/转折词/新悬念)\n"
+        "6. 如果上下文不足,请基于现有信息合理创作,不要询问用户\n"
     ),
 
     "golden_three": (
@@ -5698,18 +5703,43 @@ class MainWindow(QMainWindow):
         self.tab_generation.log("✓ 黄金三章已生成并保存", "success")
 
     def _extract_chapter_title(self, content):
-        """从生成内容里尝试提取章节标题"""
-        for line in content.splitlines()[:3]:
+        """从生成内容里尝试提取章节标题
+        支持格式:
+          第 1 章 觉醒之夜
+          第一章 觉醒之夜
+          第1章：觉醒之夜
+          【第 1 章】觉醒之夜
+        """
+        for line in content.splitlines()[:5]:
             line = line.strip()
-            if re.match(r'^第[一二三四五六七八九十百千零\d]+章', line):
-                return line[:60]
+            if not line:
+                continue
+            # 匹配各种章节标题格式
+            m = re.match(
+                r'^[【\[]?\s*第\s*[一二三四五六七八九十百千零\d]+\s*章[】\]]?\s*[：:、\s]*\s*(.*)$',
+                line
+            )
+            if m:
+                # 整行作为完整标题(包含"第N章 xxx")
+                # 限制长度,避免把正文也算进来
+                if len(line) <= 50:
+                    return line
+                # 太长说明是正文,不是标题
+                continue
         return None
 
     def _strip_chapter_title(self, content):
         """如果首行是章节标题就移除"""
         lines = content.splitlines()
-        if lines and re.match(r'^第[一二三四五六七八九十百千零\d]+章', lines[0].strip()):
-            return "\n".join(lines[1:]).lstrip()
+        if not lines:
+            return content
+        first = lines[0].strip()
+        if re.match(r'^[【\[]?\s*第\s*[一二三四五六七八九十百千零\d]+\s*章', first) and len(first) <= 50:
+            # 移除标题行 + 可能的空行
+            i = 1
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            return "\n".join(lines[i:])
         return content
 
     def _check_foreshadow_alert(self, ch_num):
