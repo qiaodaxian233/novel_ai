@@ -2516,8 +2516,22 @@ class BrowserWorker(QObject):
                 return content ? 'OK' : 'EMPTY';
             """)
             if result == 'OK':
-                _t_inj.sleep(0.3)
-                self.log_signal.emit("✓ execCommand insertText 注入成功", "info")
+                # 等待发送按钮出现（输入框为空时按钮不在DOM，有内容后才渲染）
+                _btn_sel = json.dumps(
+                    'button.composer-submit-btn, [data-testid="send-button"], '
+                    'button[aria-label*="Send" i], button[aria-label*="发送"]'
+                )
+                for _wi in range(20):
+                    _btn_ok = self.driver.execute_script(f"""
+                        return !!document.querySelector({_btn_sel});
+                    """)
+                    if _btn_ok:
+                        break
+                    _t_inj.sleep(0.15)
+                else:
+                    self.log_signal.emit("⚠️ 注入成功但发送按钮未出现，仍尝试发送", "warn")
+                _t_inj.sleep(0.2)
+                self.log_signal.emit("✓ insertText 注入成功，发送按钮已就绪", "info")
                 return True
             elif result == 'EMPTY':
                 self.log_signal.emit("insertText 后内容为空，尝试其他方法", "warn")
