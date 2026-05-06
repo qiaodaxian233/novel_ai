@@ -3289,76 +3289,53 @@ class BrowserWorker(QObject):
 
     # ---------- 附件上传：把长文本 prompt 转 txt 上传 ----------
     def _clear_existing_attachments(self):
-        """清空 composer 输入区的待发送附件（不影响已发送消息中的附件）"""
+        """清空 composer 输入区的待发送附件
+        实测镜像站删除按钮 aria-label='移除文件1：xxx.txt'
+        """
         try:
-            # 多轮清除，因为点击删除按钮可能是异步的
-            for round_idx in range(3):
+            # 多轮清除（点一个删除按钮后 React 重渲染，需要再扫一遍）
+            for round_idx in range(5):
                 removed = self.driver.execute_script("""
                     let count = 0;
                     
-                    // 关键: 只在 form / composer 输入区里找,不动消息历史
-                    const composer = document.querySelector(
-                        'form, [class*="composer" i]:not([class*="message" i])'
-                    );
-                    if (!composer) return 0;
-                    
-                    // 1) 点击所有 X / remove / close 按钮(排除发送按钮)
-                    const btns = composer.querySelectorAll('button');
+                    // 找页面上所有按钮（不限定在 composer 内，因为附件有时挂在 composer 外）
+                    const btns = document.querySelectorAll('button');
                     btns.forEach(btn => {
-                        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-                        const dataTest = (btn.getAttribute('data-testid') || '').toLowerCase();
-                        const cls = (typeof btn.className === 'string' ? btn.className : '').toLowerCase();
+                        const aria = btn.getAttribute('aria-label') || '';
                         
-                        // 排除发送按钮和工具按钮
-                        if (cls.includes('submit') || cls.includes('send') || 
-                            aria.includes('send') || aria.includes('发送') ||
-                            dataTest.includes('send-button')) {
+                        // 排除发送/侧边栏等无关按钮
+                        if (aria.includes('发送') || aria.includes('Send') ||
+                            aria.includes('边栏') || aria.includes('sidebar') ||
+                            aria.includes('Stop') || aria.includes('停止')) {
                             return;
                         }
                         
-                        // 识别删除/关闭按钮
-                        const isClose = (
-                            aria.includes('remove') || aria.includes('delete') || 
-                            aria.includes('close') || aria.includes('clear') ||
-                            aria.includes('删除') || aria.includes('移除') || aria.includes('关闭') ||
-                            dataTest.includes('remove') || dataTest.includes('delete') || 
-                            dataTest.includes('close')
+                        // 精确匹配镜像站附件删除按钮
+                        // 实测格式: "移除文件1：xxx.txt"  或  "Remove file 1: xxx.txt"
+                        const isAttClose = (
+                            aria.match(/移除文件\s*\d*[：:]/) ||
+                            aria.match(/^移除[\s文件]*\d*$/) ||
+                            aria.match(/Remove\s+file\s*\d*[：:]/i) ||
+                            aria.match(/^Remove\s+attachment/i) ||
+                            aria.match(/^Delete\s+file/i)
                         );
                         
-                        if (isClose) {
-                            // 检查按钮是否在附件相关元素里
-                            const ctx = btn.closest(
-                                '[class*="attachment" i], [class*="file" i], ' +
-                                '[class*="upload" i], [class*="card" i]'
-                            );
-                            if (ctx) {
-                                try { btn.click(); count++; } catch(e) {}
-                            }
-                        }
-                    });
-                    
-                    // 2) 兜底: 直接移除附件容器DOM节点
-                    const attCards = composer.querySelectorAll(
-                        '[class*="attachment" i]:not([class*="button" i]), ' +
-                        '[class*="file-card" i], [class*="file-preview" i], ' +
-                        '[data-testid*="file-attachment" i]'
-                    );
-                    attCards.forEach(card => {
-                        // 只移除待发送的(在 composer 内的)
-                        if (composer.contains(card) && (card.innerText || '').match(/\.(txt|pdf|doc|jpg|png|md)/i)) {
-                            try { 
-                                card.remove(); 
-                                count++; 
-                            } catch(e) {}
+                        if (isAttClose) {
+                            try { btn.click(); count++; } catch(e) {}
                         }
                     });
                     
                     return count;
                 """) or 0
+                
                 if removed == 0:
-                    break  # 没东西可清了,停止
-                self.log_signal.emit(f"✓ 第{round_idx+1}轮清除 {removed} 个", "info")
-                import time as _t; _t.sleep(0.4)
+                    if round_idx == 0:
+                        # 首轮就没找到删除按钮,正常情况(无附件)
+                        pass
+                    break
+                
+                self.log_signal.emit(f"✓ 第{round_idx+1}轮清除 {removed} 个附件", "info")
+                import time as _t; _t.sleep(0.5)  # 等 React 重渲染
             
             # 重置所有 file input 的 value
             self.driver.execute_script("""
