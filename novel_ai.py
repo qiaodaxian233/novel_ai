@@ -3289,52 +3289,83 @@ class BrowserWorker(QObject):
 
     # ---------- 附件上传：把长文本 prompt 转 txt 上传 ----------
     def _clear_existing_attachments(self):
-        """点击页面上所有已存在的附件删除按钮，清空附件区"""
+        """清空 composer 输入区的待发送附件（不影响已发送消息中的附件）"""
         try:
-            removed = self.driver.execute_script("""
-                let count = 0;
-                // 策略1: 找输入区(form/composer)内的所有 button,排除发送按钮
-                const composer = document.querySelector('form, [class*="composer" i]');
-                if (composer) {
-                    const allBtns = composer.querySelectorAll('button');
-                    allBtns.forEach(btn => {
+            # 多轮清除，因为点击删除按钮可能是异步的
+            for round_idx in range(3):
+                removed = self.driver.execute_script("""
+                    let count = 0;
+                    
+                    // 关键: 只在 form / composer 输入区里找,不动消息历史
+                    const composer = document.querySelector(
+                        'form, [class*="composer" i]:not([class*="message" i])'
+                    );
+                    if (!composer) return 0;
+                    
+                    // 1) 点击所有 X / remove / close 按钮(排除发送按钮)
+                    const btns = composer.querySelectorAll('button');
+                    btns.forEach(btn => {
                         const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
                         const dataTest = (btn.getAttribute('data-testid') || '').toLowerCase();
-                        const isRemove = (
-                            aria.includes('remove') || aria.includes('删除') || aria.includes('移除') ||
-                            aria.includes('clear') || aria.includes('close') ||
-                            dataTest.includes('remove') || dataTest.includes('delete')
+                        const cls = (typeof btn.className === 'string' ? btn.className : '').toLowerCase();
+                        
+                        // 排除发送按钮和工具按钮
+                        if (cls.includes('submit') || cls.includes('send') || 
+                            aria.includes('send') || aria.includes('发送') ||
+                            dataTest.includes('send-button')) {
+                            return;
+                        }
+                        
+                        // 识别删除/关闭按钮
+                        const isClose = (
+                            aria.includes('remove') || aria.includes('delete') || 
+                            aria.includes('close') || aria.includes('clear') ||
+                            aria.includes('删除') || aria.includes('移除') || aria.includes('关闭') ||
+                            dataTest.includes('remove') || dataTest.includes('delete') || 
+                            dataTest.includes('close')
                         );
-                        // 排除发送按钮
-                        const isSend = (
-                            dataTest.includes('send') || aria.includes('send') || aria.includes('发送') ||
-                            btn.classList.contains('composer-submit-btn')
-                        );
-                        if (isRemove && !isSend) {
-                            try { btn.click(); count++; } catch(e) {}
+                        
+                        if (isClose) {
+                            // 检查按钮是否在附件相关元素里
+                            const ctx = btn.closest(
+                                '[class*="attachment" i], [class*="file" i], ' +
+                                '[class*="upload" i], [class*="card" i]'
+                            );
+                            if (ctx) {
+                                try { btn.click(); count++; } catch(e) {}
+                            }
                         }
                     });
-                }
-                // 策略2: 找包含 .txt 字样的附件卡片,点其内部的 svg 关闭按钮
-                const cards = document.querySelectorAll(
-                    '[class*="attachment" i], [class*="file-card" i], [class*="file-preview" i]'
-                );
-                cards.forEach(card => {
-                    if ((card.innerText || '').includes('.txt')) {
-                        const btn = card.querySelector('button');
-                        if (btn) {
-                            try { btn.click(); count++; } catch(e) {}
+                    
+                    // 2) 兜底: 直接移除附件容器DOM节点
+                    const attCards = composer.querySelectorAll(
+                        '[class*="attachment" i]:not([class*="button" i]), ' +
+                        '[class*="file-card" i], [class*="file-preview" i], ' +
+                        '[data-testid*="file-attachment" i]'
+                    );
+                    attCards.forEach(card => {
+                        // 只移除待发送的(在 composer 内的)
+                        if (composer.contains(card) && (card.innerText || '').match(/\.(txt|pdf|doc|jpg|png|md)/i)) {
+                            try { 
+                                card.remove(); 
+                                count++; 
+                            } catch(e) {}
                         }
-                    }
+                    });
+                    
+                    return count;
+                """) or 0
+                if removed == 0:
+                    break  # 没东西可清了,停止
+                self.log_signal.emit(f"✓ 第{round_idx+1}轮清除 {removed} 个", "info")
+                import time as _t; _t.sleep(0.4)
+            
+            # 重置所有 file input 的 value
+            self.driver.execute_script("""
+                document.querySelectorAll('input[type="file"]').forEach(el => {
+                    try { el.value = ''; } catch(e) {}
                 });
-                return count;
-            """) or 0
-            if removed > 0:
-                self.log_signal.emit(f"✓ 已清除 {removed} 个旧附件", "info")
-                import time as _t; _t.sleep(0.8)
-            else:
-                # 静默,可能本来就没有
-                pass
+            """)
         except Exception as e:
             self.log_signal.emit(f"清除附件异常: {e}", "warn")
 
@@ -3403,6 +3434,14 @@ class BrowserWorker(QObject):
             """)
             _t.sleep(0.3)
 
+            # 关键: send_keys 前先重置 input 的 value,避免追加上次的文件
+            self.driver.execute_script("""
+                document.querySelectorAll('input[type="file"]').forEach(el => {
+                    try { el.value = ''; } catch(e) {}
+                });
+            """)
+            _t.sleep(0.2)
+            
             # 选第一个 input（通常就是聊天框的附件上传）
             inputs[0].send_keys(tmp_path)
             self.log_signal.emit("文件路径已 send_keys 到 input", "info")
