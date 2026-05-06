@@ -1965,20 +1965,22 @@ SITE_PROFILES = {
             'button[aria-label*="submit" i], '
             'form button[type="submit"]'
         ),
-        # 回复区:四档兜底,优先 markdown 精准层,最后降到整个 assistant 容器
-        "response": (
-            'div[data-message-author-role="assistant"] div.markdown, '
-            'div[data-message-author-role="assistant"] .prose, '
-            'div[data-message-author-role="assistant"] .markdown-content, '
-            'div[data-message-author-role="assistant"]'
-        ),
+        # 回复区: 油猴脚本实测 div.markdown 最精准（1个，内容干净）
+        "response": 'div.markdown',
+        # 备用选择器按优先级依次兜底
+        "_response_fallback": [
+            'div.markdown',
+            'div[data-message-author-role="assistant"] div.markdown',
+            '[data-message-author-role="assistant"]',
+            'div.prose',
+        ],
         "stop_btn": (
             'button[data-testid="stop-button"], '
             'button[aria-label*="停止"], '
             'button[aria-label*="Stop" i]'
         ),
-        # 标记此站点启用 TamperMonkey bridge 模式(localStorage 中继)
-        "tm_bridge": True,
+        # tm_bridge 关闭：直接用 DOM 选择器抓取，无需油猴脚本配合
+        "tm_bridge": False,
     },
     "chat.openai.com": {
         "name": "ChatGPT (旧域名)",
@@ -2025,33 +2027,7 @@ SITE_PROFILES = {
         "response": '[class*="agent-chat"], [class*="markdown"]',
         "stop_btn": 'button[class*="stop"]',
     },
-    
-        # ---- ChatGPT 镜像站（gpt.aimonkey.plus 等同类镜像）----
-        # 经油猴脚本实测确认的选择器（2025-05）
-        "gpt.aimonkey.plus": {
-            "input":    '[contenteditable="true"]',          # 只有1个，比 textarea 更精准
-            "send_btn": 'button[data-testid="send-button"]', # 实测1个，精准
-            "response": 'div.markdown',                      # 实测1个，内容干净 ✅ 智能推荐
-            "stop_btn": 'button[data-testid="stop-button"], button[aria-label*="Stop"]',
-            # 备用抓取选择器（按优先级）
-            "_response_fallback": [
-                'div.markdown',
-                '[data-message-author-role="assistant"]',
-                'div.prose',
-            ],
-        },
-        # ChatGPT 官方（结构相同）
-        "chatgpt.com": {
-            "input":    '[contenteditable="true"]',
-            "send_btn": 'button[data-testid="send-button"]',
-            "response": 'div.markdown',
-            "stop_btn": 'button[data-testid="stop-button"]',
-            "_response_fallback": [
-                'div.markdown',
-                '[data-message-author-role="assistant"]',
-                'div.prose',
-            ],
-        },
+
 "_default": {
         "name": "通用",
         "input": 'textarea, div[contenteditable="true"], input[type="text"]',
