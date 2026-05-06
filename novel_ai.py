@@ -2993,14 +2993,32 @@ class BrowserWorker(QObject):
             if uploaded:
                 # 输入框只填一句简短指令引导 AI 读附件
                 short_guide = (
-                    "请仔细阅读附件中的完整需求和资料，"
-                    "并按其中要求生成内容。直接输出最终结果，无需复述需求。"
+                    "请仔细阅读上方附件中的完整需求和资料，"
+                    "严格按要求生成完整内容（注意字数要求和格式要求）。"
+                    "直接输出最终结果，不要复述需求、不要省略。"
                 )
                 if not self._inject_prompt(prof["input"], short_guide):
                     self.log_signal.emit("引导语注入失败", "error")
                     self.response_received.emit(task_id, "")
                     return
-                self.log_signal.emit("✓ 附件已上传，已注入引导语", "info")
+                # 验证附件确实还在(防止注入引导语时附件被移除)
+                attached = self.driver.execute_script("""
+                    const atts = document.querySelectorAll(
+                        '[class*="attachment" i], [class*="file-preview" i]'
+                    );
+                    for (const a of atts) {
+                        if ((a.innerText||'').includes('.txt')) return true;
+                    }
+                    return false;
+                """) or False
+                if not attached:
+                    self.log_signal.emit("⚠ 引导语注入后附件丢失，降级为文本模式", "warn")
+                    if not self._inject_prompt(prof["input"], prompt):
+                        self.log_signal.emit("降级文本注入也失败", "error")
+                        self.response_received.emit(task_id, "")
+                        return
+                else:
+                    self.log_signal.emit("✓ 附件确认存在，准备发送", "info")
             else:
                 self.log_signal.emit("⚠️ 附件上传失败，降级为直接发送文本", "warn")
                 if not self._inject_prompt(prof["input"], prompt):
@@ -3064,6 +3082,34 @@ class BrowserWorker(QObject):
         self.response_received.emit(task_id, last_text)
 
     # ---------- 附件上传：把长文本 prompt 转 txt 上传 ----------
+    def _clear_existing_attachments(self):
+        """点击页面上所有已存在的附件删除按钮，清空附件区"""
+        try:
+            removed = self.driver.execute_script("""
+                let count = 0;
+                // ChatGPT 附件删除按钮: aria-label="Remove file" 或 button 内含 X icon
+                const removeBtns = document.querySelectorAll(
+                    'button[aria-label*="Remove" i], ' +
+                    'button[aria-label*="删除" i], ' +
+                    'button[aria-label*="移除" i], ' +
+                    '[data-testid*="remove" i] button, ' +
+                    'button[data-testid*="remove" i]'
+                );
+                removeBtns.forEach(btn => {
+                    // 只点附件区附近的删除按钮，避免误删消息
+                    const parent = btn.closest('[class*="attachment" i], [class*="file-preview" i], [class*="upload" i]');
+                    if (parent) {
+                        try { btn.click(); count++; } catch(e) {}
+                    }
+                });
+                return count;
+            """) or 0
+            if removed > 0:
+                self.log_signal.emit(f"已清除 {removed} 个旧附件", "info")
+                import time as _t; _t.sleep(0.5)
+        except Exception as e:
+            self.log_signal.emit(f"清除附件异常: {e}", "warn")
+
     def _upload_prompt_as_file(self, prof, text):
         """
         把 prompt 写成临时 txt 文件，通过 ChatGPT 的文件上传 input 注入。
@@ -3071,6 +3117,8 @@ class BrowserWorker(QObject):
         Selenium 直接 send_keys(filepath) 即可上传，无需点开文件选择对话框。
         """
         import os, tempfile, time as _t
+        # 0) 先清除已存在的附件，避免堆积
+        self._clear_existing_attachments()
         # 1) 写临时文件
         try:
             tmp_dir = tempfile.gettempdir()
@@ -3131,27 +3179,40 @@ class BrowserWorker(QObject):
             inputs[0].send_keys(tmp_path)
             self.log_signal.emit("文件路径已 send_keys 到 input", "info")
 
-            # 4) 等待上传完成（看页面是否出现附件预览/缩略图）
-            for i in range(20):  # 最多等10秒
-                uploaded = self.driver.execute_script(f"""
-                    // 检查是否有附件预览元素出现
-                    const previews = document.querySelectorAll(
+            # 4) 等待上传完成（基于文件名出现且无 spinner 在转）
+            fname = os.path.basename(tmp_path)
+            for i in range(30):  # 最多等15秒
+                state = self.driver.execute_script(f"""
+                    const fname = {json.dumps(fname)};
+                    // 找文件名是否出现在页面任何 attachment 容器里
+                    const attachments = document.querySelectorAll(
                         '[class*="attachment" i], [class*="file-preview" i], ' +
-                        '[data-testid*="file" i], [class*="upload" i] [class*="thumb" i]'
+                        '[class*="upload" i]:not(input)'
                     );
-                    // 检查输入框附近是否有文件名字样
-                    const text = document.body.innerText;
-                    const fname = '{os.path.basename(tmp_path)}';
-                    return previews.length > 0 || text.includes(fname);
-                """)
-                if uploaded:
-                    self.log_signal.emit(f"✓ 附件上传完成 ({(i+1)*0.5}s)", "info")
-                    _t.sleep(0.8)  # 给前端一点时间完成处理
+                    let foundFile = false;
+                    let isLoading = false;
+                    for (const att of attachments) {{
+                        const t = att.innerText || '';
+                        if (t.includes(fname) || t.includes('.txt')) {{
+                            foundFile = true;
+                            // 检查是否还在转圈
+                            const spinners = att.querySelectorAll(
+                                'svg[class*="spin" i], [class*="loading" i], [role="progressbar"]'
+                            );
+                            if (spinners.length > 0) isLoading = true;
+                        }}
+                    }}
+                    return {{ foundFile, isLoading }};
+                """) or {{}}
+                if state.get('foundFile') and not state.get('isLoading'):
+                    self.log_signal.emit(f"✓ 附件已就位 ({(i+1)*0.5}s)，等待后端同步...", "info")
+                    _t.sleep(3.0)  # 关键:让 GPT 后端完整接收附件,否则 AI 收到只是文件名
                     return True
                 _t.sleep(0.5)
 
-            self.log_signal.emit("等待附件上传超时，仍尝试发送", "warn")
-            return True  # 兜底：即使没检测到也试试发送
+            self.log_signal.emit("⚠ 等待附件上传超时(15s),仍尝试发送", "warn")
+            _t.sleep(1.5)
+            return True
 
         except Exception as e:
             self.log_signal.emit(f"附件上传异常: {e}", "warn")
@@ -3169,6 +3230,12 @@ class BrowserWorker(QObject):
         from selenium.webdriver.common.keys import Keys
         from selenium.webdriver.common.action_chains import ActionChains
         import time as _t_inj
+
+        # 长文本注入需要更长的脚本超时
+        try:
+            self.driver.set_script_timeout(90)
+        except Exception:
+            pass
 
         sel = json.dumps(input_selector)
         text_js = json.dumps(text)
@@ -3599,16 +3666,20 @@ class BrowserWorker(QObject):
             except Exception:
                 pass  # bridge 不可用则降级到 DOM 选择器
 
-        # ── 2. DOM 选择器(多选择器依次兜底)
-        # 构建选择器优先级列表
+        # ── 2. DOM 选择器(优先抓 assistant role 的最后一条)
+        # 顺序: assistant 容器内的 markdown > assistant 容器 > 任意 markdown
         _fallback_defaults = [
-            'div.markdown',
+            '[data-message-author-role="assistant"] div.markdown',
+            '[data-message-author-role="assistant"] .prose',
             '[data-message-author-role="assistant"]',
+            'div.markdown',  # 兜底:可能是用户消息,但有内容总比没有强
             'div.prose',
-            'section[data-testid*="conversation-turn"]',
         ]
         selectors = []
         primary = prof.get('response', '')
+        # 主选择器先用 assistant 限定的版本
+        if primary == 'div.markdown':
+            selectors.append('[data-message-author-role="assistant"] div.markdown')
         if primary:
             selectors.append(primary)
         selectors.extend(prof.get('_response_fallback', []))
@@ -5504,12 +5575,14 @@ class MainWindow(QMainWindow):
             f"⚠ 章节校验未通过 ({len(reasons)} 个问题),死磕重写...剩余 {retry-1} 次", "warn")
         for r in reasons:
             self.tab_generation.log(f"  · {r}", "warn")
+        # 重试时禁用附件模式: 避免重复上传附件干扰 AI
         self.worker.submit({
             "action": "send_prompt",
             "prompt": stronger,
             "task_id": meta.get("label", "章节"),
             "url": self.tab_generation.url_input.text().strip(),
             "type_delay_ms": 5,
+            "allow_attachment": False,  # ★ 死磕重试强制走文本模式
         })
 
     def _accept_chapter_and_continue(self, content, meta):
