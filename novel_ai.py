@@ -2712,30 +2712,66 @@ class BrowserWorker(QObject):
         except Exception:
             pass
 
-        # 1.5) 镜像站/ChatGPT 专用: 直接 JS 点击发送按钮
+        # 1.5) 镜像站/ChatGPT 专用: 多策略发送
+        _before_cnt = 0
+        try:
+            _before_cnt = self.driver.execute_script(
+                "return document.querySelectorAll('div.markdown,[data-message-author-role="assistant"]').length;"
+            ) or 0
+        except Exception:
+            pass
+
+        # 策略A: 找到按钮直接 click（去掉 disabled 检测误判）
         try:
             hit = self.driver.execute_script("""
-                // 等一下让 React 状态同步
                 const btn = document.querySelector('button.composer-submit-btn')
                          || document.querySelector('[data-testid="send-button"]')
                          || document.querySelector('button[aria-label*="发送"]')
                          || document.querySelector('button[aria-label*="Send" i]');
-                if (!btn) return false;
+                if (!btn) return 'NO_BTN';
                 btn.removeAttribute('disabled');
                 btn.removeAttribute('aria-disabled');
                 btn.click();
-                return true;
+                return 'CLICKED';
             """)
-            time.sleep(0.8)
-            if hit:
-                # 检查是否出现了新回复（说明发送成功）
-                new_cnt = self.driver.execute_script("""
-                    return document.querySelectorAll('div.markdown, [data-message-author-role="assistant"]').length;
-                """) or 0
-                if new_cnt > 0:
+            if hit == 'CLICKED':
+                self.log_signal.emit("已点击发送按钮，等待响应...", "info")
+                time.sleep(1.5)
+                _after_cnt = self.driver.execute_script(
+                    "return document.querySelectorAll('div.markdown,[data-message-author-role="assistant"]').length;"
+                ) or 0
+                if _after_cnt > _before_cnt:
+                    self.log_signal.emit(f"✓ 发送成功(消息数 {_before_cnt}→{_after_cnt})", "info")
                     return True
-        except Exception:
-            pass
+                self.log_signal.emit(f"按钮已点但消息数未增加({_before_cnt}→{_after_cnt})，尝试其他方式", "warn")
+        except Exception as e:
+            self.log_signal.emit(f"策略A异常: {e}", "warn")
+
+        # 策略B: 模拟真实键盘 Enter（通过 ActionChains，非 JS 事件）
+        try:
+            from selenium.webdriver.common.action_chains import ActionChains as _AC
+            from selenium.webdriver.common.keys import Keys as _K
+            # 先 focus 输入框再按 Enter
+            self.driver.execute_script("""
+                const box = document.querySelector('#prompt-textarea')
+                         || document.querySelector('div[contenteditable="true"]');
+                if (box) box.focus();
+            """)
+            time.sleep(0.2)
+            _AC(self.driver).key_down(_K.CONTROL).send_keys(_K.RETURN).key_up(_K.CONTROL).perform()
+            time.sleep(0.3)
+            # Ctrl+Enter 不行就直接 Enter（部分镜像站用 Enter 提交）
+            _AC(self.driver).send_keys(_K.RETURN).perform()
+            time.sleep(1.5)
+            _after_cnt2 = self.driver.execute_script(
+                "return document.querySelectorAll('div.markdown,[data-message-author-role="assistant"]').length;"
+            ) or 0
+            if _after_cnt2 > _before_cnt:
+                self.log_signal.emit(f"✓ Enter键发送成功(消息数 {_before_cnt}→{_after_cnt2})", "info")
+                return True
+            self.log_signal.emit(f"Enter键后消息数未增加({_before_cnt}→{_after_cnt2})", "warn")
+        except Exception as e:
+            self.log_signal.emit(f"策略B异常: {e}", "warn")
 
         # 2) 等按钮可点(每 0.25s 轮询,最多 10s)
         sel = json.dumps(send_btn_selector)
@@ -2743,20 +2779,22 @@ class BrowserWorker(QObject):
         while time.time() < deadline:
             if self._stop.is_set(): return False
             clicked = self.driver.execute_script(f"""
-                const btn = document.querySelector({sel})
+                const btn = document.querySelector('button.composer-submit-btn')
+                         || document.querySelector({sel})
                          || document.querySelector('[data-testid="send-button"]')
                          || document.querySelector('button[aria-label*="发送" i]')
                          || document.querySelector('button[aria-label*="Send" i]')
                          || document.querySelector('form button[type="submit"]');
                 if (!btn) return false;
                 const ariaDis = (btn.getAttribute('aria-disabled') || '').toLowerCase();
-                const cls = (typeof btn.className === 'string' ? btn.className : '').toLowerCase();
-                const dis = btn.disabled
-                         || ariaDis === 'true'
-                         || cls.includes('disabled')
-                         || cls.includes('inactive');
+                // 只检查 disabled 属性和 aria-disabled，不检查 className（避免误判）
+                const dis = btn.disabled || ariaDis === 'true';
                 if (!dis) {{ btn.click(); return true; }}
-                return false;
+                // 即使 disabled 也强点
+                btn.removeAttribute('disabled');
+                btn.removeAttribute('aria-disabled');
+                btn.click();
+                return true;
             """)
             if clicked:
                 return True
