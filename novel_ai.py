@@ -5117,37 +5117,83 @@ class MainWindow(QMainWindow):
     def _auto_fill_outline(self, text: str):
         """
         把 AI 返回的大纲文本按常见标题拆分，自动回填到 StoryOutline 各输入框。
-        若无法识别分块标题，则整段填入「整套大纲」文本框。
+        支持三种格式：
+          1. 中文方括号: 【故事种子】、【世界观】、【章节大纲】
+          2. Markdown 标题: ### 世界观设定、## 章节大纲、#### 第一卷
+          3. 普通段落标题: 世界观设定、主角设定 等
         """
         outline = getattr(self, 'tab_outline', None)
         if outline is None:
             self.tab_generation.log("⚠️  找不到 tab_outline 控件，无法回填", "warn")
             return
 
-        def extract(pattern):
-            m = re.search(pattern, text, re.S)
+        def extract_block(keywords, text, is_chapter=False):
+            """
+            提取以 keywords 中任意一个为标题的段落内容。
+            支持 【xxx】、## xxx、xxx: 等多种格式。
+            
+            参数:
+              is_chapter: 章节大纲特殊处理 - 匹配到文末（因为下面通常嵌套子标题如 #### 第一卷）
+            """
+            kw_pattern = '|'.join(re.escape(k) for k in keywords)
+            # 标题行模式：可能带 【】 或 # 标记，关键词后允许有括号备注等
+            title_pattern = (
+                r'(?:^|\n)\s*'                          # 行首
+                r'(?:【\s*)?'                             # 可选 【
+                r'(?:#{1,6}\s*|\*+\s*)?'                # 可选 # 或 *
+                r'(?:' + kw_pattern + r')'                # 关键词
+                r'[^\n【]*'                               # 允许标题后任意非换行非【内容（如"章节大纲（300章）"）
+                r'(?:】|[:：])?'                           # 可选结尾标点
+                r'\s*\n+'                                # 换行
+            )
+            
+            if is_chapter:
+                # 章节大纲：匹配到下一个【】块或文末（不被 #### 子标题截断）
+                pattern = title_pattern + r'(.*?)(?=\n\s*【|\Z)'
+            else:
+                # 其他模块：匹配到下一个标题（任何 # 级或【】）
+                pattern = title_pattern + r'(.*?)(?=\n\s*(?:【|#{1,6}\s)|\Z)'
+            
+            m = re.search(pattern, text, re.S | re.M)
             return m.group(1).strip() if m else ""
 
-        seed       = extract(r'【?故事种子[】:：]+(.*?)(?=【[^一-鿿]|【故事|【世界|【LO|【结构|【章节|【简介|\Z)')
-        worldview  = extract(r'【?世界观[】:：]+(.*?)(?=【[^一-鿿]|【故事|【LO|【结构|【章节|【简介|\Z)')
-        lo_layer   = extract(r'【?LO层[】:：]+(.*?)(?=【[^一-鿿]|【结构|【章节|【简介|\Z)')
-        structure  = extract(r'【?(?:故事)?结构[】:：]+(.*?)(?=【[^一-鿿]|【章节|【简介|\Z)')
-        ch_outline = extract(r'【?章节大纲[】:：]+(.*?)(?=【[^一-鿿]|【简介|\Z)')
-        intro      = extract(r'【?简介[】:：]+(.*?)(?=【[^一-鿿]|\Z)')
+        # 各模块的关键词（同义词组）
+        seed_kws       = ["故事种子", "故事核心", "核心设定", "故事概要"]
+        worldview_kws  = ["世界观", "世界观设定", "世界设定", "背景设定"]
+        lo_kws         = ["LO层", "LO世界观", "底层逻辑", "世界规则"]
+        structure_kws  = ["故事结构", "故事架构", "结构设定", "整体结构"]
+        chapter_kws    = ["章节大纲", "分章大纲", "章节梗概", "章节列表"]
+        intro_kws      = ["简介", "作品简介", "故事简介"]
+
+        seed       = extract_block(seed_kws, text)
+        worldview  = extract_block(worldview_kws, text)
+        lo_layer   = extract_block(lo_kws, text)
+        structure  = extract_block(structure_kws, text)
+        ch_outline = extract_block(chapter_kws, text, is_chapter=True)
+        intro      = extract_block(intro_kws, text)
+
+        # 兜底：如果章节大纲没识别到，但文本里有大量 "1." "2." "第X章" 这种列表
+        # 就把列表部分作为章节大纲
+        if not ch_outline:
+            # 找到第一个章节列表的开始位置
+            list_match = re.search(r'(?:^|\n)\s*(?:1[\.\、]|第[一二三四五六七八九十1-9][章卷])', text, re.M)
+            if list_match:
+                # 从这里到文末作为章节大纲
+                ch_outline = text[list_match.start():].strip()
 
         filled = []
         if seed       and hasattr(outline, 'seed_edit'):
-            outline.seed_edit.setPlainText(seed);         filled.append("故事种子")
+            outline.seed_edit.setPlainText(seed);            filled.append("故事种子")
         if worldview  and hasattr(outline, 'worldview_edit'):
             outline.worldview_edit.setPlainText(worldview);  filled.append("世界观")
         if lo_layer   and hasattr(outline, 'lo_edit'):
-            outline.lo_edit.setPlainText(lo_layer);       filled.append("LO层")
+            outline.lo_edit.setPlainText(lo_layer);          filled.append("LO层")
         if structure  and hasattr(outline, 'structure_edit'):
             outline.structure_edit.setPlainText(structure);  filled.append("结构")
         if ch_outline and hasattr(outline, 'chapter_outline_edit'):
             outline.chapter_outline_edit.setPlainText(ch_outline); filled.append("章节大纲")
         if intro      and hasattr(outline, 'intro_edit'):
-            outline.intro_edit.setPlainText(intro);       filled.append("简介")
+            outline.intro_edit.setPlainText(intro);          filled.append("简介")
 
         if filled:
             self.tab_generation.log(f"✅ 大纲已自动回填：{' / '.join(filled)}", "success")
