@@ -3352,15 +3352,44 @@ class BrowserWorker(QObject):
         ChatGPT 系列(包括镜像站)有隐藏的 <input type="file" />，
         Selenium 直接 send_keys(filepath) 即可上传，无需点开文件选择对话框。
         """
-        import os, tempfile, time as _t
+        import os, tempfile, time as _t, glob
         # 0) 先清除已存在的附件，避免堆积
         self._clear_existing_attachments()
+        # 0.5) 删除磁盘上残留的旧临时文件(保留最近 3 个,以防发送中)
+        try:
+            tmp_dir = tempfile.gettempdir()
+            old_files = sorted(
+                glob.glob(os.path.join(tmp_dir, "novel_ai_prompt_*.txt")),
+                key=os.path.getmtime
+            )
+            # 保留最近 3 个,删掉更老的
+            for old_f in old_files[:-3]:
+                try:
+                    os.remove(old_f)
+                except Exception:
+                    pass
+            if len(old_files) > 3:
+                self.log_signal.emit(f"已清理 {len(old_files)-3} 个旧临时文件", "info")
+        except Exception:
+            pass
         # 1) 写临时文件
         try:
             tmp_dir = tempfile.gettempdir()
             tmp_path = os.path.join(tmp_dir, f"novel_ai_prompt_{int(_t.time())}.txt")
             with open(tmp_path, "w", encoding="utf-8") as f:
                 f.write(text)
+            # 记录到实例,方便后续清理
+            if not hasattr(self, "_temp_files"):
+                self._temp_files = []
+            self._temp_files.append(tmp_path)
+            # 实例只保留最近 3 个引用
+            if len(self._temp_files) > 3:
+                old_path = self._temp_files.pop(0)
+                try:
+                    if os.path.exists(old_path):
+                        os.remove(old_path)
+                except Exception:
+                    pass
             self.log_signal.emit(f"已创建临时附件: {os.path.basename(tmp_path)} ({len(text)}字)", "info")
         except Exception as e:
             self.log_signal.emit(f"写入临时文件失败: {e}", "error")
@@ -6780,13 +6809,24 @@ class MainWindow(QMainWindow):
             self.tab_generation.log(f"请在浏览器中完成 {ai} 的登录", "info")
 
     def closeEvent(self, event):
-        """关闭主窗口时停止浏览器线程"""
+        """关闭主窗口时停止浏览器线程,清理临时文件"""
         from PyQt5.QtCore import QSettings
         QSettings("NovelAI", "MainWindow").setValue("geometry", self.saveGeometry())
         self.tab_settings.save_settings()
         self._autosave()
         try:
             self.worker.stop()
+        except Exception:
+            pass
+        # 清理所有 novel_ai 临时文件
+        try:
+            import os, tempfile, glob
+            tmp_dir = tempfile.gettempdir()
+            for f in glob.glob(os.path.join(tmp_dir, "novel_ai_prompt_*.txt")):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
         except Exception:
             pass
         event.accept()
