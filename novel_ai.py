@@ -2556,6 +2556,17 @@ class BrowserWorker(QObject):
                         return !!(box && (box.innerText || box.textContent || '').trim());
                     """)
                     if injected:
+                        # 补触发 React 合成事件，让发送按钮从 disabled 变可用
+                        self.driver.execute_script(f"""
+                            const box = document.querySelector({sel});
+                            if (!box) return;
+                            // 触发 React 可识别的 input 事件
+                            box.dispatchEvent(new InputEvent('input', {{bubbles:true, cancelable:true}}));
+                            box.dispatchEvent(new Event('change', {{bubbles:true}}));
+                            // ChatGPT/镜像站专用：触发 compositionend 解锁发送按钮
+                            box.dispatchEvent(new CompositionEvent('compositionend', {{bubbles:true, data:' '}}));
+                        """)
+                        import time as _tw; _tw.sleep(0.2)
                         self.log_signal.emit("✓ 剪贴板+Ctrl+V 注入成功", "info")
                         return True
                     self.log_signal.emit("剪贴板注入后内容为空,尝试CDP", "warn")
@@ -2588,6 +2599,15 @@ class BrowserWorker(QObject):
                     return !!(box && (box.innerText || box.textContent || '').trim());
                 """)
                 if injected:
+                    # 补触发 React 合成事件
+                    self.driver.execute_script(f"""
+                        const box = document.querySelector({sel});
+                        if (!box) return;
+                        box.dispatchEvent(new InputEvent('input', {{bubbles:true, cancelable:true}}));
+                        box.dispatchEvent(new Event('change', {{bubbles:true}}));
+                        box.dispatchEvent(new CompositionEvent('compositionend', {{bubbles:true, data:' '}}));
+                    """)
+                    import time as _tw2; _tw2.sleep(0.2)
                     return True
                 self.log_signal.emit("CDP注入后内容为空，尝试JS兜底", "warn")
             except Exception as e:
@@ -2665,15 +2685,28 @@ class BrowserWorker(QObject):
         except Exception:
             pass
 
-        # 1.5) ProseMirror专用: 先尝试CDP触发提交事件
+        # 1.5) 镜像站/ChatGPT 专用: 直接 JS 点击发送按钮
         try:
-            self.driver.execute_script("""
+            hit = self.driver.execute_script("""
+                // 等一下让 React 状态同步
                 const btn = document.querySelector('[data-testid="send-button"]')
-                         || document.querySelector('button[aria-label*="发送"]');
-                if (btn) btn.click();
+                         || document.querySelector('button[aria-label*="发送"]')
+                         || document.querySelector('button[aria-label*="Send" i]');
+                if (!btn) return false;
+                // 即便 disabled 也强点（镜像站有时 React 状态未更新但实际可发）
+                btn.removeAttribute('disabled');
+                btn.removeAttribute('aria-disabled');
+                btn.click();
+                return true;
             """)
-            time.sleep(0.5)
-            # 如果页面出现新消息则成功
+            time.sleep(0.8)
+            if hit:
+                # 检查是否出现了新回复（说明发送成功）
+                new_cnt = self.driver.execute_script("""
+                    return document.querySelectorAll('div.markdown, [data-message-author-role="assistant"]').length;
+                """) or 0
+                if new_cnt > 0:
+                    return True
         except Exception:
             pass
 
