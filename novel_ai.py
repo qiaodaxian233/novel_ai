@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI 写作工作台(Python 仿制版)
+AI 写作工作台
 =============================================
 基于 PyQt5 + Selenium 的本地小说创作辅助软件
 - 挂载真实 Chrome / Edge,自动操作 DeepSeek / 豆包 / Gemini / 元宝 等 AI 网页
