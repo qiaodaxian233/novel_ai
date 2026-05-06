@@ -47,6 +47,13 @@ LAST_KEY_FILE = Path.home() / "NovelAI_Projects" / ".lastkey"
 TIMEOUT       = 10
 HEARTBEAT_SEC = 1800
 
+# ──────────────────────────────────────────────────────────
+#  开发模式开关: True = 跳过所有网络验证，直接进入主窗口
+#  正式发布前务必改回 False
+# ──────────────────────────────────────────────────────────
+DEV_MODE = True
+
+
 # ─────────────────────────────────────────────────────────
 #  机器指纹
 # ─────────────────────────────────────────────────────────
@@ -220,7 +227,8 @@ class VerifyThread(QThread):
                 else:
                     self.done.emit(False, {"msg": (
                         f"验证服务器响应异常 (HTTP {resp.status_code})\n"
-                        f"返回内容: {raw_text[:120]}"
+                        f"返回内容: {raw_text[:120]}\n"
+                        f"提示: 可能是IP未加入服务器白名单，请联系作者。"
                     )})
                 return
             if data.get("ok"):
@@ -666,6 +674,10 @@ class LicenseGuard:
 
     # ── 主检测入口 ─────────────────────────────────────────
     def check(self) -> bool:
+        # ── 开发模式：跳过所有验证 ──────────────────────
+        if DEV_MODE:
+            return True
+        # ─────────────────────────────────────────────────
         # 1. 闪屏
         splash = SplashWindow()
         splash.show()
