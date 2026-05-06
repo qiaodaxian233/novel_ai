@@ -134,15 +134,20 @@ PROMPTS = {
 
     "chapter": (
         "请作为资深网文作者,生成《{title}》第 {chapter_num} 章的小说正文。\n\n"
+        "⚠️ 重要:必须输出完整章节正文,不要询问、不要简介、不要分点列表、不要『以下是章节』等开场白。\n"
+        "直接从场景描写或人物动作开始写,一气呵成完成全部 {target_words} 字。\n\n"
         "【题材】{genre}\n"
         "【整体世界观/结构】\n{outline}\n\n"
         "【本章大纲】\n{chapter_outline}\n\n"
         "【写作要求】\n"
-        "1. 本章字数不少于 {min_words} 字,目标 {target_words} 字\n"
+        "1. 本章字数严格控制在 {min_words}-{target_words} 字之间(必须达到)\n"
         "2. 与上一章衔接顺畅,人物性格一致\n"
         "3. 对话生动、描写细腻、情节有节奏感\n"
         "4. 严禁血腥、暴力、色情、侮辱女性等违规内容\n"
         "5. 直接输出章节正文,不要任何解释、不要章节标题\n"
+        "6. 章末必须留有钩子(问号/省略号/转折词/新悬念)\n"
+        "7. 如果上下文不足,请基于现有信息合理创作,不要询问用户\n\n"
+        "现在开始正文(请直接以正文第一句话开头,字数{target_words}字):\n"
     ),
 
     "golden_three": (
@@ -3181,7 +3186,7 @@ class BrowserWorker(QObject):
 
         # 2.0) 长文本附件模式：超过 1500 字符时转成 txt 文件上传
         # 优势：绕过审核（附件不进入文本审核）+ 避免输入框卡顿
-        upload_threshold = task.get("upload_threshold", 1500)
+        upload_threshold = task.get("upload_threshold", 3000)
         use_attachment = (
             prof.get("name", "").startswith("ChatGPT")  # 仅 ChatGPT 系列支持
             and len(prompt) >= upload_threshold
@@ -4183,11 +4188,12 @@ class GenerationControl(QWidget):
         self.auto_grab = QCheckBox("自动抓取并回填(生成完即写入章节)")
         self.auto_grab.setChecked(True)
         crow2.addWidget(self.auto_grab)
-        self.use_attachment = QCheckBox("📎 长文本转TXT附件上传(绕过审核)")
-        self.use_attachment.setChecked(True)
+        self.use_attachment = QCheckBox("📎 长文本转TXT附件上传(仅在被审核拦截时启用)")
+        self.use_attachment.setChecked(False)  # 默认关闭(附件模式不稳定)
         self.use_attachment.setToolTip(
             "勾选后,超过1500字的提示词会自动转成txt文件上传给AI\n"
-            "可有效绕过 OpenAI 文本审核(flagged_by_moderation)\n"
+            "⚠️ 附件模式不稳定,会导致死磕重试失败\n"
+            "建议:仅在出现 flagged_by_moderation 错误时临时启用\n"
             "仅对 ChatGPT 系列(包括镜像站)有效")
         crow2.addWidget(self.use_attachment)
         crow2.addStretch()
