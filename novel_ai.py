@@ -4976,9 +4976,9 @@ class MainWindow(QMainWindow):
         把 AI 返回的大纲文本按常见标题拆分，自动回填到 StoryOutline 各输入框。
         若无法识别分块标题，则整段填入「整套大纲」文本框。
         """
-        outline = getattr(self, 'story_outline', None)
+        outline = getattr(self, 'tab_outline', None)
         if outline is None:
-            self.log("⚠️  找不到 story_outline 控件，无法回填")
+            self.tab_generation.log("⚠️  找不到 tab_outline 控件，无法回填", "warn")
             return
 
         def extract(pattern):
@@ -4991,10 +4991,6 @@ class MainWindow(QMainWindow):
         structure  = extract(r'【?(?:故事)?结构[】:：]+(.*?)(?=【[^一-鿿]|【章节|【简介|\Z)')
         ch_outline = extract(r'【?章节大纲[】:：]+(.*?)(?=【[^一-鿿]|【简介|\Z)')
         intro      = extract(r'【?简介[】:：]+(.*?)(?=【[^一-鿿]|\Z)')
-
-        # 整套大纲始终填入 outline_edit
-        if hasattr(outline, 'outline_edit'):
-            outline.outline_edit.setPlainText(text)
 
         filled = []
         if seed       and hasattr(outline, 'seed_edit'):
@@ -5011,9 +5007,9 @@ class MainWindow(QMainWindow):
             outline.intro_edit.setPlainText(intro);       filled.append("简介")
 
         if filled:
-            self.log(f"✅ 大纲已自动回填：{' / '.join(filled)}")
+            self.tab_generation.log(f"✅ 大纲已自动回填：{' / '.join(filled)}", "success")
         else:
-            self.log("✅ 大纲整体已回填（未检测到分块标题）")
+            self.tab_generation.log("✅ 大纲整体已回填（未检测到分块标题）", "success")
 
     def gen_outline_all(self):
         genres = self.tab_settings.get_selected_genres() or ["言情"]
