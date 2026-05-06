@@ -3191,7 +3191,7 @@ class BrowserWorker(QObject):
 
         # 2.0) 长文本附件模式：超过 1500 字符时转成 txt 文件上传
         # 优势：绕过审核（附件不进入文本审核）+ 避免输入框卡顿
-        upload_threshold = task.get("upload_threshold", 0)  # 0 = 全部走附件
+        upload_threshold = task.get("upload_threshold", 1500)  # 短文本直发,长文本走附件
         use_attachment = (
             prof.get("name", "").startswith("ChatGPT")  # 仅 ChatGPT 系列支持
             and len(prompt) >= upload_threshold
@@ -4256,12 +4256,13 @@ class GenerationControl(QWidget):
         self.auto_grab = QCheckBox("自动抓取并回填(生成完即写入章节)")
         self.auto_grab.setChecked(True)
         crow2.addWidget(self.auto_grab)
-        self.use_attachment = QCheckBox("📎 全文走附件(绕过镜像站文本审核-推荐)")
-        self.use_attachment.setChecked(True)  # 默认开启 - 镜像站文本审核严
+        self.use_attachment = QCheckBox("📎 长文本走附件(>1500字,绕过镜像站审核)")
+        self.use_attachment.setChecked(True)  # 默认开启
         self.use_attachment.setToolTip(
-            "勾选后,所有提示词都通过 txt 附件发送给 AI\n"
-            "✅ 推荐: gpt.aimonkey.plus 等镜像站文本审核严,附件可绕过\n"
-            "⚠️ 不勾: 直接发文本,可能被 flagged_by_moderation 拦截")
+            "勾选后,超过1500字的提示词通过 txt 附件发送给 AI\n"
+            "短任务(摘要/标题/创意等)直接发文本,速度更快\n"
+            "✅ 推荐: gpt.aimonkey.plus 等镜像站文本审核严,长文本必须用附件\n"
+            "⚠️ 不勾: 全部直发文本,长文本可能被 flagged_by_moderation 拦截")
         crow2.addWidget(self.use_attachment)
         crow2.addStretch()
         self.btn_clear = QPushButton("清除日志")
