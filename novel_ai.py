@@ -2025,7 +2025,34 @@ SITE_PROFILES = {
         "response": '[class*="agent-chat"], [class*="markdown"]',
         "stop_btn": 'button[class*="stop"]',
     },
-    "_default": {
+    
+        # ---- ChatGPT 镜像站（gpt.aimonkey.plus 等同类镜像）----
+        # 经油猴脚本实测确认的选择器（2025-05）
+        "gpt.aimonkey.plus": {
+            "input":    '[contenteditable="true"]',          # 只有1个，比 textarea 更精准
+            "send_btn": 'button[data-testid="send-button"]', # 实测1个，精准
+            "response": 'div.markdown',                      # 实测1个，内容干净 ✅ 智能推荐
+            "stop_btn": 'button[data-testid="stop-button"], button[aria-label*="Stop"]',
+            # 备用抓取选择器（按优先级）
+            "_response_fallback": [
+                'div.markdown',
+                '[data-message-author-role="assistant"]',
+                'div.prose',
+            ],
+        },
+        # ChatGPT 官方（结构相同）
+        "chatgpt.com": {
+            "input":    '[contenteditable="true"]',
+            "send_btn": 'button[data-testid="send-button"]',
+            "response": 'div.markdown',
+            "stop_btn": 'button[data-testid="stop-button"]',
+            "_response_fallback": [
+                'div.markdown',
+                '[data-message-author-role="assistant"]',
+                'div.prose',
+            ],
+        },
+"_default": {
         "name": "通用",
         "input": 'textarea, div[contenteditable="true"], input[type="text"]',
         "send_btn": ('button[data-testid*="send"], button[aria-label*="send" i], '
@@ -2729,12 +2756,24 @@ class BrowserWorker(QObject):
 
     # ---------- 抓取/计数(用 querySelectorAll,跳过 selenium 的 CSS 解析)----------
     def _count_responses(self, prof):
-        try:
-            return int(self.driver.execute_script(
-                f"return document.querySelectorAll({json.dumps(prof['response'])}).length;"
-            ) or 0)
-        except Exception:
-            return 0
+        # 依次尝试 response 主选择器 + fallback，返回第一个有结果的数量
+        selectors = []
+        primary = prof.get('response', '')
+        if primary:
+            selectors.append(primary)
+        selectors.extend(prof.get('_response_fallback', []))
+        if not selectors:
+            selectors = ['div.markdown', '[data-message-author-role="assistant"]']
+        for sel in selectors:
+            try:
+                cnt = int(self.driver.execute_script(
+                    f"return document.querySelectorAll({json.dumps(sel)}).length;"
+                ) or 0)
+                if cnt > 0:
+                    return cnt
+            except Exception:
+                continue
+        return 0
 
     def _grab_last_response(self, prof):
         """
@@ -2743,7 +2782,7 @@ class BrowserWorker(QObject):
           1. TamperMonkey bridge —— 如果档案有 tm_bridge=True,
              先读 localStorage.__novelai_reply(由 TM 脚本写入),
              有内容且时间戳在 60s 内就直接用,跳过 DOM 选择器。
-          2. DOM 选择器 —— 标准路径。
+          2. DOM 选择器(profile 主选择器 → _response_fallback → 通用兜底)
         """
         # ── 1. TamperMonkey bridge
         if prof.get("tm_bridge"):
@@ -2764,16 +2803,37 @@ class BrowserWorker(QObject):
             except Exception:
                 pass  # bridge 不可用则降级到 DOM 选择器
 
-        # ── 2. DOM 选择器(标准路径)
-        try:
-            return self.driver.execute_script(f"""
-                const ns = document.querySelectorAll({json.dumps(prof['response'])});
-                if (!ns.length) return '';
-                const last = ns[ns.length - 1];
-                return last.innerText || last.textContent || '';
-            """) or ""
-        except Exception:
-            return ""
+        # ── 2. DOM 选择器(多选择器依次兜底)
+        # 构建选择器优先级列表
+        _fallback_defaults = [
+            'div.markdown',
+            '[data-message-author-role="assistant"]',
+            'div.prose',
+            'section[data-testid*="conversation-turn"]',
+        ]
+        selectors = []
+        primary = prof.get('response', '')
+        if primary:
+            selectors.append(primary)
+        selectors.extend(prof.get('_response_fallback', []))
+        selectors.extend(_fallback_defaults)
+        # 去重保序
+        seen = set()
+        selectors = [s for s in selectors if s and not (s in seen or seen.add(s))]
+
+        for sel in selectors:
+            try:
+                text = self.driver.execute_script(f"""
+                    const ns = document.querySelectorAll({json.dumps(sel)});
+                    if (!ns.length) return '';
+                    const last = ns[ns.length - 1];
+                    return (last.innerText || last.textContent || '').trim();
+                """) or ""
+                if len(text.strip()) > 10:
+                    return text.strip()
+            except Exception:
+                continue
+        return ""
 
 # =====================================================================
 # 对话槽管理器(E 模块:随时换对话,自动同步记忆)
@@ -3701,7 +3761,10 @@ class MainWindow(QMainWindow):
             if t: self.tab_settings.title_input.setText(t)
             self.tabs.setCurrentWidget(self.tab_settings)
         elif target == "outline_full":
+            # 整段内容始终填入章节大纲框
             self.tab_outline.chapter_outline_edit.setPlainText(content)
+            # 同时尝试按标题拆分回填各分项框
+            self._auto_fill_outline(content)
             self.tabs.setCurrentWidget(self.tab_outline)
         elif target and target.startswith("outline_part:"):
             part = target.split(":", 1)[1]
@@ -4930,6 +4993,51 @@ class MainWindow(QMainWindow):
             genre="/".join(genres), inspiration=insp,
             platform=self.tab_settings.get_platform())
         self._send_to_ai(prompt, "AI生成书名", target="title")
+
+    # ---- 补丁3：大纲自动回填 ----
+    def _auto_fill_outline(self, text: str):
+        """
+        把 AI 返回的大纲文本按常见标题拆分，自动回填到 StoryOutline 各输入框。
+        若无法识别分块标题，则整段填入「整套大纲」文本框。
+        """
+        outline = getattr(self, 'story_outline', None)
+        if outline is None:
+            self.log("⚠️  找不到 story_outline 控件，无法回填")
+            return
+
+        def extract(pattern):
+            m = re.search(pattern, text, re.S)
+            return m.group(1).strip() if m else ""
+
+        seed       = extract(r'【?故事种子[】:：]+(.*?)(?=【[^一-鿿]|【故事|【世界|【LO|【结构|【章节|【简介|\Z)')
+        worldview  = extract(r'【?世界观[】:：]+(.*?)(?=【[^一-鿿]|【故事|【LO|【结构|【章节|【简介|\Z)')
+        lo_layer   = extract(r'【?LO层[】:：]+(.*?)(?=【[^一-鿿]|【结构|【章节|【简介|\Z)')
+        structure  = extract(r'【?(?:故事)?结构[】:：]+(.*?)(?=【[^一-鿿]|【章节|【简介|\Z)')
+        ch_outline = extract(r'【?章节大纲[】:：]+(.*?)(?=【[^一-鿿]|【简介|\Z)')
+        intro      = extract(r'【?简介[】:：]+(.*?)(?=【[^一-鿿]|\Z)')
+
+        # 整套大纲始终填入 outline_edit
+        if hasattr(outline, 'outline_edit'):
+            outline.outline_edit.setPlainText(text)
+
+        filled = []
+        if seed       and hasattr(outline, 'seed_edit'):
+            outline.seed_edit.setPlainText(seed);         filled.append("故事种子")
+        if worldview  and hasattr(outline, 'worldview_edit'):
+            outline.worldview_edit.setPlainText(worldview);  filled.append("世界观")
+        if lo_layer   and hasattr(outline, 'lo_edit'):
+            outline.lo_edit.setPlainText(lo_layer);       filled.append("LO层")
+        if structure  and hasattr(outline, 'structure_edit'):
+            outline.structure_edit.setPlainText(structure);  filled.append("结构")
+        if ch_outline and hasattr(outline, 'chapter_outline_edit'):
+            outline.chapter_outline_edit.setPlainText(ch_outline); filled.append("章节大纲")
+        if intro      and hasattr(outline, 'intro_edit'):
+            outline.intro_edit.setPlainText(intro);       filled.append("简介")
+
+        if filled:
+            self.log(f"✅ 大纲已自动回填：{' / '.join(filled)}")
+        else:
+            self.log("✅ 大纲整体已回填（未检测到分块标题）")
 
     def gen_outline_all(self):
         genres = self.tab_settings.get_selected_genres() or ["言情"]
