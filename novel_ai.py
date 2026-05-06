@@ -200,6 +200,54 @@ PROMPTS = {
         "章节正文:\n{content}"
     ),
 
+    "style_audit": (
+        "你是网文风格审稿员。请评估【新章节】的写作风格是否与【参考章节】保持一致。\n\n"
+        "【参考章节】(已确认风格,作为基准):\n{reference}\n\n"
+        "【新章节】(待审):\n{content}\n\n"
+        "评估维度:\n"
+        "1. 用词风格(口语/文雅/古风/现代)\n"
+        "2. 节奏感(快节奏战斗/慢节奏铺垫/对话密度)\n"
+        "3. 描写偏好(动作/心理/环境/对话比例)\n"
+        "4. 角色语气(主角对白是否统一)\n\n"
+        "输出格式(严格遵守):\n"
+        "评分:X/10\n"
+        "主要问题(不超过3条,每条1句话):\n"
+        "  1. xxx\n"
+        "  2. xxx\n"
+        "改进建议:xxx\n"
+    ),
+
+    "world_extract": (
+        "请从以下小说章节中提取结构化信息,严格按下面的 JSON 格式输出,不要任何前后缀说明,不要 markdown 代码块标记。\n\n"
+        "{{\n"
+        '  "characters": [\n'
+        '    {{"name": "角色名", "role": "主角/女主/配角/导师/反派/路人", "appearance": "外貌简述", "personality": "性格", "mark": "口头禅或标志", "ability": "能力或职业", "state": "当前状态", "first_ch": "{ch_num}"}}\n'
+        "  ],\n"
+        '  "relations": [\n'
+        '    {{"a": "角色A名字", "type": "师父/师弟/恋人/对手/血缘等", "b": "角色B名字", "note": "备注或起因"}}\n'
+        "  ],\n"
+        '  "items": [\n'
+        '    {{"name": "物品名", "type": "法器/丹药/秘籍/材料/信物", "owner": "持有者", "source_ch": "{ch_num}", "ability": "能力或状态"}}\n'
+        "  ],\n"
+        '  "events": [\n'
+        '    {{"ch": "{ch_num}", "event": "本章重大事件简述", "state_change": "主角状态变化(如:晋升金丹/获得XX/到达XX地)"}}\n'
+        "  ],\n"
+        '  "foreshadows": [\n'
+        '    {{"ch": "{ch_num}", "content": "本章埋下的伏笔(神秘物品/隐藏身份/可疑话语)", "plan_pay_at": "建议第几章回收(如:30)"}}\n'
+        "  ]\n"
+        "}}\n\n"
+        "提取规则:\n"
+        "1. characters 只列【本章新出场】或【信息有更新】的角色,普通配角可省略\n"
+        "2. relations 只列首次出现或变化的关系\n"
+        "3. items 只列主角【新获得】的物品,不列敌人物品或一次性消耗品\n"
+        "4. events 只列影响主线的重大事件,日常对话不算\n"
+        "5. foreshadows 必须是【作者埋下、读者会记住的悬念】,不是普通铺垫\n"
+        "6. plan_pay_at 根据伏笔重要性给出合理回收章节,无法判断填 '0'\n"
+        "7. 若某类无内容,对应数组留空 [] 即可,不要省略整个字段\n\n"
+        "已有数据(避免重复提取):\n{existing}\n\n"
+        "本章是第 {ch_num} 章,正文:\n{content}"
+    ),
+
     "long_term_extract": (
         "请从以下章节中提取需要长期记忆的关键信息,以避免后续章节出现矛盾。\n"
         "重点关注:\n"
@@ -440,7 +488,14 @@ class ChapterEditor(QWidget):
         self.btn_optimize.clicked.connect(self._on_optimize)
         self.btn_save_all = QPushButton("一键保存所有")
         self.btn_save_all.clicked.connect(lambda: self.save_all_requested.emit())
-        for b in (self.btn_save, self.btn_optimize, self.btn_save_all):
+        self.btn_style_check = QPushButton("🎨 风格一致性检测")
+        self.btn_style_check.setStyleSheet(
+            "background:#9b59b6;color:white;padding:4px 10px;border-radius:3px;")
+        self.btn_regen_alt = QPushButton("🎲 生成备选版本")
+        self.btn_regen_alt.setStyleSheet(
+            "background:#16a085;color:white;padding:4px 10px;border-radius:3px;")
+        for b in (self.btn_save, self.btn_optimize, self.btn_save_all,
+                  self.btn_style_check, self.btn_regen_alt):
             btn_row.addWidget(b)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -478,6 +533,14 @@ class ChapterEditor(QWidget):
     def load_chapter(self, title, content):
         self.title_input.setText(title)
         self.content_edit.setPlainText(content)
+
+    def show_chapter(self, ch_dict, idx):
+        """加载并跟踪当前章节索引(供风格检测和备选版本使用)"""
+        self.current_index = idx
+        self.title_input.setText(ch_dict.get("title", f"第{idx+1}章"))
+        self.content_edit.setPlainText(ch_dict.get("content", ""))
+
+    current_index = -1  # 当前选中的章节索引(-1 表示无)
 
 
 # =====================================================================
@@ -1525,6 +1588,7 @@ class CharacterLibrary(QWidget):
         self._build_relations_tab()
         self._build_timeline_tab()
         self._build_items_tab()
+        self._build_power_tab()
         self._build_foreshadows_tab()
         
         # 底部: 操作按钮
@@ -1765,6 +1829,132 @@ class CharacterLibrary(QWidget):
         for r in rows:
             self.tbl_items.removeRow(r)
     
+    # ── 5.5 战力等级体系子页 ────────────────────────────────
+    def _build_power_tab(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+
+        # 顶部说明
+        intro = QLabel(
+            "📌 设定故事的境界/等级体系,写章节时自动注入,防止『小喽啰一拳打飞主角』『跨级越打越奇怪』"
+        )
+        intro.setStyleSheet("color:#666;padding:4px;")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+
+        # 预设模板按钮
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("快速套用:"))
+        for tpl in ["仙侠九境", "玄幻斗气", "都市修真", "西方魔法", "科幻能力等级"]:
+            b = QPushButton(tpl)
+            b.clicked.connect(lambda _, t=tpl: self._apply_power_preset(t))
+            preset_row.addWidget(b)
+        preset_row.addStretch()
+        lay.addLayout(preset_row)
+
+        # 操作按钮
+        top = QHBoxLayout()
+        btn_add = QPushButton("➕ 新增等级")
+        btn_add.clicked.connect(self._add_power_level)
+        btn_del = QPushButton("➖ 删除选中")
+        btn_del.clicked.connect(self._del_power_level)
+        top.addWidget(btn_add); top.addWidget(btn_del); top.addStretch()
+        lay.addLayout(top)
+
+        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+        self.tbl_power = QTableWidget(0, 4)
+        self.tbl_power.setHorizontalHeaderLabels([
+            "序号", "境界/等级名", "战力描述", "代表能力"
+        ])
+        self.tbl_power.horizontalHeader().setStretchLastSection(True)
+        self.tbl_power.verticalHeader().setVisible(False)
+        self.tbl_power.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_power.setColumnWidth(0, 50)
+        self.tbl_power.setColumnWidth(1, 120)
+        self.tbl_power.setColumnWidth(2, 220)
+        lay.addWidget(self.tbl_power)
+
+        self.sub_tabs.addTab(w, "⚔️ 战力体系")
+
+    def _add_power_level(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_power.rowCount()
+        self.tbl_power.insertRow(r)
+        defaults = [str(r+1), "", "", ""]
+        for c, v in enumerate(defaults):
+            self.tbl_power.setItem(r, c, QTableWidgetItem(v))
+
+    def _del_power_level(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_power.selectedIndexes()), reverse=True)
+        for r in rows:
+            self.tbl_power.removeRow(r)
+
+    def _apply_power_preset(self, name):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        presets = {
+            "仙侠九境": [
+                ("练气期", "凡人之上,可初步操控灵气", "御物·小术法"),
+                ("筑基期", "构建灵根根基", "凝物为器·小神通"),
+                ("金丹期", "凝结金丹,寿元三百", "御空飞行·一气化三清"),
+                ("元婴期", "元神出窍,寿八百", "瞬移·分身术"),
+                ("化神期", "神识凝实,可压境", "言出法随·小神通成形"),
+                ("炼虚期", "虚无之境,寿三千", "破碎虚空·掌控规则"),
+                ("合体期", "本命合一,渡劫前夜", "万法归一·镇压一域"),
+                ("大乘期", "天劫将至,半步飞升", "言出法随·镇压一界"),
+                ("飞升期", "羽化登仙,超脱凡尘", "破开界壁·飞升上界"),
+            ],
+            "玄幻斗气": [
+                ("斗者", "初识斗气", "基础斗技"),
+                ("斗师", "斗气外放", "凝实斗气"),
+                ("大斗师", "斗气化形", "斗技初成"),
+                ("斗灵", "斗气化羽", "御空短行"),
+                ("斗王", "镇压一城", "操控斗气"),
+                ("斗皇", "破碎山岳", "斗技自创"),
+                ("斗宗", "镇压宗门", "驾驭天地之力"),
+                ("斗尊", "言出法随", "异火融身"),
+                ("斗圣", "化身万千", "撕裂虚空"),
+                ("斗帝", "执掌天地", "言出生灭"),
+            ],
+            "都市修真": [
+                ("后天", "凡人体魄", "强健·武艺"),
+                ("先天", "突破极限", "内力·感知"),
+                ("化劲", "劲入血肉", "穿透·震荡"),
+                ("宗师", "镇压一方", "意境·气场"),
+                ("大宗师", "返璞归真", "破甲·神识"),
+                ("陆地神仙", "万法不侵", "御物·驻颜"),
+            ],
+            "西方魔法": [
+                ("学徒", "刚入门", "小型咒语"),
+                ("初级法师", "掌握基础元素", "火球·闪电"),
+                ("中级法师", "复合咒语", "法阵·防护罩"),
+                ("高级法师", "操控元素之力", "元素亲和"),
+                ("大法师", "可创造新咒语", "时空小术"),
+                ("圣域法师", "镇压区域", "禁咒入门"),
+                ("传奇法师", "活化身于法则", "禁咒·龙息"),
+                ("神级法师", "人形法则", "言出法随"),
+            ],
+            "科幻能力等级": [
+                ("E级", "微弱异能", "辅助·感知"),
+                ("D级", "可控异能", "局部增强"),
+                ("C级", "战斗级", "对抗一队普通士兵"),
+                ("B级", "区域级", "对抗一支小队"),
+                ("A级", "战略级", "对抗特种部队"),
+                ("S级", "城市级", "镇压一城"),
+                ("SS级", "国家级", "撼动战局"),
+                ("SSS级", "毁灭级", "毁灭一国"),
+            ],
+        }
+        rows = presets.get(name, [])
+        if not rows:
+            return
+        # 清空并填充
+        self.tbl_power.setRowCount(0)
+        for i, (lv, desc, ab) in enumerate(rows):
+            r = self.tbl_power.rowCount()
+            self.tbl_power.insertRow(r)
+            for c, v in enumerate([str(i+1), lv, desc, ab]):
+                self.tbl_power.setItem(r, c, QTableWidgetItem(v))
+
     # ── 5. 伏笔追踪子页 ────────────────────────────────────
     def _build_foreshadows_tab(self):
         w = QWidget()
@@ -1832,6 +2022,7 @@ class CharacterLibrary(QWidget):
             "relations":  tbl_to_list(self.tbl_relations, 4),
             "timeline":   tbl_to_list(self.tbl_timeline, 3),
             "items":      tbl_to_list(self.tbl_items, 5),
+            "power_levels": tbl_to_list(self.tbl_power, 4),
             "foreshadows":tbl_to_list(self.tbl_fore, 5),
             "hero_state": {
                 "age":      self.hero_age.text(),
@@ -1862,6 +2053,7 @@ class CharacterLibrary(QWidget):
         list_to_tbl(self.tbl_relations, data.get("relations", []), 4)
         list_to_tbl(self.tbl_timeline,  data.get("timeline", []), 3)
         list_to_tbl(self.tbl_items,     data.get("items", []), 5)
+        list_to_tbl(self.tbl_power,     data.get("power_levels", []), 4)
         list_to_tbl(self.tbl_fore,      data.get("foreshadows", []), 5)
         
         hs = data.get("hero_state", {})
@@ -1975,7 +2167,17 @@ class CharacterLibrary(QWidget):
                     lines.append(f"  • 第{cs}章埋: {ct} → 第{cp}章回收[{flag}]")
                 parts.append("【待回收伏笔(优先考虑)】\n" + "\n".join(lines))
         
-        # 6. 最近时间线事件(防剧情漂移)
+        # 6. 战力等级体系(防止跨级混乱)
+        powers = []
+        for r in range(self.tbl_power.rowCount()):
+            lv   = self.tbl_power.item(r, 1).text() if self.tbl_power.item(r, 1) else ""
+            desc = self.tbl_power.item(r, 2).text() if self.tbl_power.item(r, 2) else ""
+            if lv:
+                powers.append(f"  • {lv}: {desc}")
+        if powers:
+            parts.append("【战力等级体系(由低到高)】\n" + "\n".join(powers))
+
+        # 7. 最近时间线事件(防剧情漂移)
         events = []
         for r in range(self.tbl_timeline.rowCount()):
             ch     = self.tbl_timeline.item(r, 0).text() if self.tbl_timeline.item(r, 0) else "0"
@@ -4416,6 +4618,13 @@ class MainWindow(QMainWindow):
         # Canon Tab
         self.tab_canon.btn_extract_now.clicked.connect(self._canon_extract_all_chapters)
 
+        # 角色与世界 Tab
+        self.tab_charlib.btn_extract_from_chapters.clicked.connect(self._charlib_extract_from_chapters)
+
+        # 章节编辑器: 风格检测 + 备选版本
+        self.tab_editor.btn_style_check.clicked.connect(self._on_style_check)
+        self.tab_editor.btn_regen_alt.clicked.connect(self._on_regen_alt)
+
         # Skill Tab
         self.tab_skills.btn_test.clicked.connect(self._skill_test_run)
 
@@ -4510,7 +4719,7 @@ class MainWindow(QMainWindow):
             self.chapters[self.current_chapter_index]["content"] = self.tab_editor.content_edit.toPlainText()
         self.current_chapter_index = idx
         ch = self.chapters[idx]
-        self.tab_editor.load_chapter(ch["title"], ch["content"])
+        self.tab_editor.show_chapter(ch, idx)  # 记录索引,供风格检测/备选版本使用
         self.tabs.setCurrentWidget(self.tab_editor)
 
     # ---- 章节管理 ----
@@ -4716,6 +4925,41 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentWidget(self.tab_memory)
             if meta.get("chain_full_memory"):
                 QTimer.singleShot(800, self._run_next_full_memory_step)
+        elif target == "world_extract":
+            # 角色库结构化提取
+            self._on_world_extract_received(content, meta.get("ch_num", 0))
+        elif target == "style_audit":
+            # 风格检测结果 - 弹窗显示
+            ch_idx = meta.get("ch_idx", 0)
+            if content.strip():
+                QMessageBox.information(
+                    self, f"风格检测结果 - 第{ch_idx+1}章",
+                    content.strip())
+            else:
+                QMessageBox.warning(self, "失败", "AI 未返回检测结果")
+        elif target == "alt_version":
+            # 备选版本 - 弹窗让用户选择保留
+            ch_idx = meta.get("ch_idx", 0)
+            if not content.strip():
+                QMessageBox.warning(self, "失败", "AI 未返回新版本")
+                return
+            ret = QMessageBox.question(
+                self, f"备选版本 - 第{ch_idx+1}章",
+                f"AI 已生成备选版本({len(content)} 字)。\n\n"
+                f"前 200 字预览:\n{content[:200]}...\n\n"
+                "是否用此版本替换原章节内容?\n"
+                "(选「否」则只显示在编辑器供你比对,不替换)",
+                QMessageBox.Yes | QMessageBox.No)
+            if ret == QMessageBox.Yes:
+                if 0 <= ch_idx < len(self.chapters):
+                    self.chapters[ch_idx]["content"] = content.strip()
+                    self.tab_editor.show_chapter(self.chapters[ch_idx], ch_idx)
+                    self.tab_generation.log(
+                        f"✓ 第{ch_idx+1}章已替换为备选版本", "success")
+            else:
+                # 仅显示在编辑器
+                self.tab_editor.content_edit.setPlainText(content.strip())
+                self.tabs.setCurrentWidget(self.tab_editor)
         elif target == "long_term_extract":
             # 长期记忆提取 - 追加到现有内容
             if content.strip() and content.strip() != "无":
@@ -4955,6 +5199,308 @@ class MainWindow(QMainWindow):
         if done_cb:
             QTimer.singleShot(500, done_cb)
 
+    # ─────────────── 风格一致性检测 ───────────────
+    def _on_style_check(self):
+        """检测当前章节风格与参考章节的一致性"""
+        if not self.chapters:
+            QMessageBox.information(self, "提示", "尚未生成任何章节")
+            return
+        if not self.worker.is_ready():
+            QMessageBox.warning(
+                self, "请先启动浏览器",
+                "请先在『生成控制』页点『🚀 启动浏览器』再使用风格检测。")
+            return
+        cur_idx = self.tab_editor.current_index
+        if cur_idx is None or cur_idx < 0 or cur_idx >= len(self.chapters):
+            QMessageBox.information(self, "提示", "请先在编辑器选中一个章节")
+            return
+        if cur_idx == 0:
+            QMessageBox.information(
+                self, "提示",
+                "第 1 章是基准章,无需检测。请打开第 2 章及以后的章节进行风格检测。")
+            return
+        cur_ch = self.chapters[cur_idx]
+        # 用第 1 章作为风格基准
+        ref_ch = self.chapters[0]
+        prompt = PROMPTS["style_audit"].format(
+            reference=ref_ch.get("content", "")[:3000],
+            content=cur_ch.get("content", "")[:3000],
+        )
+        self._send_to_ai(
+            prompt, f"风格检测-第{cur_idx+1}章",
+            target="style_audit",
+            ch_idx=cur_idx,
+        )
+
+    # ─────────────── 多版本备选生成 ───────────────
+    def _on_regen_alt(self):
+        """为当前章节生成备选版本(同样的提示词,让 AI 给不同写法)"""
+        if not self.chapters:
+            QMessageBox.information(self, "提示", "尚未生成任何章节")
+            return
+        if not self.worker.is_ready():
+            QMessageBox.warning(self, "请先启动浏览器", "请先点『启动浏览器』")
+            return
+        cur_idx = self.tab_editor.current_index
+        if cur_idx is None or cur_idx < 0 or cur_idx >= len(self.chapters):
+            QMessageBox.information(self, "提示", "请先选中要重生成的章节")
+            return
+        ch_num = cur_idx + 1
+        co = self.tab_outline.chapter_outline_edit.toPlainText()
+        outline = (self.tab_outline.worldview_edit.toPlainText() + "\n"
+                   + self.tab_outline.structure_edit.toPlainText())[:1500]
+        target = self.tab_settings.get_words_per_chapter()
+        offset = self.tab_settings.get_prompt_offset()
+        target_with_offset = max(500, target + offset)
+        min_words = max(300, int(target_with_offset * 0.85))
+        full = self.tab_settings.get_full_settings_block()
+        prompt = PROMPTS["chapter"].format(
+            chapter_num=ch_num,
+            title=self.tab_settings.get_title(),
+            genre="/".join(self.tab_settings.get_selected_genres() or ["言情"]),
+            outline=outline,
+            chapter_outline=co[:2500],
+            min_words=min_words, target_words=target_with_offset,
+        )
+        prompt += (
+            f"\n\n【完整设定参考】\n{full}"
+            "\n\n【备选版本要求】\n"
+            "请用与上一版【截然不同】的写法重写本章。可以:\n"
+            "  · 改变开场切入点(从对话开场/从动作开场/从内心独白开场)\n"
+            "  · 调整节奏(放慢或加快)\n"
+            "  · 用不同视角或描写偏重\n"
+            "保持核心情节不变,但表达完全不同。"
+        )
+        self._send_to_ai(
+            prompt, f"备选版本-第{ch_num}章",
+            target="alt_version",
+            ch_idx=cur_idx,
+        )
+
+    # ─────────────── 角色库自动提取 ───────────────
+    def _charlib_extract_from_chapters(self):
+        """从已写章节用 AI 一键提取角色/关系/物品/事件/伏笔"""
+        if not self.chapters:
+            QMessageBox.information(self, "提示", "尚未生成任何章节,无法提取")
+            return
+        if not self.worker.is_ready():
+            self.tabs.setCurrentWidget(self.tab_generation)
+            QMessageBox.warning(
+                self, "请先启动浏览器",
+                "请先在『生成控制』页点『🚀 启动浏览器』,完成 AI 网站登录后再提取。")
+            return
+        # 让用户选范围
+        from PyQt5.QtWidgets import QInputDialog
+        max_ch = len(self.chapters)
+        text, ok = QInputDialog.getText(
+            self, "提取范围",
+            f"请输入要提取的章节范围(共 {max_ch} 章)\n"
+            f"格式:'all' 或 '1-5' 或 '3' (单章)\n"
+            f"建议:每次 3-5 章一批,避免提示词过长",
+            text=f"1-{min(5, max_ch)}")
+        if not ok or not text.strip():
+            return
+        # 解析范围
+        nums = []
+        try:
+            t = text.strip().lower()
+            if t == "all":
+                nums = list(range(1, max_ch + 1))
+            elif "-" in t:
+                a, b = t.split("-")
+                nums = list(range(int(a), int(b) + 1))
+            else:
+                nums = [int(t)]
+        except Exception:
+            QMessageBox.warning(self, "格式错误", "请按照 '1-5' 或 '3' 格式输入")
+            return
+        nums = [n for n in nums if 1 <= n <= max_ch]
+        if not nums:
+            return
+
+        self._charlib_batch_queue = nums
+        self.tab_generation.log(
+            f"▶ 开始批量提取角色库,共 {len(nums)} 章: {nums}", "info")
+        self._run_next_charlib_extract()
+
+    def _run_next_charlib_extract(self):
+        """处理 charlib 提取队列里下一个章节"""
+        queue = getattr(self, "_charlib_batch_queue", None)
+        if not queue:
+            self.tab_generation.log("✅ 角色库批量提取完成", "success")
+            self.tabs.setCurrentWidget(self.tab_charlib)
+            return
+        ch_num = queue.pop(0)
+        ch = self.chapters[ch_num - 1]
+        content = ch.get("content", "")
+        if not content.strip():
+            QTimer.singleShot(100, self._run_next_charlib_extract)
+            return
+        # 现有数据摘要(避免重复提取)
+        existing = self.tab_charlib.serialize()
+        existing_brief = json.dumps({
+            "characters": [r[0] for r in existing.get("characters", []) if r[0]],
+            "items":      [r[0] for r in existing.get("items", []) if r[0]],
+        }, ensure_ascii=False)[:600]
+
+        prompt = PROMPTS["world_extract"].format(
+            ch_num=ch_num,
+            existing=existing_brief,
+            content=content[:5000],
+        )
+        self._send_to_ai(
+            prompt,
+            f"提取角色库-第{ch_num}章",
+            target="world_extract",
+            ch_num=ch_num,
+        )
+
+    def _on_world_extract_received(self, content, ch_num):
+        """world_extract 回调:解析 JSON 并合并到 charlib"""
+        if not content.strip():
+            self.tab_generation.log(f"第{ch_num}章提取为空", "warn")
+            QTimer.singleShot(500, self._run_next_charlib_extract)
+            return
+        # 容错:抠出 JSON 部分(去掉可能的 markdown 包裹)
+        text = content.strip()
+        if "```" in text:
+            import re as _re
+            m = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, _re.S)
+            if m:
+                text = m.group(1)
+        # 找第一个 { 和最后一个 }
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start:end+1]
+        try:
+            data = json.loads(text)
+        except Exception as e:
+            self.tab_generation.log(f"第{ch_num}章 JSON 解析失败: {e}", "warn")
+            self.tab_generation.log(f"  原始内容前 200字: {content[:200]}", "warn")
+            QTimer.singleShot(500, self._run_next_charlib_extract)
+            return
+
+        added = self._merge_into_charlib(data)
+        self.tab_generation.log(
+            f"✓ 第{ch_num}章提取完成: 角色+{added['ch']} 关系+{added['rel']} "
+            f"物品+{added['it']} 事件+{added['ev']} 伏笔+{added['fo']}",
+            "success")
+        # 触发下一章
+        QTimer.singleShot(800, self._run_next_charlib_extract)
+
+    def _merge_into_charlib(self, data):
+        """把提取的数据合并进 charlib UI 表格(去重)"""
+        from PyQt5.QtWidgets import QTableWidgetItem
+        cl = self.tab_charlib
+        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0}
+
+        def existing_names(tbl, col=0):
+            return set((tbl.item(r, col).text() if tbl.item(r, col) else "")
+                       for r in range(tbl.rowCount()))
+
+        # 角色
+        ex_chars = existing_names(cl.tbl_chars)
+        for c in (data.get("characters") or []):
+            name = c.get("name", "").strip()
+            if not name or name in ex_chars:
+                continue
+            row = cl.tbl_chars.rowCount()
+            cl.tbl_chars.insertRow(row)
+            vals = [
+                name, c.get("role", "配角"), c.get("appearance", ""),
+                c.get("personality", ""), c.get("mark", ""),
+                c.get("ability", ""), c.get("state", ""),
+                str(c.get("first_ch", "")),
+            ]
+            for col, v in enumerate(vals):
+                cl.tbl_chars.setItem(row, col, QTableWidgetItem(str(v)))
+            added["ch"] += 1
+            ex_chars.add(name)
+
+        # 关系(去重 key=a+type+b)
+        ex_rels = set()
+        for r in range(cl.tbl_relations.rowCount()):
+            a = cl.tbl_relations.item(r, 0).text() if cl.tbl_relations.item(r, 0) else ""
+            t = cl.tbl_relations.item(r, 1).text() if cl.tbl_relations.item(r, 1) else ""
+            b = cl.tbl_relations.item(r, 2).text() if cl.tbl_relations.item(r, 2) else ""
+            ex_rels.add(f"{a}|{t}|{b}")
+        for rel in (data.get("relations") or []):
+            a = rel.get("a", "").strip()
+            t = rel.get("type", "").strip()
+            b = rel.get("b", "").strip()
+            if not (a and t and b):
+                continue
+            k = f"{a}|{t}|{b}"
+            if k in ex_rels:
+                continue
+            row = cl.tbl_relations.rowCount()
+            cl.tbl_relations.insertRow(row)
+            for col, v in enumerate([a, t, b, rel.get("note", "")]):
+                cl.tbl_relations.setItem(row, col, QTableWidgetItem(v))
+            added["rel"] += 1
+            ex_rels.add(k)
+
+        # 物品
+        ex_items = existing_names(cl.tbl_items)
+        for it in (data.get("items") or []):
+            name = it.get("name", "").strip()
+            if not name or name in ex_items:
+                continue
+            row = cl.tbl_items.rowCount()
+            cl.tbl_items.insertRow(row)
+            vals = [name, it.get("type", "法器"), it.get("owner", ""),
+                    str(it.get("source_ch", "")), it.get("ability", "")]
+            for col, v in enumerate(vals):
+                cl.tbl_items.setItem(row, col, QTableWidgetItem(str(v)))
+            added["it"] += 1
+            ex_items.add(name)
+
+        # 事件
+        ex_evs = set()
+        for r in range(cl.tbl_timeline.rowCount()):
+            ch = cl.tbl_timeline.item(r, 0).text() if cl.tbl_timeline.item(r, 0) else ""
+            ev = cl.tbl_timeline.item(r, 1).text() if cl.tbl_timeline.item(r, 1) else ""
+            ex_evs.add(f"{ch}|{ev[:20]}")
+        for ev in (data.get("events") or []):
+            ch = str(ev.get("ch", ""))
+            evt = ev.get("event", "").strip()
+            if not evt:
+                continue
+            k = f"{ch}|{evt[:20]}"
+            if k in ex_evs:
+                continue
+            row = cl.tbl_timeline.rowCount()
+            cl.tbl_timeline.insertRow(row)
+            for col, v in enumerate([ch, evt, ev.get("state_change", "")]):
+                cl.tbl_timeline.setItem(row, col, QTableWidgetItem(v))
+            added["ev"] += 1
+            ex_evs.add(k)
+
+        # 伏笔
+        ex_fos = set()
+        for r in range(cl.tbl_fore.rowCount()):
+            ch = cl.tbl_fore.item(r, 0).text() if cl.tbl_fore.item(r, 0) else ""
+            ct = cl.tbl_fore.item(r, 1).text() if cl.tbl_fore.item(r, 1) else ""
+            ex_fos.add(f"{ch}|{ct[:30]}")
+        for fo in (data.get("foreshadows") or []):
+            ch = str(fo.get("ch", ""))
+            ct = fo.get("content", "").strip()
+            if not ct:
+                continue
+            k = f"{ch}|{ct[:30]}"
+            if k in ex_fos:
+                continue
+            row = cl.tbl_fore.rowCount()
+            cl.tbl_fore.insertRow(row)
+            vals = [ch, ct, str(fo.get("plan_pay_at", "0")), "否", ""]
+            for col, v in enumerate(vals):
+                cl.tbl_fore.setItem(row, col, QTableWidgetItem(v))
+            added["fo"] += 1
+            ex_fos.add(k)
+
+        return added
+
     def _canon_extract_all_chapters(self):
         """从所有已生成章节自动抽取 Canon"""
         if not self.chapters:
@@ -5098,12 +5644,63 @@ class MainWindow(QMainWindow):
             return "\n".join(lines[1:]).lstrip()
         return content
 
+    def _check_foreshadow_alert(self, ch_num):
+        """检查即将到期的伏笔,如有则弹窗提醒"""
+        if not hasattr(self, "tab_charlib"):
+            return
+        cl = self.tab_charlib
+        urgent = []  # 0~3章后该回收
+        overdue = []  # 已超期
+        for r in range(cl.tbl_fore.rowCount()):
+            ch_set = cl.tbl_fore.item(r, 0).text() if cl.tbl_fore.item(r, 0) else "0"
+            content = cl.tbl_fore.item(r, 1).text() if cl.tbl_fore.item(r, 1) else ""
+            ch_pay = cl.tbl_fore.item(r, 2).text() if cl.tbl_fore.item(r, 2) else "0"
+            paid = cl.tbl_fore.item(r, 3).text() if cl.tbl_fore.item(r, 3) else "否"
+            if paid == "是" or not content:
+                continue
+            try:
+                ch_pay_int = int(ch_pay)
+            except ValueError:
+                continue
+            distance = ch_pay_int - ch_num
+            if distance < 0:
+                overdue.append((ch_set, content, ch_pay, abs(distance)))
+            elif distance <= 3:
+                urgent.append((ch_set, content, ch_pay, distance))
+        if not urgent and not overdue:
+            return
+        # 弹窗
+        msg_lines = [f"🔔 第 {ch_num} 章生成前伏笔提醒:\n"]
+        if overdue:
+            msg_lines.append(f"⚠️ 已超期未回收的伏笔 ({len(overdue)} 个):")
+            for cs, ct, cp, d in overdue[:5]:
+                msg_lines.append(f"  · 第{cs}章埋: {ct[:50]}")
+                msg_lines.append(f"    应在第{cp}章回收,已超 {d} 章")
+        if urgent:
+            msg_lines.append(f"\n🎯 即将回收的伏笔 ({len(urgent)} 个):")
+            for cs, ct, cp, d in urgent[:5]:
+                flag = "本章可回收!" if d == 0 else f"还有 {d} 章"
+                msg_lines.append(f"  · 第{cs}章埋: {ct[:50]} [{flag}]")
+        msg_lines.append("\n是否继续生成? (这些信息已自动注入到提示词中提醒AI)")
+        ret = QMessageBox.question(
+            self, "伏笔提醒", "\n".join(msg_lines),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ret == QMessageBox.No:
+            self._batch_paused = True
+            self._batch_remaining = 0
+            self.tab_generation.log("用户取消,批量生成已停止", "warn")
+
     def _send_next_chapter(self):
-        """批量生成里发下一章(自动注入对话记忆)"""
+        """批量生成里发下一章(自动注入对话记忆+伏笔提醒)"""
         if self._batch_paused or self._batch_remaining <= 0:
             return
         co = self.tab_outline.chapter_outline_edit.toPlainText()
         ch_num = len(self.chapters) + 1
+
+        # ★ 伏笔到期提醒(只在第1章和达到回收期的章节弹一次,且仅手动模式)
+        if hasattr(self, "tab_charlib") and not getattr(self, "_batch_silent", False):
+            self._check_foreshadow_alert(ch_num)
+
         outline = (self.tab_outline.worldview_edit.toPlainText() + "\n"
                    + self.tab_outline.structure_edit.toPlainText())[:1500]
         target = self.tab_settings.get_words_per_chapter()
