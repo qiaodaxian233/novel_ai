@@ -6648,6 +6648,9 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.Yes:
                 self.chapters.clear()
                 self.tab_generation.log("已清空已生成章节，准备生成第 1 章", "info")
+        # 设置批量参数(单章生成: remaining=1)
+        self._batch_remaining = 1
+        self._batch_paused = False
         self.tab_generation.log("▶ 开始生成第 1 章...", "info")
         self._send_next_chapter()
 
