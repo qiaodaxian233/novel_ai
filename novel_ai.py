@@ -1957,17 +1957,16 @@ SITE_PROFILES = {
             'div[contenteditable="true"], '
             'textarea'
         ),
-        # 发送按钮:五档兜底(镜像站可能改掉 aria-label 文字或去掉 data-testid)
+        # 发送按钮: 实测 class=composer-submit-btn，data-testid 不存在
         "send_btn": (
+            'button.composer-submit-btn, '
             'button[data-testid="send-button"], '
             'button[aria-label*="发送"], '
             'button[aria-label*="Send" i], '
-            'button[aria-label*="submit" i], '
             'form button[type="submit"]'
         ),
-        # 回复区: 油猴脚本实测 div.markdown 最精准（1个，内容干净）
+        # 回复区: 油猴脚本实测 div.markdown 最精准
         "response": 'div.markdown',
-        # 备用选择器按优先级依次兜底
         "_response_fallback": [
             'div.markdown',
             'div[data-message-author-role="assistant"] div.markdown',
@@ -1975,6 +1974,7 @@ SITE_PROFILES = {
             'div.prose',
         ],
         "stop_btn": (
+            'button.composer-submit-btn, '
             'button[data-testid="stop-button"], '
             'button[aria-label*="停止"], '
             'button[aria-label*="Stop" i]'
@@ -2493,9 +2493,36 @@ class BrowserWorker(QObject):
         """
         from selenium.webdriver.common.keys import Keys
         from selenium.webdriver.common.action_chains import ActionChains
+        import time as _t_inj
 
         sel = json.dumps(input_selector)
         text_js = json.dumps(text)
+
+        # ── 快速路径: ProseMirror / #prompt-textarea
+        # 实测最有效: focus → selectAll → delete → execCommand insertText → 触发 React 事件
+        try:
+            result = self.driver.execute_script(f"""
+                const box = document.querySelector({sel});
+                if (!box || !box.isContentEditable) return 'SKIP';
+                box.focus();
+                document.execCommand('selectAll', false, null);
+                document.execCommand('delete', false, null);
+                const ok = document.execCommand('insertText', false, {text_js});
+                // 触发 React 合成事件让发送按钮解锁
+                box.dispatchEvent(new InputEvent('input', {{bubbles:true, cancelable:true, inputType:'insertText'}}));
+                box.dispatchEvent(new Event('change', {{bubbles:true}}));
+                box.dispatchEvent(new CompositionEvent('compositionend', {{bubbles:true, data:' '}}));
+                const content = (box.innerText || box.textContent || '').trim();
+                return content ? 'OK' : 'EMPTY';
+            """)
+            if result == 'OK':
+                _t_inj.sleep(0.3)
+                self.log_signal.emit("✓ execCommand insertText 注入成功", "info")
+                return True
+            elif result == 'EMPTY':
+                self.log_signal.emit("insertText 后内容为空，尝试其他方法", "warn")
+        except Exception as e:
+            self.log_signal.emit(f"快速注入异常: {e}，降级处理", "warn")
 
         # 判断元素类型
         try:
@@ -2689,11 +2716,11 @@ class BrowserWorker(QObject):
         try:
             hit = self.driver.execute_script("""
                 // 等一下让 React 状态同步
-                const btn = document.querySelector('[data-testid="send-button"]')
+                const btn = document.querySelector('button.composer-submit-btn')
+                         || document.querySelector('[data-testid="send-button"]')
                          || document.querySelector('button[aria-label*="发送"]')
                          || document.querySelector('button[aria-label*="Send" i]');
                 if (!btn) return false;
-                // 即便 disabled 也强点（镜像站有时 React 状态未更新但实际可发）
                 btn.removeAttribute('disabled');
                 btn.removeAttribute('aria-disabled');
                 btn.click();
