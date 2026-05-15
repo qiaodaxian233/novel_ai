@@ -595,6 +595,25 @@ class PanguEngine:
         "果然", "脸上堆满了笑",
     ]
 
+    # 用户自定义白名单(运行时通过 set_whitelist 注入,避免误杀)
+    _whitelist: set = set()
+
+    @classmethod
+    def set_whitelist(cls, words):
+        """设置白名单(空格/换行分隔的词列表)。被白名单覆盖的词不计入禁用词。"""
+        if isinstance(words, str):
+            words = re.split(r"\s+", words.strip())
+        cls._whitelist = {w.strip() for w in words if w and w.strip()}
+
+    @classmethod
+    def get_whitelist(cls):
+        return sorted(cls._whitelist)
+
+    @classmethod
+    def get_active_forbidden_words(cls):
+        """实际生效的禁用词(剔除白名单)。"""
+        return [w for w in cls._FORBIDDEN_WORDS if w not in cls._whitelist]
+
     @classmethod
     def detect_forbidden_words(cls, text: str) -> List[Tuple[str, int]]:
         """
@@ -604,7 +623,10 @@ class PanguEngine:
         if not text:
             return []
         hits: Dict[str, int] = {}
+        wl = cls._whitelist
         for w in cls._FORBIDDEN_WORDS:
+            if w in wl:
+                continue
             c = text.count(w)
             if c > 0:
                 hits[w] = c

@@ -29,6 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt5.QtWidgets import (
+    QDialog, QTextBrowser, QDialogButtonBox, QListWidgetItem,
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QPlainTextEdit, QTabWidget,
     QListWidget, QListWidgetItem, QRadioButton, QCheckBox, QButtonGroup,
@@ -37,7 +38,7 @@ from PyQt5.QtWidgets import (
     QSlider, QComboBox,
 )
 from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QObject
-from PyQt5.QtGui import QFont, QIcon, QColor
+from PyQt5.QtGui import QFont, QIcon, QColor, QSyntaxHighlighter, QTextCharFormat, QTextCursor
 
 # Selenium(可选,装了就启用真浏览器自动化)
 try:
@@ -488,8 +489,71 @@ QComboBox QAbstractItemView { background: white; selection-background-color: #1a
 
 
 # =====================================================================
-# 三、章节编辑器
+# 三、章节编辑器(+ 盘古禁用词实时高亮器)
 # =====================================================================
+class _PanguForbiddenHighlighter(QSyntaxHighlighter):
+    """章节编辑器实时高亮:盘古禁用词红色波浪线 + 长句段落浅黄底色。"""
+    def __init__(self, parent):
+        super().__init__(parent)
+        # 词高亮格式
+        self.fmt_forbidden = QTextCharFormat()
+        self.fmt_forbidden.setUnderlineColor(QColor(220, 50, 50))
+        self.fmt_forbidden.setUnderlineStyle(QTextCharFormat.SpellCheckUnderline)
+        self.fmt_forbidden.setForeground(QColor(180, 0, 0))
+        # AI 质检失败段落底色
+        self.fmt_qcheck = QTextCharFormat()
+        self.fmt_qcheck.setBackground(QColor(255, 245, 200))
+        # 缓存:词列表 + qcheck 失败段落集合
+        self._words = []
+        self._qcheck_block_ids = set()  # 段落号(基于 blockNumber)
+        try:
+            from pangu_system import PanguEngine
+            self._words = PanguEngine.get_active_forbidden_words()
+        except Exception:
+            self._words = []
+
+        # ───── 首次启动盘古介绍 banner(Phase A 新增) ─────
+        try:
+            from PyQt5.QtCore import QSettings as _QS
+            _s = _QS("NovelAI", "Pangu")
+            if not _s.value("first_seen", False, type=bool):
+                from pangu_system import get_default_engine as _pe
+                _banner = _pe().get_first_activation_banner() if hasattr(_pe(), "get_first_activation_banner") else None
+                if _banner:
+                    QMessageBox.information(self, "🛕 欢迎使用【盘古超级系统】", _banner)
+                _s.setValue("first_seen", True)
+        except Exception:
+            pass
+
+    def refresh_words(self):
+        try:
+            from pangu_system import PanguEngine
+            self._words = PanguEngine.get_active_forbidden_words()
+        except Exception:
+            self._words = []
+        self.rehighlight()
+
+    def set_qcheck_blocks(self, block_ids):
+        """设置质检失败的段落号集合,触发重绘。"""
+        self._qcheck_block_ids = set(block_ids or [])
+        self.rehighlight()
+
+    def clear_qcheck(self):
+        self._qcheck_block_ids = set()
+        self.rehighlight()
+
+    def highlightBlock(self, text):
+        # 段落底色(qcheck 标记)
+        if self.currentBlock().blockNumber() in self._qcheck_block_ids:
+            self.setFormat(0, len(text), self.fmt_qcheck)
+        # 禁用词高亮
+        for w in self._words:
+            if not w:
+                continue
+            i = text.find(w)
+            while i >= 0:
+                self.setFormat(i, len(w), self.fmt_forbidden)
+                i = text.find(w, i + 1)
 class ChapterEditor(QWidget):
     save_requested = pyqtSignal(str, str)
     optimize_requested = pyqtSignal(str)
@@ -498,6 +562,7 @@ class ChapterEditor(QWidget):
     pangu_quicklint_requested = pyqtSignal(str)
     pangu_qcheck_requested = pyqtSignal(str)
     pangu_spiral_requested = pyqtSignal(str)
+    pangu_preview_prompt_requested = pyqtSignal()    # 预览章节 prompt
 
     def __init__(self):
         super().__init__()
@@ -527,6 +592,11 @@ class ChapterEditor(QWidget):
             "background:#34495e;color:white;padding:4px 10px;border-radius:3px;")
         self.btn_pangu_spiral.setToolTip("AI 诊断当前章节处于 P1-P7 哪个螺旋阶段")
         self.btn_pangu_spiral.clicked.connect(self._on_pangu_spiral)
+        self.btn_pangu_preview = QPushButton("👁️ 预览Prompt")
+        self.btn_pangu_preview.setStyleSheet(
+            "background:#2c3e50;color:white;padding:4px 10px;border-radius:3px;")
+        self.btn_pangu_preview.setToolTip("查看下一章节生成时实际发给 AI 的完整 prompt(含盘古铁律)")
+        self.btn_pangu_preview.clicked.connect(lambda: self.pangu_preview_prompt_requested.emit())
         self.btn_style_check = QPushButton("🎨 风格一致性检测")
         self.btn_style_check.setStyleSheet(
             "background:#9b59b6;color:white;padding:4px 10px;border-radius:3px;")
@@ -535,6 +605,7 @@ class ChapterEditor(QWidget):
             "background:#16a085;color:white;padding:4px 10px;border-radius:3px;")
         for b in (self.btn_save, self.btn_optimize, self.btn_save_all,
                   self.btn_pangu_lint, self.btn_pangu_qcheck, self.btn_pangu_spiral,
+                  self.btn_pangu_preview,
                   self.btn_style_check, self.btn_regen_alt):
             btn_row.addWidget(b)
         btn_row.addStretch()
@@ -553,6 +624,12 @@ class ChapterEditor(QWidget):
         self.word_count_label = QLabel("字数: 0")
         self.word_count_label.setAlignment(Qt.AlignRight)
         layout.addWidget(self.word_count_label)
+
+        # 盘古禁用词实时高亮(Phase A 新增)
+        try:
+            self.pangu_highlighter = _PanguForbiddenHighlighter(self.content_edit.document())
+        except Exception:
+            self.pangu_highlighter = None
 
     def _update_word_count(self):
         text = self.content_edit.toPlainText()
@@ -743,6 +820,23 @@ class CreationSettings(QWidget):
             ibtns.addWidget(b)
         irow.addLayout(ibtns)
         layout.addLayout(irow)
+
+        # ---- 盘古禁用词白名单 ----
+        wl_box = QGroupBox("🛡️ 盘古禁用词白名单(避免误杀,用空格/换行分隔)")
+        wl_lay = QVBoxLayout(wl_box)
+        self.pangu_whitelist_edit = QPlainTextEdit()
+        self.pangu_whitelist_edit.setMaximumHeight(60)
+        self.pangu_whitelist_edit.setPlaceholderText(
+            "例如:仿佛 似乎 知道  (这些词会被允许出现在正文,不再被标红)")
+        wl_lay.addWidget(self.pangu_whitelist_edit)
+        wl_btn_row = QHBoxLayout()
+        self.btn_pangu_wl_apply = QPushButton("✓ 应用白名单")
+        self.btn_pangu_wl_apply.setStyleSheet(
+            "background:#16a085;color:white;padding:4px 10px;border-radius:3px;")
+        wl_btn_row.addWidget(self.btn_pangu_wl_apply)
+        wl_btn_row.addStretch()
+        wl_lay.addLayout(wl_btn_row)
+        layout.addWidget(wl_box)
 
         # ---- 盘古快捷工具 ----
         pangu_tools_box = QGroupBox("🛕 盘古快捷工具")
@@ -1056,6 +1150,21 @@ class CreationSettings(QWidget):
 
         layout.addStretch()
 
+        # 启动时从 QSettings 恢复白名单并应用
+        try:
+            from PyQt5.QtCore import QSettings as _QS
+            _s = _QS("NovelAI", "CreationSettings")
+            _wl = _s.value("pangu_whitelist", "", type=str)
+            if _wl:
+                self.pangu_whitelist_edit.setPlainText(_wl)
+                try:
+                    from pangu_system import PanguEngine
+                    PanguEngine.set_whitelist(_wl)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     # ---- 联动 ----
     def _sync_chapter_preset(self, checked):
         if not checked: return
@@ -1200,6 +1309,7 @@ class CreationSettings(QWidget):
         s.setValue("personas", [n for n, cb in self.persona_checks.items() if cb.isChecked()])
         # 盘古超级系统开关
         s.setValue("pangu_enabled", self.pangu_check.isChecked())
+        s.setValue("pangu_whitelist", self.pangu_whitelist_edit.toPlainText())
         s.setValue("prompt_offset", self.prompt_offset.value())
         s.setValue("style_sliders", {n: sl.value() for n, sl in self.style_sliders.items()})
         b = self.ai_group.checkedButton()
@@ -4720,7 +4830,17 @@ class MainWindow(QMainWindow):
         ml.addWidget(self.tabs, 1)
 
     def _build_statusbar(self):
-        sb = QStatusBar(); self.setStatusBar(sb)
+        sb = QStatusBar();
+        # ───── Phase B:盘古手册 + 批量巡检 顶部工具栏 ─────
+        _tb_pangu = self.addToolBar("盘古工具")
+        _tb_pangu.setMovable(False)
+        _act_manual = QAction("❓ 盘古手册", self)
+        _act_manual.triggered.connect(self._on_pangu_show_manual)
+        _tb_pangu.addAction(_act_manual)
+        _act_batch = QAction("🛡️ 全书巡检", self)
+        _act_batch.triggered.connect(self._on_pangu_batch_scan)
+        _tb_pangu.addAction(_act_batch)
+        self.setStatusBar(sb)
         sb.addWidget(QLabel("© 2026 AI 写作工作台 | Python + PyQt5"))
         self._status_indicator = QLabel("● 未启动")
         self._status_indicator.setStyleSheet(
@@ -4821,6 +4941,8 @@ class MainWindow(QMainWindow):
         # ChapterEditor 盘古超级系统按钮(本地词扫已在 ChapterEditor 内消化)
         self.tab_editor.pangu_qcheck_requested.connect(self._on_pangu_qcheck)
         self.tab_editor.pangu_spiral_requested.connect(self._on_pangu_spiral)
+        self.tab_editor.pangu_preview_prompt_requested.connect(self._on_pangu_preview_prompt)
+        self.tab_settings.btn_pangu_wl_apply.clicked.connect(self._on_pangu_apply_whitelist)
         # CreationSettings 盘古快捷工具
         self.tab_settings.btn_pangu_style.clicked.connect(self._on_pangu_style_match)
         self.tab_settings.btn_pangu_arch.clicked.connect(
@@ -5044,6 +5166,28 @@ class MainWindow(QMainWindow):
         })
 
     def _on_response_received(self, task_id, content):
+        # Phase B:盘古质检结果路由
+        try:
+            tgt = (self._pending_task_target or {}).get("target", "") if hasattr(self, "_pending_task_target") else ""
+            if tgt == "pangu_qcheck":
+                # 拿当前章节原文做段落映射
+                _cur_idx = self.tab_editor.current_index if hasattr(self.tab_editor, "current_index") else 0
+                _orig = ""
+                if self.chapters and isinstance(_cur_idx, int) and 0 <= _cur_idx < len(self.chapters):
+                    _orig = self.chapters[_cur_idx].get("content", "")
+                self._on_pangu_qcheck_response(content, _orig)
+                self._pending_task_target = None
+                return
+            if tgt == "pangu_spiral":
+                QMessageBox.information(self, "🌀 盘古 P1-P7 螺旋诊断", content[:3000])
+                self._pending_task_target = None
+                return
+            if tgt == "pangu_mode":
+                self.tab_generation.log(f"✓ 盘古模式切换完成:\n{content[:200]}", "info")
+                self._pending_task_target = None
+                return
+        except Exception:
+            pass
         """worker 回调:某次提示词的 AI 回复已抓取完毕"""
         if not content or not content.strip():
             self.tab_generation.log(f"任务『{task_id}』未抓到内容(选择器需调整)", "warn")
@@ -5580,6 +5724,250 @@ class MainWindow(QMainWindow):
             return
         prompt = get_default_engine().build_spiral_diagnose_prompt(content)
         self._send_to_ai(prompt, "盘古P1-P7螺旋诊断", target="pangu_spiral")
+
+    # ───── Phase A:Prompt 预览 + 白名单应用 ─────
+    def _on_pangu_preview_prompt(self):
+        # 预览章节生成时实际发给 AI 的 prompt
+        if not self.chapters:
+            QMessageBox.information(self, "提示", "尚未生成任何章节,无法预览。请先生成一章。")
+            return
+        cur_idx = self.tab_editor.current_index
+        if cur_idx is None or cur_idx < 0:
+            cur_idx = 0
+        try:
+            ch = self.chapters[cur_idx] if cur_idx < len(self.chapters) else self.chapters[0]
+        except Exception:
+            ch = {}
+        # 用当前已生成最后一章作为"上下文",预览下一章 prompt
+        s = self.tab_settings
+        try:
+            preview_prompt = PROMPTS["chapter"].format(
+                title=s.get_title(),
+                chapter_num=cur_idx + 2,
+                genre="/".join(s.get_selected_genres()) or "通用",
+                outline=getattr(self, "_outline_text", "(无大纲示例)")[:1000],
+                chapter_outline=ch.get("outline", "(无本章大纲)")[:1000],
+                min_words=int(s.get_words_per_chapter() * 0.9),
+                target_words=s.get_words_per_chapter(),
+            )
+        except Exception as e:
+            preview_prompt = f"[预览失败] PROMPTS['chapter'].format 报错: {e}"
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"👁️ 预览发送给 AI 的 Prompt(已含盘古铁律,共 {len(preview_prompt)} 字符)")
+        dlg.resize(900, 700)
+        lay = QVBoxLayout(dlg)
+        viewer = QPlainTextEdit()
+        viewer.setReadOnly(True)
+        viewer.setStyleSheet("font-family:'Consolas','Microsoft YaHei';font-size:12px;background:#fafafa;")
+        viewer.setPlainText(preview_prompt)
+        lay.addWidget(viewer)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        dlg.exec_()
+
+    def _on_pangu_apply_whitelist(self):
+        # 应用白名单到 PanguEngine + 刷新高亮
+        try:
+            from pangu_system import PanguEngine
+        except ImportError:
+            QMessageBox.warning(self, "缺少盘古", "找不到 pangu_system.py")
+            return
+        text = self.tab_settings.pangu_whitelist_edit.toPlainText()
+        PanguEngine.set_whitelist(text)
+        wl = PanguEngine.get_whitelist()
+        # 刷新章节编辑器高亮
+        if hasattr(self.tab_editor, "pangu_highlighter") and self.tab_editor.pangu_highlighter:
+            self.tab_editor.pangu_highlighter.refresh_words()
+        QMessageBox.information(
+            self, "白名单已应用",
+            f"已设置 {len(wl)} 个允许词。\n这些词不会再被高亮 / 计入词扫:\n{', '.join(wl) if wl else '(空)'}")
+
+    # ───── Phase B:30 项质检 JSON 解析 + 段落标注 ─────
+    def _on_pangu_qcheck_response(self, content_response, original_chapter):
+        # 解析 AI 返回的 JSON,把失败项映射到段落,然后让 highlighter 标黄
+        import json as _json
+        try:
+            # 提取 JSON(可能包在 markdown code block 里)
+            m = re.search(r"\{[\s\S]*\}", content_response)
+            if not m:
+                raise ValueError("没找到 JSON")
+            data = _json.loads(m.group(0))
+        except Exception as e:
+            QMessageBox.warning(
+                self, "盘古质检 JSON 解析失败",
+                f"AI 返回不是合法 JSON,无法标注。\n错误:{e}\n\n原始返回前 500 字:\n{content_response[:500]}")
+            return
+        score = data.get("score", "?")
+        failed = data.get("failed_items", [])
+        advice = data.get("advice", "")
+        # 在章节文本里找 advice 提到的关键词所在段落
+        block_ids = set()
+        if advice and original_chapter:
+            for kw in re.findall(r"[\u4e00-\u9fa5]{2,10}", advice)[:20]:
+                idx = original_chapter.find(kw)
+                if idx >= 0:
+                    block_no = original_chapter.count("\n", 0, idx)
+                    block_ids.add(block_no)
+        if hasattr(self.tab_editor, "pangu_highlighter") and self.tab_editor.pangu_highlighter:
+            self.tab_editor.pangu_highlighter.set_qcheck_blocks(block_ids)
+        # 弹结果框
+        msg = f"得分:{score}/100\n失败项:{failed}\n\n建议:\n{advice}"
+        if block_ids:
+            msg += f"\n\n相关段落已在编辑器里浅黄高亮(段号:{sorted(block_ids)[:10]})"
+        QMessageBox.information(self, "📊 盘古 30 项质检结果", msg)
+
+    # ───── Phase B:盘古帮助查询面板 ─────
+    def _on_pangu_show_manual(self):
+        # 弹独立窗口展示盘古完整 spec,带搜索
+        try:
+            from pangu_system import get_default_engine
+        except ImportError:
+            QMessageBox.warning(self, "缺少盘古", "找不到 pangu_system.py")
+            return
+        full = get_default_engine().get_full_spec() if hasattr(get_default_engine(), "get_full_spec") else None
+        if not full:
+            try:
+                with open("pangu_full_spec.md", "r", encoding="utf-8") as f:
+                    full = f.read()
+            except Exception:
+                full = "(无法加载 pangu_full_spec.md)"
+        dlg = QDialog(self)
+        dlg.setWindowTitle("❓ 盘古超级系统 · 完整手册")
+        dlg.resize(1100, 800)
+        lay = QVBoxLayout(dlg)
+        srow = QHBoxLayout()
+        srow.addWidget(QLabel("🔍 搜索:"))
+        search_input = QLineEdit()
+        search_input.setPlaceholderText("输入关键词回车跳转")
+        srow.addWidget(search_input, 1)
+        btn_next = QPushButton("下一个")
+        srow.addWidget(btn_next)
+        lay.addLayout(srow)
+        viewer = QTextBrowser()
+        viewer.setOpenExternalLinks(True)
+        viewer.setStyleSheet("font-family:'Microsoft YaHei';font-size:13px;line-height:1.6;")
+        viewer.setMarkdown(full)
+        lay.addWidget(viewer, 1)
+
+        def do_search():
+            kw = search_input.text().strip()
+            if not kw:
+                return
+            cursor = viewer.document().find(kw, viewer.textCursor())
+            if cursor.isNull():
+                cursor = viewer.document().find(kw)
+            if not cursor.isNull():
+                viewer.setTextCursor(cursor)
+                viewer.ensureCursorVisible()
+        search_input.returnPressed.connect(do_search)
+        btn_next.clicked.connect(do_search)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        dlg.exec_()
+
+    # ───── Phase B:批量扫描整本书 ─────
+    def _on_pangu_batch_scan(self):
+        if not self.chapters:
+            QMessageBox.information(self, "提示", "尚未生成任何章节")
+            return
+        try:
+            from pangu_system import get_default_engine, PanguEngine
+        except ImportError:
+            QMessageBox.warning(self, "缺少盘古", "找不到 pangu_system.py")
+            return
+        engine = get_default_engine()
+        results = []
+        all_forbidden_count = {}
+        for i, ch in enumerate(self.chapters):
+            content = ch.get("content", "")
+            if not content.strip():
+                continue
+            r = engine.quick_chapter_lint(content)
+            results.append({
+                "idx": i + 1,
+                "title": ch.get("title", f"第{i+1}章"),
+                "score": r.get("score", 0),
+                "pass": r.get("pass", False),
+                "issues": r.get("issues", []),
+            })
+            for w, c in PanguEngine.detect_forbidden_words(content):
+                all_forbidden_count[w] = all_forbidden_count.get(w, 0) + c
+        if not results:
+            QMessageBox.information(self, "提示", "所有章节内容为空")
+            return
+        # 出报告
+        avg = sum(r["score"] for r in results) / len(results)
+        passed = sum(1 for r in results if r["pass"])
+        top_words = sorted(all_forbidden_count.items(), key=lambda x: -x[1])[:10]
+        lines = [
+            f"# 盘古全书巡检报告",
+            "",
+            f"- 章节总数:**{len(results)}**",
+            f"- 通过率:**{passed}/{len(results)}** ({passed * 100 // len(results)}%)",
+            f"- 平均分:**{avg:.1f} / 100**",
+            "",
+            "## TOP 10 禁用词(全书累计)",
+            "",
+        ]
+        for w, c in top_words:
+            lines.append(f"- `{w}` × {c}")
+        lines.extend([
+            "",
+            "## 各章详情",
+            "",
+            "| # | 标题 | 得分 | 通过 | 主要问题 |",
+            "|---|---|---|---|---|",
+        ])
+        for r in results:
+            ok = "✓" if r["pass"] else "✗"
+            issues_s = " / ".join(r["issues"][:2]) if r["issues"] else "-"
+            issues_s = issues_s.replace("|", "/")
+            lines.append(f"| {r['idx']} | {r['title']} | {r['score']} | {ok} | {issues_s} |")
+        report_md = "\n".join(lines)
+        # 展示 + 提供保存按钮
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"🛡️ 盘古全书巡检报告(共扫描 {len(results)} 章)")
+        dlg.resize(1000, 720)
+        lay = QVBoxLayout(dlg)
+        viewer = QTextBrowser()
+        viewer.setMarkdown(report_md)
+        viewer.setStyleSheet("font-family:'Microsoft YaHei';font-size:13px;")
+        lay.addWidget(viewer, 1)
+        brow = QHBoxLayout()
+        btn_save_md = QPushButton("💾 保存为 Markdown")
+        btn_save_html = QPushButton("🌐 保存为 HTML")
+        brow.addStretch()
+        brow.addWidget(btn_save_md)
+        brow.addWidget(btn_save_html)
+        lay.addLayout(brow)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+
+        def do_save_md():
+            fn, _ = QFileDialog.getSaveFileName(
+                dlg, "保存巡检报告", "盘古巡检报告.md", "Markdown (*.md)")
+            if fn:
+                with open(fn, "w", encoding="utf-8") as f:
+                    f.write(report_md)
+                QMessageBox.information(dlg, "已保存", fn)
+
+        def do_save_html():
+            fn, _ = QFileDialog.getSaveFileName(
+                dlg, "保存巡检报告", "盘古巡检报告.html", "HTML (*.html)")
+            if fn:
+                html_body = viewer.toHtml()
+                with open(fn, "w", encoding="utf-8") as f:
+                    f.write(html_body)
+                QMessageBox.information(dlg, "已保存", fn)
+
+        btn_save_md.clicked.connect(do_save_md)
+        btn_save_html.clicked.connect(do_save_html)
+        dlg.exec_()
+
 
     def _charlib_extract_from_chapters(self):
         """从已写章节用 AI 一键提取角色/关系/物品/事件/伏笔"""
