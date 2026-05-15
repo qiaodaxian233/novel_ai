@@ -332,6 +332,15 @@ PROMPTS = {
     ),
 }
 
+# ---- 盘古·终极融合写作系统(零侵入集成,新增) ----
+try:
+    from pangu_patch import install_pangu
+    install_pangu(globals())  # 就地把 PROMPTS 字典套上盘古铁律
+    PANGU_AVAILABLE = True
+except ImportError:
+    PANGU_AVAILABLE = False
+
+
 # AI 网页地址
 AI_URLS = {
     "ChatGPT镜像": "https://gpt.aimonkey.plus/",

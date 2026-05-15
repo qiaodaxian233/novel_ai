@@ -1,0 +1,731 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+盘古·终极融合写作系统 · Python 引擎
+==============================================
+将"盘古真正完整版 V1.0"(29套网文创作系统融合)封装为可注入的提示词层。
+
+设计原则:
+1. 与现有 PROMPTS 解耦——盘古做"包裹层",不替换原提示词
+2. 可选启用——通过 PanguEngine(enabled=False) 一键关闭,行为完全回到原版
+3. 与 workflow_pipeline / lifespan_loops 等扩展并存,采用相同的可选导入模式
+
+主要 API:
+- PanguEngine.wrap_prompt(base_prompt, scenario, ctx) -> str
+    将原提示词加上盘古铁律头+输出格式尾,生成最终发给 AI 的完整提示词
+- PanguEngine.match_style(keywords) -> dict
+    根据关键词自动匹配主风格/辅风格/点缀风格/女角色/平台
+- PanguEngine.get_first_activation_banner() -> str
+    返回首次激活的欢迎横幅文本
+- PanguEngine.build_quality_check_prompt(content) -> str
+    返回 30 项质检提示词
+- PanguEngine.build_mode_switch_prompt(mode, content=None) -> str
+    建筑师 / 造梦师 / 炼金术士 / 雕刻家 四模式切换
+- PanguEngine.build_spiral_diagnose_prompt(content) -> str
+    螺旋阶段 P1-P7 自动判定
+- PanguEngine.detect_forbidden_words(text) -> List[str]
+    本地静态扫禁用词(不发 AI,纯字符串匹配,用于事前/事后审查)
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+
+# ============================================================
+# 一、永久铁律(每次发提示词时都要前置注入的核心规则)
+# ============================================================
+# 注:这是从 Part 1 提炼的"瘦身版",约 1.5KB,适合每章注入。
+# 完整 4.8万字的 Pangu Spec 存在 pangu_full_spec.md,只在
+# 用户主动 /帮助 或首次激活时整体下发。
+
+PANGU_CORE_RULES = """\
+# ===== 盘古·终极融合写作系统 · 核心铁律(每章必守)=====
+你是【盘古】——融合 29 套网文创作系统的终极写作引擎。
+**核心使命:替我写,不是教我写。** 只输出正文,不要分析、说明、复盘、预告、评分过程。
+
+【输出铁律】
+- 只输出正文,段落之间空一行
+- 番茄风每章 2000-2500 字,起点风 2500-3000 字
+- 每段不超过 3 句话
+- 番茄风对话占比≥50%,起点风 30%-50%
+
+【禁用词强制过滤】(以下词汇绝对禁止出现在正文)
+顿时、连忙、显然、似乎、或许、可能、一定、十分、几乎、嘴角勾起一抹、眼中闪过一丝、
+行云流水、心下了然、仿佛、如同、像(比喻)、一抹、一股、一丝、知道、觉得、意识到、
+感觉到、紧锁、立刻、大致、确实、注定、渐渐、更是、沉重、看不出、淡淡、郑重、此刻、
+恐怕、不知道、心中一凛、话锋一转、眼神深邃、显著、至关重要、微微挑眉、波涛汹涌、
+绝对、不可估量、无法想象、脸上带着笑意、平静地、心中了然、激动地、眼神热切、
+不卑不亢、显得异常清晰、暂时、不断、瞬间、这一刻、再次、一时之间、这一次、看似、
+沉吟、隐隐有了猜测、目光扫过、心中一片平静、显得更加、深吸一口气、缓缓地说、
+锐利的眼睛、嘴角微微上扬、不容置疑、嘴角、脸色、不易察觉、的目光、想、认为、略微、
+有点、带着、猛地、口吻、纯粹、冰冷、电弧、闪烁、裹挟、清冷、沸腾、扭曲、撕裂、
+漆黑、窒息、剧痛、心中一动、不动声色、小心翼翼、沉吟片刻、果然、脸上堆满了笑
+
+【情绪铁律】直给情绪词,不用形容词定义情绪。
+- 写"他很绝望",不写"眼里一片荒芜"
+- 写"她紧张了",不写"她的手指无意识地绞着衣角"
+
+【动作铁律】只写动作+结果,不写过程。
+- 写"他打了拳",不写"他缓缓抬起手臂,蓄力,然后一拳打出"
+- 拟声词当动词:"啪地摔了碗",不写"啪的一声响"
+
+【环境铁律】环境不单独成段,附在动作前面。每章环境描写不超过 3 句。
+
+【句式铁律】
+- 单句不超过 25 字,超出自动拆分
+- 主语清晰,每句话让读者知道"谁在做什么"
+- 禁用破折号,省略号用六个点......
+- 对话修饰只用"说",不用"怒吼道""轻声细语"
+- 对话占比 50%以上时,每句对话必须有用途(推剧情/亮人设)
+
+【感官铁律(每章必须)】
+- 视觉细节:至少 1 处(具体物件的颜色/形状/状态)
+- 听觉细节:至少 1 处(对话内容/环境音/动作声)
+- 触觉/嗅觉/味觉:至少 1 处(三选一)
+- 细节分散植入,不集中写大段描写
+
+【结构铁律】
+- 开篇三句话内必须进入事件
+- 禁止环境描写开头、背景介绍开头、天气描写开头
+- 每章结尾必须有钩子,强度≥8/10
+- 钩子类型:对话没说完/人出现/秘密暴露/倒计时/关键动作
+- 每章至少 2 个爽点:打脸/捡漏/暧昧/突破/反转/碾压/夺宝/收服/揭秘/共鸣
+
+【智商防火墙】任何智商≥5 的角色绝对禁止:
+- 直接暴露核心秘密
+- 主动相认"你也穿越了吧?"
+- 在公共场合说现代词汇
+- 不设防地交底
+
+【视角铁律】视角锁主角 70%,对手 15%,第三方 10%,上帝视角 5%(仅用于大高潮定格)。不跳别人心理,不写"他在想什么"。
+
+【情绪曲线·压爆震】压 70%(用日常、沉默、什么都没发生来蓄力)+ 爆 5%(最短句最少词,只写那一下)+ 震 25%(用沉默/细节/动作/空镜让读者消化)。每 300 字至少一个情绪点。
+
+# ===== 以上为永久铁律,下面是本次任务 =====
+"""
+
+
+# ============================================================
+# 二、关键词 → 风格自动匹配表(来自 Part 2.1)
+# ============================================================
+# 输入题材/灵感关键词,自动匹配主风格+辅风格+点缀风格+女角色类型+平台。
+# 与 CreationSettings 中用户已选的 platform/genre/persona 互补,不冲突。
+
+STYLE_MAPPING: List[Dict[str, str]] = [
+    # 关键词以"|"分隔
+    {"kw": "雨夜|离别|遗憾|错过|追妻|火葬场",
+     "main": "王家卫情绪型", "sub": "陈可辛情感型", "accent": "萧红型",
+     "female": "台湾/江南", "platform": "起点"},
+    {"kw": "打脸|逆袭|爽文|退婚|战神|赘婿|龙王",
+     "main": "周星驰无厘头", "sub": "战神赘婿型", "accent": "龙王型",
+     "female": "东北/川渝", "platform": "番茄"},
+    {"kw": "搞笑|日常|轻松|脑洞",
+     "main": "刘镇伟奇幻型", "sub": "国漫搞笑型", "accent": "吐槽之王",
+     "female": "湖南/湖北", "platform": "番茄"},
+    {"kw": "热血|战斗|升级|宗门|武侠",
+     "main": "徐克武侠型", "sub": "中原五白型", "accent": "国漫玄幻",
+     "female": "山东/北京", "platform": "起点"},
+    {"kw": "悬疑|恐怖|灵异|鬼|规则怪谈",
+     "main": "僵尸道长型", "sub": "规则怪谈型", "accent": "邱礼涛型",
+     "female": "广东/陕西", "platform": "番茄"},
+    {"kw": "末世|生存|囤货|丧尸|废土",
+     "main": "末世家国型", "sub": "囤货求生型", "accent": "国漫末世",
+     "female": "东北/河南", "platform": "番茄"},
+    {"kw": "情色|后宫|禁忌|擦边|风月",
+     "main": "王晶咸湿型", "sub": "风月型", "accent": "情色擦边库",
+     "female": "四川/上海", "platform": "番茄"},
+    {"kw": "修仙|长生|渡劫|飞升|凡人流",
+     "main": "国漫凡人流", "sub": "玄幻修仙型", "accent": "中原五青",
+     "female": "江南/山东", "platform": "起点"},
+    {"kw": "权谋|宫斗|朝堂|夺嫡|帝王",
+     "main": "权谋宫斗型", "sub": "人性博弈型", "accent": "幕后黑手",
+     "female": "江南/北京", "platform": "起点"},
+    {"kw": "都市|神豪|系统|签到",
+     "main": "神豪系统型", "sub": "战神赘婿型", "accent": "金钱碾压",
+     "female": "东北/广东", "platform": "番茄"},
+    {"kw": "重生|穿越|先知|剧透",
+     "main": "重生穿越型", "sub": "考据式穿越", "accent": "迪化流",
+     "female": "湖南/上海", "platform": "番茄"},
+    {"kw": "虐恋|追妻|火葬场|甜宠|霸总",
+     "main": "陈可辛情感型", "sub": "霸总契约型", "accent": "虐恋追妻",
+     "female": "台湾/江南", "platform": "晋江"},
+    {"kw": "黑帮|江湖|义气|复仇|枭雄",
+     "main": "麦当雄枭雄型", "sub": "吴宇森暴力美学", "accent": "林岭东型",
+     "female": "东北/湖北", "platform": "起点"},
+    {"kw": "写实|底层|社会|残酷",
+     "main": "尔冬升写实型", "sub": "沈从文型", "accent": "汪曾祺型",
+     "female": "河南/陕西", "platform": "知乎"},
+    {"kw": "甜宠|恋爱|校园|青梅",
+     "main": "席绢真实版", "sub": "于晴真实版", "accent": "陈可辛情感",
+     "female": "台湾/江南", "platform": "晋江"},
+    {"kw": "无敌|隐藏大佬|扮猪吃虎",
+     "main": "无敌摆烂型", "sub": "战神赘婿型", "accent": "龙王型",
+     "female": "任意", "platform": "番茄"},
+    {"kw": "脑洞|反套路|迪化|乐子",
+     "main": "反套路祖师", "sub": "迪化修仙流", "accent": "乐子天尊",
+     "female": "任意", "platform": "番茄"},
+    {"kw": "苟道|稳健|谨慎",
+     "main": "国漫凡人流", "sub": "苟道修仙流", "accent": "稳健流",
+     "female": "任意", "platform": "起点"},
+    {"kw": "诡异|克苏鲁|污染",
+     "main": "痛苦邪神型", "sub": "规则怪谈型", "accent": "恐惧魔王",
+     "female": "任意", "platform": "番茄"},
+]
+
+
+# ============================================================
+# 三、黄金三章公式(Part 4.1)
+# ============================================================
+GOLDEN_THREE_FORMULA = """\
+【黄金三章公式(第 1-3 章强制)】
+- 第 1 章 · 绝境+羞辱:必写被看不起/被嘲讽/被抛弃/被威胁/被退婚/被裁员/被背叛
+- 第 2 章 · 金手指激活:濒死或绝望一刻,系统绑定/重生归来/觉醒异能/获得传承/签到成功
+- 第 3 章 · 首次反转打脸:反派继续装逼,主角小试牛刀,现场震惊,反派脸色剧变,结尾留钩子
+
+【循环爽点单元(每 3-5 章自动循环)】
+1. 新冲突:新反派登场装逼/挑衅/看不起主角
+2. 装弱铺垫:主角低调,旁人嘲讽,反派更嚣张
+3. 反转爆发:主角亮实力/身份/系统奖励
+4. 打脸碾压:反派崩溃、求饶、后悔
+5. 奖励兑现:升级/得钱/收小弟/获崇拜/美人青睐
+6. 留钩子:引出更强敌人/新地图/新任务
+"""
+
+
+# ============================================================
+# 四、矛盾螺旋引擎大纲规划块(Part 3)
+# ============================================================
+SPIRAL_OUTLINE_SPEC = """\
+【矛盾螺旋引擎要求】
+1. 主要矛盾陈述(一句话):主角想要__________,但__________阻碍他。
+2. 次要矛盾列表(3-5 个):资源矛盾 / 人际关系矛盾 / 身份秘密矛盾 / 外部威胁矛盾 / 内部背叛矛盾
+3. 矛盾演化路径:个人→家族→势力→世界 的层层升级路径
+4. 人物弧光三阶段:
+   - 第一阶段·旧信念(开篇):主角相信__________
+   - 第二阶段·遭遇否定(中段):__________事件摧毁了这个信念
+   - 第三阶段·新信念(结局):主角建立了更复杂的信念:__________
+5. 章节大纲必须标注每章所处的螺旋阶段:P1 量变铺垫 / P2 量变压抑 / P3 临界 / P4 质变爆发 / P5 否定落地 / P6 否定被否(可选) / P7 更高层次量变
+"""
+
+
+# ============================================================
+# 五、输出格式尾巴(Part 11)
+# ============================================================
+def chapter_output_format(chapter_num: int = 1, show_options: bool = True) -> str:
+    """生成每章正文输出后追加的结构化尾部。"""
+    tail = f"""\
+
+【输出格式要求】每章末尾追加以下结构化信息(用 markdown):
+
+```
+本章完
+
+【断章钩子】
+类型:[对话没说完/人出现/秘密暴露/倒计时/关键动作]
+强度:[★-★★★★★]
+内容:[具体钩子内容]
+
+【本章爽点】
+[爽点类型 1]:[具体内容]
+[爽点类型 2]:[具体内容]
+
+【伏笔状态】
+本章埋雷:[内容](计划第 X 章收)
+本章收雷:[内容](第 X 章所埋)
+```
+"""
+    if show_options:
+        tail += """
+【下一章选项(必须给)】
+1. [选项一]
+2. [选项二]
+3. [选项三]
+"""
+    return tail
+
+
+# ============================================================
+# 六、四模式切换(Part 8)
+# ============================================================
+MODE_PROMPTS = {
+    "architect": """\
+切换至【建筑师】模式:搭骨架优先。
+- 适用:大纲卡住、伏笔理不清、规划节奏
+- 输出:用清单/表格列出主要矛盾、人物弧光、章节阶段(P1-P7)、伏笔时刻表
+- 禁止:写细节、铺情绪、写正文
+""",
+    "dreamweaver": """\
+切换至【造梦师】模式:写正文(默认)。
+- 适用:沉浸式写作、铺感官和情绪
+- 严格遵守盘古所有铁律,只输出正文
+- 禁止:自我审查、边写边改、写完后复盘
+""",
+    "alchemist": """\
+切换至【炼金术士】模式:破局。
+- 适用:彻底卡文、剧情死胡同、需要脑洞
+- 操作:对当前情境问"反着来会怎样",写出 3 个荒谬走向,标注最心动的那个
+- 禁止:说"这不合理"
+""",
+    "sculptor": """\
+切换至【雕刻家】模式:打磨。
+- 适用:改稿、删冗余、调整句子节奏
+- 法则:先删再改 / 能砍的不改 / 能用动作的不用形容词 / 改完朗读一遍
+- 禁止:心软
+""",
+}
+
+
+# ============================================================
+# 七、首次激活横幅(Part 13)
+# ============================================================
+FIRST_ACTIVATION_BANNER = """\
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║   🪐 盘古·终极融合写作系统 V1.0 · 真正完整版 🪐                ║
+║                                                              ║
+║   已激活 · 待命中                                              ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+【已融合 29 套系统精华】
+
+【核心引擎】
+✓ 矛盾螺旋引擎(P1-P7 七阶段自动判定)
+✓ 风格库自动匹配(港片 15 型 + 国漫 9 型 + 电视剧 8 型 + 短剧 8 型 + 网文 5 型)
+✓ 地域女性库(13 型完整人物模板)
+✓ 题材基因库(60+ 题材完整设定)
+
+【文笔保障】
+✓ 禁用词强制过滤(几百个 AI 高频词)
+✓ 感官描写铁律(视觉+听觉+触嗅味)
+✓ 压爆震结构(压 70%+爆 5%+震 25%)
+✓ 情绪直给+动作只写结果
+
+【长篇保障】
+✓ 伏笔分级喂养(短线/中线/长线)
+✓ 状态表自动维护(情绪值/关系进度/伏笔状态)
+✓ 30 项质检清单(95 分及格)
+✓ 四模式切换(建筑师/造梦师/炼金术士/雕刻家)
+
+【平台适配】
+✓ 番茄:黄金三章+循环爽点+每章钩子
+✓ 起点:世界观宏大+升级体系清晰+伏笔深远
+✓ 晋江:情感细腻+人物弧光+甜虐有度
+"""
+
+
+# ============================================================
+# 八、30 项质检 prompt(Part 6.1)
+# ============================================================
+QUALITY_CHECK_PROMPT_TPL = """\
+你是【盘古·质检员】。对以下章节执行 30 项质检,任何一项不通过则给出修改意见。
+
+【A. 番茄流量检查(10 项,满分 100,≥95 及格)】
+1. 开局冲击力:前三段是否出现让读者瞳孔地震的钩子
+2. 人设辨识度:本章至少一个细节让主角人设立起来
+3. 情绪浓度:至少一处能让读者产生强烈情绪
+4. 节奏推进:本章至少推进了一个核心矛盾
+5. 对话张力:对话话里有话
+6. 钩子密度:每 500 字至少一个小钩子
+7. 反套路指数:是否有打破读者预期的情节或台词
+8. 结尾余味:最后一句让人想立刻翻下一章
+9. 画面感:至少一个画面能让读者"看见"
+10. 降智审查:所有角色做出了符合其智商的选择
+
+【B. 文笔检查(5 项)】
+11. 单句≤25 字
+12. 主语清晰
+13. 五感齐全(视觉 1+听觉 1+触/嗅/味 1)
+14. 细节分散植入,无集中大段描写
+15. 无禁用词
+
+【C. 笔力检查(5 项)】
+16. 每 300 字一个情绪点
+17. 情绪高潮符合"压 70%+爆 5%+震 25%"
+18. 无形容词情绪
+19. 对话无修饰语(只用"说")
+20. 结尾一句能截图
+
+【D. 段落结构检查(4 项)】
+21. 每段只做一件事
+22. 每段视角锁同一人
+23. 每段能用一句话概括
+24. 节奏匹配场景类型
+
+【E. 逻辑完整性(5 项)】
+25. 因果链完整
+26. 关键信息前置
+27. 新人物出场有因果
+28. 对话触发有原因
+29. 关键行为有动机
+
+【F. 人物关系与称呼(3 项)】(归并到 30 项)
+30. 称呼与关系匹配、关系变化有交代
+
+【章节正文】
+{content}
+
+【输出格式】严格 JSON,不要 markdown 包装:
+{{"score": <0-100 整数>, "pass": <true/false>, "failed_items": [<未通过条目编号>], "advice": "<修改建议简述,200 字以内>"}}
+"""
+
+
+# ============================================================
+# 九、螺旋阶段诊断 prompt(Part 3.3)
+# ============================================================
+SPIRAL_DIAGNOSE_PROMPT_TPL = """\
+你是【盘古·螺旋诊断师】。判定以下章节处于 P1-P7 哪个阶段。
+
+判定依据:
+- P1 量变铺垫:日常/过渡/回家/吃饭/修炼/赶路/见面/醒来,情绪 30-50
+- P2 量变压抑:被嘲讽/被无视/吃亏/忍/憋屈/被抢/被压,情绪 30→60-70
+- P3 临界:忍不住了/时机到了/动手/站起来/冷笑/开口/终于/够了,情绪 70→85
+- P4 质变爆发:打脸/反击/碾压/秒杀/身份暴露/亮底牌,情绪 85→100
+- P5 否定落地:打完/收手/跪下/认错/跑了/从此/再也不敢,情绪 100→60-70
+- P6 否定被否(可选):输了/没打过/计划失败/没想到/中计,情绪 60→40
+- P7 更高层次量变:战后/事后/新身份/换地方/搬家,情绪 40-50
+
+【章节正文】
+{content}
+
+【输出格式】严格 JSON:
+{{"phase": "P<1-7>", "emotion_value": <0-100>, "next_phase": "P<1-7>", "advice": "下章应往哪个阶段推进"}}
+"""
+
+
+# ============================================================
+# 十、核心引擎
+# ============================================================
+class PanguEngine:
+    """盘古系统的统一入口。可被 MainWindow 持有为 self.pangu。"""
+
+    VERSION = "1.0"
+
+    def __init__(self, enabled: bool = True, full_spec_path: Optional[Path] = None):
+        """
+        :param enabled: 主开关。False 时 wrap_prompt 直接返回原 prompt,实现完全旁路。
+        :param full_spec_path: 完整 4.8 万字 spec 的路径(可选)。仅在 /帮助 或首次激活时被读取。
+        """
+        self.enabled = bool(enabled)
+        self._full_spec_path = full_spec_path
+        self._full_spec_cache: Optional[str] = None
+
+    # ----- 主 API:包裹任意提示词 -----
+    def wrap_prompt(
+        self,
+        base_prompt: str,
+        scenario: str = "chapter",
+        ctx: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """
+        把原 PROMPTS[xxx] 渲染好的提示词加上盘古铁律头+输出格式尾。
+
+        :param base_prompt: 已经 .format() 完毕的原提示词字符串
+        :param scenario: 场景标识,决定追加哪些尾部块。可选值:
+                         'chapter'      - 单章正文(头+尾+格式)
+                         'golden_three' - 黄金三章(头+黄金三章公式+格式)
+                         'outline'      - 全大纲(头+螺旋大纲规范)
+                         'inspiration'  - 创意灵感(轻头,无尾)
+                         'optimize'     - 润色(轻头,无尾)
+                         'title'        - 书名(完全旁路)
+                         'intro'        - 简介(完全旁路)
+                         其他           - 头,无尾
+        :param ctx: 上下文,目前可用键:
+                    'platform' (番茄小说/起点中文网/晋江文学城)
+                    'chapter_num' (int)
+                    'show_options' (bool, 默认 True 给三选一)
+        """
+        if not self.enabled:
+            return base_prompt
+
+        ctx = ctx or {}
+        head = PANGU_CORE_RULES
+        body = base_prompt
+        tail_parts: List[str] = []
+
+        if scenario in ("title", "intro"):
+            # 这两类是非正文输出,盘古完全旁路,避免污染
+            return base_prompt
+
+        if scenario == "inspiration":
+            # 创意灵感只要一句话,只用轻量提示
+            return (
+                "你是【盘古】写作引擎(精简版),请遵守:\n"
+                "- 禁用反光/影子/另一个自己题材\n"
+                "- 禁止血腥/暴力/色情/侮辱女性\n"
+                "- 一句话核心,20 字以内\n\n"
+                + base_prompt
+            )
+
+        if scenario == "optimize":
+            head = (
+                "# ===== 盘古·雕刻家模式 =====\n"
+                + MODE_PROMPTS["sculptor"]
+                + "\n禁用词列表参见盘古铁律:顿时/连忙/显然/似乎/或许/可能/一定/十分/几乎...\n\n"
+                "# ===== 任务 =====\n"
+            )
+
+        elif scenario == "golden_three":
+            tail_parts.append(GOLDEN_THREE_FORMULA)
+            tail_parts.append(chapter_output_format(1, show_options=False))
+
+        elif scenario == "outline":
+            tail_parts.append(SPIRAL_OUTLINE_SPEC)
+
+        elif scenario == "chapter":
+            ch_num = int(ctx.get("chapter_num", 1) or 1)
+            show_opts = bool(ctx.get("show_options", True))
+            tail_parts.append(chapter_output_format(ch_num, show_options=show_opts))
+
+        # 平台对齐(可选,只在 chapter/golden_three 上加)
+        platform = (ctx.get("platform") or "").strip()
+        if platform and scenario in ("chapter", "golden_three"):
+            platform_hint = self._platform_hint(platform)
+            if platform_hint:
+                tail_parts.append(platform_hint)
+
+        return head + "\n" + body + ("\n" + "\n".join(tail_parts) if tail_parts else "")
+
+    @staticmethod
+    def _platform_hint(platform: str) -> str:
+        if "番茄" in platform:
+            return (
+                "【平台:番茄】\n"
+                "- 每章 2000-2500 字\n"
+                "- 对话占比≥50%\n"
+                "- 黄金三章+循环爽点+每章钩子,节奏快、爽点密"
+            )
+        if "起点" in platform:
+            return (
+                "【平台:起点】\n"
+                "- 每章 2500-3000 字\n"
+                "- 对话占比 30%-50%\n"
+                "- 世界观宏大+升级体系清晰+伏笔深远"
+            )
+        if "晋江" in platform:
+            return (
+                "【平台:晋江】\n"
+                "- 情感细腻+人物弧光+甜虐有度\n"
+                '- 心理描写有度,但仍守"情绪直给"铁律'
+            )
+        return ""
+
+    # ----- 风格自动匹配 -----
+    def match_style(
+        self,
+        keywords: str,
+        topk: int = 3,
+    ) -> List[Dict[str, str]]:
+        """
+        根据题材/灵感关键词命中风格库,返回排序后的候选(最多 topk 条)。
+        关键词大小写不敏感、中文按子串匹配。
+        """
+        keywords = (keywords or "").lower()
+        scored: List[Tuple[int, Dict[str, str]]] = []
+        for row in STYLE_MAPPING:
+            kws = row["kw"].split("|")
+            hits = sum(1 for k in kws if k.lower() in keywords)
+            if hits:
+                scored.append((hits, row))
+        scored.sort(key=lambda x: -x[0])
+        return [r for _, r in scored[:topk]]
+
+    def build_style_report(self, keywords: str) -> str:
+        """生成可直接显示给用户的"风格匹配报告"文本。"""
+        matches = self.match_style(keywords)
+        if not matches:
+            return "未匹配到风格库条目,将使用默认组合(神级正文 V2.0 + 适中节奏)"
+        lines = [f"🎯 风格匹配报告(关键词: {keywords[:60]})\n"]
+        for i, m in enumerate(matches, 1):
+            lines.append(
+                f"{i}. 主风格: {m['main']} | 辅风格: {m['sub']} | 点缀: {m['accent']} "
+                f"| 女角色基调: {m['female']} | 适合平台: {m['platform']}"
+            )
+        return "\n".join(lines)
+
+    # ----- 其他辅助 prompt -----
+    def build_quality_check_prompt(self, content: str) -> str:
+        return QUALITY_CHECK_PROMPT_TPL.format(content=content)
+
+    def build_mode_switch_prompt(self, mode: str, content: Optional[str] = None) -> str:
+        mode = mode.lower().strip().lstrip("/")
+        # 中文别名
+        aliases = {
+            "建筑师": "architect",
+            "造梦师": "dreamweaver",
+            "炼金术士": "alchemist",
+            "雕刻家": "sculptor",
+        }
+        mode = aliases.get(mode, mode)
+        if mode not in MODE_PROMPTS:
+            raise ValueError(
+                f"未知模式 '{mode}',可选: architect/dreamweaver/alchemist/sculptor "
+                "或中文 建筑师/造梦师/炼金术士/雕刻家"
+            )
+        out = MODE_PROMPTS[mode]
+        if content:
+            out = out + "\n\n【任务内容】\n" + content
+        return out
+
+    def build_spiral_diagnose_prompt(self, content: str) -> str:
+        return SPIRAL_DIAGNOSE_PROMPT_TPL.format(content=content)
+
+    def get_first_activation_banner(self) -> str:
+        return FIRST_ACTIVATION_BANNER
+
+    # ----- 本地禁用词扫描(不发 AI) -----
+    # 静态词表,与 PANGU_CORE_RULES 中所列保持一致
+    _FORBIDDEN_WORDS: List[str] = [
+        "顿时", "连忙", "显然", "似乎", "或许", "可能", "一定", "十分", "几乎",
+        "嘴角勾起一抹", "眼中闪过一丝", "行云流水", "心下了然", "仿佛", "如同",
+        "一抹", "一股", "一丝", "知道", "觉得", "意识到", "感觉到", "紧锁",
+        "立刻", "大致", "确实", "注定", "渐渐", "更是", "沉重", "看不出", "淡淡",
+        "郑重", "此刻", "恐怕", "不知道", "心中一凛", "话锋一转", "眼神深邃",
+        "显著", "至关重要", "微微挑眉", "波涛汹涌", "绝对", "不可估量",
+        "无法想象", "脸上带着笑意", "平静地", "心中了然", "激动地", "眼神热切",
+        "不卑不亢", "显得异常清晰", "暂时", "不断", "瞬间", "这一刻", "再次",
+        "一时之间", "这一次", "看似", "沉吟", "隐隐有了猜测", "目光扫过",
+        "心中一片平静", "显得更加", "深吸一口气", "缓缓地说", "锐利的眼睛",
+        "嘴角微微上扬", "不容置疑", "不易察觉", "略微", "猛地", "口吻",
+        "纯粹", "冰冷", "电弧", "闪烁", "裹挟", "清冷", "沸腾", "扭曲", "撕裂",
+        "漆黑", "窒息", "剧痛", "心中一动", "不动声色", "小心翼翼", "沉吟片刻",
+        "果然", "脸上堆满了笑",
+    ]
+
+    @classmethod
+    def detect_forbidden_words(cls, text: str) -> List[Tuple[str, int]]:
+        """
+        本地静态扫禁用词。返回 [(词, 出现次数), ...],按出现次数降序。
+        用于章节生成完成后的本地预检(不消耗 token)。
+        """
+        if not text:
+            return []
+        hits: Dict[str, int] = {}
+        for w in cls._FORBIDDEN_WORDS:
+            c = text.count(w)
+            if c > 0:
+                hits[w] = c
+        return sorted(hits.items(), key=lambda x: -x[1])
+
+    @classmethod
+    def quick_chapter_lint(cls, text: str) -> Dict[str, object]:
+        """
+        本地快速 lint:扫禁用词 + 长句检测 + 段落长度统计。
+        不调用 AI,纯字符串/正则。
+        返回 dict 含 score(0-100)、issues(list)。
+        """
+        issues: List[str] = []
+        score = 100
+
+        if not text or not text.strip():
+            return {"score": 0, "issues": ["内容为空"], "stats": {}}
+
+        # 1. 禁用词
+        forbidden = cls.detect_forbidden_words(text)
+        if forbidden:
+            top = ", ".join(f"{w}×{c}" for w, c in forbidden[:5])
+            issues.append(f"出现禁用词: {top}")
+            score -= min(40, sum(c for _, c in forbidden) * 2)
+
+        # 2. 长句(单句>25 字,以中文逗号/句号/问号/感叹号/分号/省略号为切分)
+        sents = re.split(r"[,，。!?!?;；\n]", text)
+        long_sents = [s.strip() for s in sents if len(s.strip()) > 25]
+        if long_sents:
+            issues.append(f"长句(>25 字)数量: {len(long_sents)} 句")
+            score -= min(20, len(long_sents))
+
+        # 3. 段落长度(每段>3 句视为超标)
+        paragraphs = [p for p in text.split("\n") if p.strip()]
+        over_paragraphs = []
+        for i, p in enumerate(paragraphs, 1):
+            sents_in_p = re.split(r"[。!?!?]", p)
+            sents_in_p = [s for s in sents_in_p if s.strip()]
+            if len(sents_in_p) > 3:
+                over_paragraphs.append(i)
+        if over_paragraphs:
+            issues.append(f"超 3 句的段落: 第 {over_paragraphs[:6]} 段")
+            score -= min(15, len(over_paragraphs))
+
+        # 4. 破折号检测(盘古禁用)
+        if "——" in text or "—" in text:
+            cnt = text.count("——") + text.count("—") - text.count("——") * 2  # 单破折号
+            if cnt < 0:  # 修正:含双破折号
+                cnt = (text.count("——")) + max(0, text.count("—") - text.count("——") * 2)
+            issues.append(f"出现破折号(盘古禁用,应改用逗号/句号/省略号)")
+            score -= 5
+
+        # 5. 三连点省略号(盘古要求六连点 ......)
+        if re.search(r"(?<!\.)\.{3}(?!\.)", text) or "…" in text:
+            issues.append("省略号未用六连点(......)")
+            score -= 5
+
+        score = max(0, score)
+        return {
+            "score": score,
+            "pass": score >= 70,
+            "issues": issues,
+            "stats": {
+                "chars": len(text),
+                "paragraphs": len(paragraphs),
+                "long_sentences": len(long_sents),
+                "forbidden_word_kinds": len(forbidden),
+            },
+        }
+
+    # ----- 完整 spec 懒加载 -----
+    def get_full_spec(self) -> str:
+        """读取完整 4.8 万字 Pangu spec(用于 /帮助 命令)。失败返回空字符串。"""
+        if self._full_spec_cache is not None:
+            return self._full_spec_cache
+        if not self._full_spec_path:
+            # 默认尝试同目录下的 pangu_full_spec.md
+            here = Path(__file__).parent
+            cand = here / "pangu_full_spec.md"
+            if cand.exists():
+                self._full_spec_path = cand
+        if self._full_spec_path and self._full_spec_path.exists():
+            try:
+                self._full_spec_cache = self._full_spec_path.read_text(encoding="utf-8")
+            except Exception:
+                self._full_spec_cache = ""
+        else:
+            self._full_spec_cache = ""
+        return self._full_spec_cache
+
+
+# ============================================================
+# 十一、便捷工厂(供 novel_ai.py 极简集成)
+# ============================================================
+_default_engine: Optional[PanguEngine] = None
+
+
+def get_default_engine() -> PanguEngine:
+    """单例。novel_ai.py 可直接 `from pangu_system import get_default_engine`。"""
+    global _default_engine
+    if _default_engine is None:
+        _default_engine = PanguEngine(enabled=True)
+    return _default_engine
+
+
+def wrap(base_prompt: str, scenario: str = "chapter", **ctx) -> str:
+    """函数式快捷方式:`wrap(prompt, 'chapter', platform='番茄小说', chapter_num=12)`"""
+    return get_default_engine().wrap_prompt(base_prompt, scenario, ctx)
+
+
+__all__ = [
+    "PanguEngine",
+    "PANGU_CORE_RULES",
+    "STYLE_MAPPING",
+    "GOLDEN_THREE_FORMULA",
+    "SPIRAL_OUTLINE_SPEC",
+    "MODE_PROMPTS",
+    "FIRST_ACTIVATION_BANNER",
+    "QUALITY_CHECK_PROMPT_TPL",
+    "SPIRAL_DIAGNOSE_PROMPT_TPL",
+    "chapter_output_format",
+    "get_default_engine",
+    "wrap",
+]
