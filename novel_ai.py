@@ -332,7 +332,7 @@ PROMPTS = {
     ),
 }
 
-# ---- 盘古·终极融合写作系统(零侵入集成,新增) ----
+# ---- 盘古超级系统(零侵入集成,新增) ----
 try:
     from pangu_patch import install_pangu
     install_pangu(globals())  # 就地把 PROMPTS 字典套上盘古铁律
@@ -494,6 +494,10 @@ class ChapterEditor(QWidget):
     save_requested = pyqtSignal(str, str)
     optimize_requested = pyqtSignal(str)
     save_all_requested = pyqtSignal()
+    # 盘古超级系统:3 个新信号
+    pangu_quicklint_requested = pyqtSignal(str)
+    pangu_qcheck_requested = pyqtSignal(str)
+    pangu_spiral_requested = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -507,6 +511,22 @@ class ChapterEditor(QWidget):
         self.btn_optimize.clicked.connect(self._on_optimize)
         self.btn_save_all = QPushButton("一键保存所有")
         self.btn_save_all.clicked.connect(lambda: self.save_all_requested.emit())
+        # 盘古超级系统:3 个新功能按钮
+        self.btn_pangu_lint = QPushButton("🛡️ 本地词扫")
+        self.btn_pangu_lint.setStyleSheet(
+            "background:#27ae60;color:white;padding:4px 10px;border-radius:3px;")
+        self.btn_pangu_lint.setToolTip("0-token 本地检测:禁用词/长句/破折号/三连点")
+        self.btn_pangu_lint.clicked.connect(self._on_pangu_lint)
+        self.btn_pangu_qcheck = QPushButton("📊 30项质检")
+        self.btn_pangu_qcheck.setStyleSheet(
+            "background:#e67e22;color:white;padding:4px 10px;border-radius:3px;")
+        self.btn_pangu_qcheck.setToolTip("发给 AI 跑盘古 30 项深度质检,返回 JSON")
+        self.btn_pangu_qcheck.clicked.connect(self._on_pangu_qcheck)
+        self.btn_pangu_spiral = QPushButton("🌀 螺旋诊断")
+        self.btn_pangu_spiral.setStyleSheet(
+            "background:#34495e;color:white;padding:4px 10px;border-radius:3px;")
+        self.btn_pangu_spiral.setToolTip("AI 诊断当前章节处于 P1-P7 哪个螺旋阶段")
+        self.btn_pangu_spiral.clicked.connect(self._on_pangu_spiral)
         self.btn_style_check = QPushButton("🎨 风格一致性检测")
         self.btn_style_check.setStyleSheet(
             "background:#9b59b6;color:white;padding:4px 10px;border-radius:3px;")
@@ -514,6 +534,7 @@ class ChapterEditor(QWidget):
         self.btn_regen_alt.setStyleSheet(
             "background:#16a085;color:white;padding:4px 10px;border-radius:3px;")
         for b in (self.btn_save, self.btn_optimize, self.btn_save_all,
+                  self.btn_pangu_lint, self.btn_pangu_qcheck, self.btn_pangu_spiral,
                   self.btn_style_check, self.btn_regen_alt):
             btn_row.addWidget(b)
         btn_row.addStretch()
@@ -548,6 +569,48 @@ class ChapterEditor(QWidget):
             QMessageBox.warning(self, "提示", "章节内容为空,无法优化")
             return
         self.optimize_requested.emit(c)
+
+    def _on_pangu_lint(self):
+        # 本地 0-token 词扫
+        c = self.content_edit.toPlainText()
+        if not c.strip():
+            QMessageBox.information(self, "提示", "章节为空,没什么可扫的。")
+            return
+        try:
+            from pangu_system import get_default_engine
+        except ImportError:
+            QMessageBox.warning(self, "缺少盘古",
+                "找不到 pangu_system.py,请确认它在仓库根目录。")
+            return
+        r = get_default_engine().quick_chapter_lint(c)
+        status = "OK 通过" if r.get("pass") else "WARN 未通过"
+        msg = f"{status}  得分 {r.get('score', 0)} / 100\n\n"
+        issues = r.get("issues", [])
+        if issues:
+            msg += "问题清单:\n" + "\n".join(f"• {x}" for x in issues) + "\n\n"
+        stats = r.get("stats", {})
+        if stats:
+            msg += "统计:\n"
+            for k, v in stats.items():
+                msg += f"  {k}: {v}\n"
+        QMessageBox.information(self, "盘古本地词扫结果", msg)
+        self.pangu_quicklint_requested.emit(c)
+
+    def _on_pangu_qcheck(self):
+        # 发起 30 项质检(调 AI)
+        c = self.content_edit.toPlainText()
+        if not c.strip():
+            QMessageBox.information(self, "提示", "章节为空")
+            return
+        self.pangu_qcheck_requested.emit(c)
+
+    def _on_pangu_spiral(self):
+        # 发起 P1-P7 螺旋诊断(调 AI)
+        c = self.content_edit.toPlainText()
+        if not c.strip():
+            QMessageBox.information(self, "提示", "章节为空")
+            return
+        self.pangu_spiral_requested.emit(c)
 
     def load_chapter(self, title, content):
         self.title_input.setText(title)
@@ -602,6 +665,21 @@ class CreationSettings(QWidget):
 
         self.delay_check = QCheckBox("模拟人类操作延迟(非必要勿勾选)")
         ai_layout.addWidget(self.delay_check)
+
+        # ---- 盘古超级系统开关 ----
+        self.pangu_check = QCheckBox(
+            "启用【盘古超级系统】(禁用词过滤 + 感官铁律 + 压爆震 + 黄金三章公式)")
+        self.pangu_check.setChecked(True)
+        self.pangu_check.setStyleSheet("color:#1a4480;font-weight:bold;")
+        self.pangu_check.setToolTip(
+            "勾选后,每个章节 prompt 会被盘古铁律自动包裹:\n"
+            "• 116 个禁用词强制过滤(顿时/连忙/眼神深邃 等)\n"
+            "• 视/听/触 三感必须齐全\n"
+            "• 压 70%+ 爆 5%+ 震 25% 情绪曲线\n"
+            "• 智商防火墙(防止角色降智)\n"
+            "• 黄金三章公式(第 1-3 章强制套用)\n"
+            "取消勾选则完全回到原版行为,可一键切换。")
+        ai_layout.addWidget(self.pangu_check)
 
         # —— 预登录(快捷:启动浏览器并跳到所选 AI 网站登录页) ——
         prow = QHBoxLayout()
@@ -665,6 +743,37 @@ class CreationSettings(QWidget):
             ibtns.addWidget(b)
         irow.addLayout(ibtns)
         layout.addLayout(irow)
+
+        # ---- 盘古快捷工具 ----
+        pangu_tools_box = QGroupBox("🛕 盘古快捷工具")
+        pangu_tools_lay = QVBoxLayout(pangu_tools_box)
+        p_row1 = QHBoxLayout()
+        self.btn_pangu_style = QPushButton("🎯 风格匹配(基于关键词)")
+        self.btn_pangu_style.setStyleSheet(
+            "background:#16a085;color:white;padding:6px 12px;border-radius:3px;")
+        self.btn_pangu_style.setToolTip(
+            "输入题材/灵感关键词,匹配主辅风格 + 女角色基调 + 适合平台")
+        p_row1.addWidget(self.btn_pangu_style)
+        p_row1.addStretch()
+        pangu_tools_lay.addLayout(p_row1)
+        p_row2 = QHBoxLayout()
+        self.btn_pangu_arch = QPushButton("🏗️ 建筑师")
+        self.btn_pangu_dream = QPushButton("🎭 造梦师")
+        self.btn_pangu_alch = QPushButton("⚗️ 炼金术士")
+        self.btn_pangu_sculpt = QPushButton("🗿 雕刻家")
+        for b, color, tip in [
+            (self.btn_pangu_arch, "#34495e", "结构/大纲/世界观:严密自洽,优先骨架"),
+            (self.btn_pangu_dream, "#9b59b6", "氛围/情绪/意象:渲染感官与情绪密度"),
+            (self.btn_pangu_alch, "#e67e22", "提纯/优化/字数死磕:精准压缩"),
+            (self.btn_pangu_sculpt, "#7f8c8d", "成品/润色:先删再改、能砍的不改"),
+        ]:
+            b.setStyleSheet(
+                f"background:{color};color:white;padding:6px 10px;border-radius:3px;")
+            b.setToolTip(tip)
+            p_row2.addWidget(b)
+        p_row2.addStretch()
+        pangu_tools_lay.addLayout(p_row2)
+        layout.addWidget(pangu_tools_box)
 
         # ---- 商业参数 ----
         bbox = QGroupBox("商业参数")
@@ -1089,6 +1198,8 @@ class CreationSettings(QWidget):
         s.setValue("creation_mode", b.text() if b else "创造版")
         s.setValue("golden_fingers", [n for n, cb in self.golden_checks.items() if cb.isChecked()])
         s.setValue("personas", [n for n, cb in self.persona_checks.items() if cb.isChecked()])
+        # 盘古超级系统开关
+        s.setValue("pangu_enabled", self.pangu_check.isChecked())
         s.setValue("prompt_offset", self.prompt_offset.value())
         s.setValue("style_sliders", {n: sl.value() for n, sl in self.style_sliders.items()})
         b = self.ai_group.checkedButton()
@@ -4707,6 +4818,22 @@ class MainWindow(QMainWindow):
         self.tab_editor.btn_style_check.clicked.connect(self._on_style_check)
         self.tab_editor.btn_regen_alt.clicked.connect(self._on_regen_alt)
 
+        # ChapterEditor 盘古超级系统按钮(本地词扫已在 ChapterEditor 内消化)
+        self.tab_editor.pangu_qcheck_requested.connect(self._on_pangu_qcheck)
+        self.tab_editor.pangu_spiral_requested.connect(self._on_pangu_spiral)
+        # CreationSettings 盘古快捷工具
+        self.tab_settings.btn_pangu_style.clicked.connect(self._on_pangu_style_match)
+        self.tab_settings.btn_pangu_arch.clicked.connect(
+            lambda: self._on_pangu_mode("architect"))
+        self.tab_settings.btn_pangu_dream.clicked.connect(
+            lambda: self._on_pangu_mode("dreamweaver"))
+        self.tab_settings.btn_pangu_alch.clicked.connect(
+            lambda: self._on_pangu_mode("alchemist"))
+        self.tab_settings.btn_pangu_sculpt.clicked.connect(
+            lambda: self._on_pangu_mode("sculptor"))
+        # 盘古开关 → 运行时切换
+        self.tab_settings.pangu_check.toggled.connect(self._on_pangu_toggle)
+
         # Skill Tab
         self.tab_skills.btn_test.clicked.connect(self._skill_test_run)
 
@@ -4836,6 +4963,19 @@ class MainWindow(QMainWindow):
             self._refresh_chapter_list()
 
     def save_current_chapter(self, title, content):
+        # 盘古超级系统:保存前自动本地词扫(0 token,只在日志提示)
+        try:
+            if getattr(self.tab_settings, "pangu_check", None) and self.tab_settings.pangu_check.isChecked():
+                from pangu_system import get_default_engine as _pg_engine
+                _content = self.tab_editor.content_edit.toPlainText()
+                if _content.strip():
+                    _r = _pg_engine().quick_chapter_lint(_content)
+                    if not _r.get("pass"):
+                        _msg = f"WARN 盘古词扫 {_r.get('score', 0)}分 - " + "; ".join(_r.get("issues", [])[:3])
+                        if hasattr(self, "tab_generation"):
+                            self.tab_generation.log(_msg, "warn")
+        except Exception:
+            pass
         if self.current_chapter_index < 0:
             QMessageBox.warning(self, "提示", "请先新增或选择章节")
             return
@@ -5360,6 +5500,87 @@ class MainWindow(QMainWindow):
         )
 
     # ─────────────── 角色库自动提取 ───────────────
+    # ─────────────── 盘古超级系统:新功能入口 ───────────────
+    def _on_pangu_toggle(self, checked):
+        # 运行时根据 GUI 勾选状态切换盘古的 PROMPTS 包裹
+        try:
+            from pangu_patch import install_pangu, uninstall_pangu, is_installed
+        except ImportError:
+            return
+        g = globals()
+        cur = is_installed(g)
+        if checked and not cur:
+            install_pangu(g)
+            self.tab_generation.log("✓ 盘古超级系统已启用(PROMPTS 已包裹)", "info")
+        elif not checked and cur:
+            uninstall_pangu(g)
+            self.tab_generation.log("⊘ 盘古超级系统已停用(PROMPTS 已还原)", "info")
+
+    def _on_pangu_style_match(self):
+        # 基于创意灵感关键词匹配盘古风格库,弹结果
+        kw = self.tab_settings.inspiration_edit.toPlainText().strip()
+        if not kw:
+            QMessageBox.information(
+                self, "提示",
+                "先在【创意灵感】输入框填几个关键词(如 '退婚 战神 都市 神豪')")
+            return
+        try:
+            from pangu_system import get_default_engine
+        except ImportError:
+            QMessageBox.warning(self, "缺少盘古", "找不到 pangu_system.py")
+            return
+        report = get_default_engine().build_style_report(kw, topk=3)
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("🎯 盘古风格匹配")
+        dlg.setText("基于你的关键词,推荐 Top 3 风格组合:")
+        dlg.setDetailedText(report)
+        dlg.exec_()
+
+    def _on_pangu_mode(self, mode_key):
+        # 切换盘古四模式(发个 mode-switch prompt 给当前 AI)
+        if not self.worker.is_ready():
+            QMessageBox.warning(
+                self, "请先启动浏览器",
+                "请先在『生成控制』Tab 启动浏览器并完成 AI 网站登录。")
+            return
+        try:
+            from pangu_system import get_default_engine
+        except ImportError:
+            QMessageBox.warning(self, "缺少盘古", "找不到 pangu_system.py")
+            return
+        prompt = get_default_engine().build_mode_switch_prompt(mode_key)
+        names = {"architect": "建筑师", "dreamweaver": "造梦师",
+                 "alchemist": "炼金术士", "sculptor": "雕刻家"}
+        self._send_to_ai(
+            prompt, f"盘古模式切换-{names.get(mode_key, mode_key)}",
+            target="pangu_mode")
+
+    def _on_pangu_qcheck(self, content):
+        # 让 AI 按盘古 30 项质检规范深度审稿
+        if not self.worker.is_ready():
+            QMessageBox.warning(self, "请先启动浏览器", "请先启动浏览器")
+            return
+        try:
+            from pangu_system import get_default_engine
+        except ImportError:
+            QMessageBox.warning(self, "缺少盘古", "找不到 pangu_system.py")
+            return
+        prompt = get_default_engine().build_quality_check_prompt(content)
+        self._send_to_ai(prompt, "盘古30项质检", target="pangu_qcheck")
+
+    def _on_pangu_spiral(self, content):
+        # 让 AI 诊断当前章节处于 P1-P7 哪个螺旋阶段
+        if not self.worker.is_ready():
+            QMessageBox.warning(self, "请先启动浏览器", "请先启动浏览器")
+            return
+        try:
+            from pangu_system import get_default_engine
+        except ImportError:
+            QMessageBox.warning(self, "缺少盘古", "找不到 pangu_system.py")
+            return
+        prompt = get_default_engine().build_spiral_diagnose_prompt(content)
+        self._send_to_ai(prompt, "盘古P1-P7螺旋诊断", target="pangu_spiral")
+
     def _charlib_extract_from_chapters(self):
         """从已写章节用 AI 一键提取角色/关系/物品/事件/伏笔"""
         if not self.chapters:

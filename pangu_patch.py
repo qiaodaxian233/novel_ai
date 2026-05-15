@@ -3,11 +3,11 @@
 """
 盘古·零侵入安装器
 ==================================
-让你只用 3 行就把【盘古·终极融合写作系统】套到现有的 novel_ai.py 上。
+让你只用 3 行就把【盘古超级系统】套到现有的 novel_ai.py 上。
 
 集成步骤(在 novel_ai.py 的 PROMPTS 字典定义之后,加这一段):
 
-    # ---- 盘古·终极融合写作系统(新增) ----
+    # ---- 盘古超级系统(新增) ----
     try:
         from pangu_patch import install_pangu
         install_pangu(globals())  # 把 PROMPTS 字典就地套上盘古铁律

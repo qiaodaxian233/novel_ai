@@ -1,4 +1,4 @@
-# 盘古·终极融合写作系统 · 集成指南
+# 盘古超级系统 · 集成指南
 
 把【盘古 V1.0 真正完整版】(29 套网文创作系统融合)接入到 `novel_ai.py`。
 
@@ -27,7 +27,7 @@
 **在右大括号下面紧接着加这一段**:
 
 ```python
-# ---- 盘古·终极融合写作系统(新增) ----
+# ---- 盘古超级系统(新增) ----
 try:
     from pangu_patch import install_pangu
     install_pangu(globals())  # 就地把 PROMPTS 字典套上盘古铁律
@@ -74,7 +74,7 @@ except ImportError:
 
 ```python
 # ---- 盘古系统开关 ----
-self.pangu_check = QCheckBox("启用【盘古·终极融合写作系统】(禁用词过滤 + 感官铁律 + 压爆震)")
+self.pangu_check = QCheckBox("启用【盘古超级系统】(禁用词过滤 + 感官铁律 + 压爆震)")
 self.pangu_check.setChecked(True)  # 默认开
 self.pangu_check.setStyleSheet("color:#1a4480;font-weight:bold;")
 self.pangu_check.setToolTip(
@@ -227,7 +227,7 @@ git add pangu_system.py pangu_patch.py pangu_full_spec.md \
         test_pangu_system.py test_pangu_patch.py \
         PANGU_INTEGRATION.md
 git add novel_ai.py  # 只有 6 行新增
-git commit -m "feat: 接入【盘古·终极融合写作系统 V1.0】
+git commit -m "feat: 接入【盘古超级系统 V1.0】
 
 - 新增 pangu_system.py:核心引擎(铁律/风格库/模式切换/质检/本地禁用词扫描)
 - 新增 pangu_patch.py:零侵入安装器(就地包裹现有 PROMPTS)
