@@ -644,13 +644,25 @@ class ChapterEditor(QWidget):
         layout.addWidget(self.word_count_label)
 
         # ── 盘古元信息面板 (BUG-014 配套 GUI:把剥离出来的钩子/爽点/伏笔/下章选项展示)
-        self.pangu_meta_box = QGroupBox("📌 盘古元信息 — 自动从 AI 输出剥离(只读)")
+        self.pangu_meta_box = QGroupBox(
+            "📌 本章元信息(钩子/爽点/伏笔/下一章选项)— 已自动从正文剥离,会引导下一章生成")
         self.pangu_meta_box.setStyleSheet(
-            "QGroupBox { border: 1px solid #b4884e; margin-top: 8px; padding-top: 14px; }"
-            "QGroupBox::title { color: #b4884e; font-weight: bold; left: 10px; }")
+            "QGroupBox { border: 2px solid #b4884e; margin-top: 8px; padding-top: 14px; "
+            "  background: #fffbf2; }"
+            "QGroupBox::title { color: #b4884e; font-weight: bold; left: 10px; "
+            "  font-size: 13px; }")
         pml = QVBoxLayout(self.pangu_meta_box)
         pml.setContentsMargins(8, 4, 8, 6)
         pml.setSpacing(4)
+        # 顶部说明:这些信息会自动用于下一章生成
+        tip = QLabel(
+            "💡 这些信息**自动注入下一章生成**:钩子做开篇,选项做走向,爽点防重复。"
+            "你也可以点下方按钮手动指定下一章开局。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet(
+            "color:#1a4480; padding:4px 6px; background:#eaf3ff; "
+            "border-left:3px solid #1a4480; font-size:11px;")
+        pml.addWidget(tip)
         self.pangu_hook_label = QLabel("断章钩子: —")
         self.pangu_hook_label.setWordWrap(True)
         self.pangu_hook_label.setStyleSheet("color:#444; padding:2px 4px;")
@@ -663,7 +675,7 @@ class ChapterEditor(QWidget):
         self.pangu_seeds_label.setStyleSheet("color:#444; padding:2px 4px;")
         pml.addWidget(self.pangu_seeds_label)
         # 下一章选项区:3 个按钮,点哪个就用哪个开局生成下一章
-        nl = QLabel("下一章选项(点按钮用此选项作为下一章开局):")
+        nl = QLabel("下一章选项(点按钮用此选项作为下一章开局指引):")
         nl.setStyleSheet("color:#666; padding:4px 4px 0; font-size:11px;")
         pml.addWidget(nl)
         self.pangu_next_opt_row = QHBoxLayout()
@@ -7490,6 +7502,35 @@ class MainWindow(QMainWindow):
                 f"已注入用户指定的下章开局:{picked_opt[:30]}...", "info")
             # 用完即清,避免影响后续章节
             self._user_picked_next_option = None
+        else:
+            # 用户没点选项 → 自动用上一章的元信息引导
+            # (钩子 / 待解决悬念 / 备选下一章方向)
+            if self.chapters and len(self.chapters) >= 1:
+                prev_ch = self.chapters[-1]
+                hook = prev_ch.get("hook") or {}
+                cool = prev_ch.get("cool_points") or []
+                opts = prev_ch.get("next_options") or []
+                bridge_lines = []
+                if hook and hook.get("content"):
+                    htype = hook.get("type", "")
+                    bridge_lines.append(
+                        f"上一章悬念(类型:{htype}):{hook['content']}")
+                if opts:
+                    bridge_lines.append(
+                        f"上一章列出的可能走向(任选其一展开,或合并几条):\n  "
+                        + "\n  ".join(f"- {o}" for o in opts[:5]))
+                if cool:
+                    bridge_lines.append(
+                        f"上一章已用爽点(避免重复):{', '.join(c[:30] for c in cool[:3])}")
+                if bridge_lines:
+                    prompt += (
+                        "\n\n【本章承接(自动从上一章元信息提取)】\n"
+                        + "\n".join(bridge_lines)
+                        + "\n要求:本章开篇直接承接上面的悬念,把它推进到下一个高潮。"
+                    )
+                    self.tab_generation.log(
+                        f"已自动注入上一章承接信息({len(bridge_lines)} 条)",
+                        "info")
 
         # ★ 注入对话记忆(旧路径兜底:仅在 workflow 不可用时执行)
         if not self.workflow:
