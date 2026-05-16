@@ -317,11 +317,35 @@ class RhythmScoreStep(PipelineStep):
 
     @staticmethod
     def _parse_score(text: str):
-        m = re.search(r'(\d+(?:\.\d+)?)\s*/\s*10', text)
-        score = float(m.group(1)) if m else 5.0
-        # 取评分后的第一句话作为原因
-        reason = re.sub(r'.*?\d+\s*/\s*10\s*[,，。\n]?', '', text, count=1).strip()[:200]
-        return score, reason
+        """
+        解析 AI 评分返回。优先级:
+        1. JSON 格式 {"score":8,"reason":"..."} (含 markdown code block 包裹的)
+        2. 旧格式 "8/10,reason"
+        3. 兜底返回 (5.0, text[:200])
+        """
+        import json as _json
+        raw = (text or "").strip()
+        # 去掉 markdown 代码块包裹
+        raw_unwrapped = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I | re.M).strip()
+        # 尝试找 JSON 对象(可能有前后文)
+        jm = re.search(r"\{[\s\S]*?\}", raw_unwrapped)
+        if jm:
+            try:
+                data = _json.loads(jm.group(0))
+                if isinstance(data, dict) and "score" in data:
+                    score = float(data.get("score", 5.0))
+                    reason = str(data.get("reason", "")).strip()[:200]
+                    return score, reason
+            except Exception:
+                pass
+        # 兜底:旧的 8/10 格式
+        m = re.search(r'(\d+(?:\.\d+)?)\s*/\s*10', raw)
+        if m:
+            score = float(m.group(1))
+            reason = re.sub(r'.*?\d+\s*/\s*10\s*[,，。\n]?', '', raw, count=1).strip()[:200]
+            return score, reason
+        # 全失败:中性分 + 截断的原文
+        return 5.0, raw[:200]
 
 
 class CharacterScoreStep(PipelineStep):

@@ -4988,8 +4988,7 @@ class MainWindow(QMainWindow):
                 "请在终端运行:\n"
                 "  pip install -U selenium\n\n"
                 "(selenium 4.6+ 自动管理 chromedriver,无需单独装。\n"
-                "三种内核模式:\n"
-                "  • Chrome 独立 — standalone,程序自管 profile\n"
+                "两种内核模式:\n"
                 "  • Chrome 调试 — attach 已开调试 Chrome,程序与浏览器解耦,最稳\n"
                 "  • 系统 Edge — standalone Edge)")
             return

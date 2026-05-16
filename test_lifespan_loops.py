@@ -14,11 +14,11 @@ test_lifespan_loops.py — 寿元台账 + 长期伏笔检查 单元测试
 跑法： python test_lifespan_loops.py
 """
 from __future__ import annotations
+from pathlib import Path
 import sys
 import json
 
-# 保证从 /home/claude 加载
-sys.path.insert(0, "/home/claude")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lifespan_loops_steps import (
     LifespanInjectStep,
@@ -517,12 +517,14 @@ failed = total - passed
 print(f"测试总数: {total}   通过: {passed}   失败: {failed}")
 print("=" * 64)
 
-if failed:
-    print("失败明细：")
-    for n, ok, msg in results:
-        if not ok:
-            print(f"  ✗ {n}" + (f" — {msg}" if msg else ""))
-    sys.exit(1)
-else:
-    print("✅ 全部通过")
-    sys.exit(0)
+
+if __name__ == "__main__":
+    if failed:
+        print("失败明细：")
+        for n, ok, msg in results:
+            if not ok:
+                print(f"  ✗ {n}" + (f" — {msg}" if msg else ""))
+        sys.exit(1)
+    else:
+        print("✅ 全部通过")
+        sys.exit(0)

@@ -2,11 +2,12 @@
 """
 test_lifespan_loops_panel.py — UI 面板单元测试（无头 Qt）
 """
+from pathlib import Path
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import sys
-sys.path.insert(0, "/home/claude")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt
@@ -401,12 +402,14 @@ failed = total - passed
 print(f"测试总数: {total}   通过: {passed}   失败: {failed}")
 print("=" * 64)
 
-if failed:
-    print("失败明细：")
-    for n, ok, msg in results:
-        if not ok:
-            print(f"  ✗ {n}" + (f" — {msg}" if msg else ""))
-    sys.exit(1)
-else:
-    print("✅ 全部通过")
-    sys.exit(0)
+
+if __name__ == "__main__":
+    if failed:
+        print("失败明细：")
+        for n, ok, msg in results:
+            if not ok:
+                print(f"  ✗ {n}" + (f" — {msg}" if msg else ""))
+        sys.exit(1)
+    else:
+        print("✅ 全部通过")
+        sys.exit(0)

@@ -13,10 +13,11 @@ test_full_integration.py — 完整集成测试
 - workflow panel 装上了 11 张步骤卡片
 - workflow panel 的运行时高亮 hooks 已安装
 """
+from pathlib import Path
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import sys
-sys.path.insert(0, "/home/claude")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from PyQt5.QtWidgets import QApplication
 
@@ -58,11 +59,12 @@ expect("章节列表 widget 也是空", mw.chapter_list.count() == 0)
 
 
 # ============================================================
-# T3: 10 个 Tab 全部装上
+# T3: 11 个 Tab 全部装上
 # ============================================================
 section("T3 — Tab 列表完整")
 expected = [
     "创作设置", "故事大纲", "对话记忆", "Canon 设定",
+    "🎭 角色与世界",        # 角色库 + 关系 + 时间线 + 物品 + 伏笔
     "寿元/伏笔",         # 来自 lifespan_loops 集成
     "技能库",
     "工作流",            # 来自 workflow_panel 集成
@@ -101,8 +103,8 @@ expect("创作设置 不再有 btn_close(已移到生成控制)",
 section("T5 — 生成控制顶部完整面板")
 tg = mw.tab_generation
 expect("生成控制 有 kernel_group", hasattr(tg, "kernel_group"))
-expect("kernel_group 含 3 个按钮(独立/调试/Edge)",
-       len(tg.kernel_group.buttons()) == 3)
+expect("kernel_group 含 2 个按钮(Chrome调试/Edge)",
+       len(tg.kernel_group.buttons()) == 2)
 expect("生成控制 有 btn_launch", hasattr(tg, "btn_launch"))
 expect("生成控制 有 btn_close", hasattr(tg, "btn_close"))
 expect("生成控制 有 btn_go", hasattr(tg, "btn_go"))
@@ -113,20 +115,20 @@ expect("生成控制 有 status_label", hasattr(tg, "status_label"))
 
 
 # ============================================================
-# T6: 内核映射(3 选项)+ ai_group ↔ site_combo 双向同步
+# T6: 内核映射(2 选项)+ ai_group ↔ site_combo 双向同步
 # ============================================================
 section("T6 — 内核映射 & AI 双向同步")
-# 默认 Chrome 独立 (id=0)
-expect("默认 selected_kernel_channel = None(standalone)",
-       tg.selected_kernel_channel() is None)
-# 切 Chrome 调试 attach (id=1)
-tg.kernel_group.buttons()[1].setChecked(True)
-expect("切 attach 后 = chrome",
+# 默认 Chrome 调试 attach (id=0)
+expect("默认 selected_kernel_channel = chrome(attach 模式)",
        tg.selected_kernel_channel() == "chrome")
-# 切 Edge (id=2)
-tg.kernel_group.buttons()[2].setChecked(True)
+# 切 Edge (id=1)
+tg.kernel_group.buttons()[1].setChecked(True)
 expect("切 Edge 后 = msedge",
        tg.selected_kernel_channel() == "msedge")
+# 切回 Chrome 调试 (id=0)
+tg.kernel_group.buttons()[0].setChecked(True)
+expect("切回 Chrome attach 后 = chrome",
+       tg.selected_kernel_channel() == "chrome")
 
 # AI 同步:在创作设置 ai_group 选豆包,生成控制 site_combo 应同步
 btn_db = next(b for b in ts.ai_group.buttons() if b.text() == "豆包")
@@ -245,12 +247,14 @@ failed = total - passed
 print(f"测试总数: {total}   通过: {passed}   失败: {failed}")
 print("=" * 64)
 
-if failed:
-    print("失败明细:")
-    for n, ok, msg in results:
-        if not ok:
-            print(f"  ✗ {n}" + (f" — {msg}" if msg else ""))
-    sys.exit(1)
-else:
-    print("✅ 全部通过")
-    sys.exit(0)
+
+if __name__ == "__main__":
+    if failed:
+        print("失败明细:")
+        for n, ok, msg in results:
+            if not ok:
+                print(f"  ✗ {n}" + (f" — {msg}" if msg else ""))
+        sys.exit(1)
+    else:
+        print("✅ 全部通过")
+        sys.exit(0)

@@ -1,6 +1,6 @@
 # 智能创作系统
 
-按照参考截图复刻的本地小说创作辅助软件。基于 **PyQt5 (UI) + Playwright (浏览器自动化)** 实现,挂载真实 Chrome/Edge 浏览器,自动发送提示词、自动等待 AI 回复完成、自动抓取并回填到对应输入框。
+按照参考截图复刻的本地小说创作辅助软件。基于 **PyQt5 (UI) + Selenium (浏览器自动化)** 实现,挂载真实 Chrome/Edge 浏览器,自动发送提示词、自动等待 AI 回复完成、自动抓取并回填到对应输入框。
 
 ---
 
@@ -8,16 +8,15 @@
 
 ```bash
 # 1. 安装依赖
-pip install PyQt5 playwright
+pip install -r requirements.txt
+# 或手动:pip install PyQt5 selenium
 
-# 2. 安装 Playwright 的浏览器内核(必须执行一次)
-python -m playwright install chromium
-
-# 3. 启动
+# 2. 启动
 python novel_ai.py
 ```
 
-> 系统已装 Chrome/Edge 的话,在「生成控制」里选「系统 Chrome」或「系统 Edge」,Playwright 会直接挂载它们,不用再下 chromium 内核。
+> Selenium 4.6+ 会自动管理 chromedriver,无需单独下载。
+> 系统已装 Chrome/Edge 的话,在「生成控制」里选对应内核,Selenium 会直接挂载。
 > Windows / macOS / Linux 通用。
 
 ---
@@ -88,8 +87,8 @@ python novel_ai.py
 ---
 
 **关键技术点**:
-- **挂载真 Chrome,不是嵌入 WebView**:Playwright 启动的是独立浏览器窗口,带完整 Chrome 内核,过反爬能力比 QtWebEngine 强很多
-- **Cookie 持久化**:`launch_persistent_context(~/NovelAI_Browser_Data)`,第一次登录之后永远不用再登
+- **挂载真 Chrome,不是嵌入 WebView**:Selenium 启动的是独立浏览器窗口,带完整 Chrome 内核,过反爬能力比 QtWebEngine 强很多
+- **Cookie 持久化**:用 `user-data-dir=~/NovelAI_Browser_Data` 启动 Chrome,第一次登录之后永远不用再登
 - **回复完成检测**:轮询最后一条消息文本,稳定 4 秒视为完成(避免点到一半就抓)
 - **字数死磕**:抓到的字数 < 目标 85% 时自动用「上次只写了 X 字,必须写到 Y 字以上」的强化 prompt 重发,默认死磕 3 次
 
@@ -185,18 +184,29 @@ AI_URLS = {
 ```python
 SITE_PROFILES = {
     "chat.deepseek.com": {
-        "input":     'textarea',                       # 输入框
-        "send_btn":  'div[role="button"]:has(svg)',    # 发送按钮
-        "response":  'div.ds-markdown',                # AI 回复元素
-        "stop_btn":  'div[role="button"]:has-text("停止")',
+        "name": "DeepSeek",
+        "input":    'textarea',                                    # 输入框
+        "send_btn": 'div[role="button"]:has(svg)',                # 发送按钮(原生 :has)
+        "response": 'div.ds-markdown, [class*="markdown-body"]',   # AI 回复元素(多兜底)
+        "stop_btn": 'div[role="button"][aria-label*="停止"]',       # 停止按钮(aria-label)
     },
-    ...
+    "doubao.com": {
+        "name": "豆包",
+        "input":    'textarea, div[contenteditable="true"]',
+        "send_btn": 'button[data-testid*="send"], button[aria-label*="发送"]',
+        "response": '[data-testid*="message_text"], [class*="message-content"]',
+        "stop_btn": 'button[aria-label*="停止"]',
+    },
+    # ... 还有 ChatGPT / Gemini / 元宝 / 小米AI 等
+    "_default": { ... }  # 兜底通用选择器
 }
 ```
 
-**如果某家 AI 抓不到内容**,打开浏览器 F12,定位它的 DOM,改 `response` 选择器即可。匹配不到具体网站时会回退到 `_default` 通用选择器。
+每个网站支持**多个选择器逗号分隔**(Selenium 会从前往后试,第一个命中的用),这样某个 DOM 改动后,后面的兜底还能用。
 
-由于 Playwright 用的是 CSS / XPath 选择器(比 QtWebEngine 的纯 JS 更稳),适配起来也方便。修改后保存文件、重启即可生效。
+**如果某家 AI 抓不到内容**,打开浏览器 F12,定位它的 DOM,改对应的 CSS / XPath 选择器即可。匹配不到具体网站时会回退到 `_default` 通用兜底。
+
+由于 Selenium 用的是 CSS / XPath 选择器(比 QtWebEngine 的纯 JS 更稳),适配起来也方便。修改后保存文件、重启即可生效。
 
 ---
 

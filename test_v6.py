@@ -1,10 +1,23 @@
-"""离线 mock 测试:实例化所有 Tab,模拟 Worker,跑一遍核心流程"""
+"""离线 mock 测试:实例化所有 Tab,模拟 Worker,跑一遍核心流程
+
+注意:此测试早期针对 novel_ai_v6.py,现已迁移到 novel_ai.py。
+不再依赖 /home/claude 等开发机硬编码路径。
+"""
 import os, sys
+from pathlib import Path
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
-sys.path.insert(0, '/home/claude')
+
+# 用脚本所在目录定位 novel_ai.py
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
 
 import importlib.util
-spec = importlib.util.spec_from_file_location('novel_ai_v6', '/home/claude/novel_ai_v6.py')
+target = ROOT / 'novel_ai.py'
+if not target.exists():
+    print(f"✗ 找不到 novel_ai.py(目录:{ROOT})")
+    sys.exit(2)
+
+spec = importlib.util.spec_from_file_location('novel_ai_mod', str(target))
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
