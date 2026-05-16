@@ -1299,6 +1299,54 @@ class CreationSettings(QWidget):
         pe_outer.addWidget(btn_pe_custom)
         layout.addWidget(pe_box)
 
+        # ---- 第 8 项配套:手动字体倍数滑块(自动检测不准时用) ----
+        font_box = QGroupBox("🔍 界面字体大小(4K 屏看不清时调大)")
+        font_box.setStyleSheet(
+            "QGroupBox { border: 2px solid #b4884e; margin-top: 8px; padding-top: 14px; }"
+            "QGroupBox::title { color: #b4884e; font-weight: bold; left: 10px; }")
+        fbl = QHBoxLayout(font_box)
+        fbl.addWidget(QLabel("字体倍数:"))
+        self.font_scale_slider = QSlider(Qt.Horizontal)
+        self.font_scale_slider.setRange(80, 220)        # 0.8 ~ 2.2
+        self.font_scale_slider.setSingleStep(5)
+        self.font_scale_slider.setPageStep(10)
+        self.font_scale_slider.setTickPosition(QSlider.TicksBelow)
+        self.font_scale_slider.setTickInterval(20)
+        # 从 QSettings 读;若 0 则用自动检测的当前值
+        from PyQt5.QtCore import QSettings as _QSf2
+        _ss = _QSf2("NovelAI", "CreationSettings")
+        _saved = _ss.value("font_scale", 0.0, type=float) or 0.0
+        if _saved < 0.5:
+            # 用应用当前实际倍数
+            from PyQt5.QtWidgets import QApplication as _QA
+            _cur = (_QA.instance().property("_novelai_dpi_scale") or 1.0)
+            _saved = float(_cur)
+        self.font_scale_slider.setValue(int(round(_saved * 100)))
+        fbl.addWidget(self.font_scale_slider, 1)
+        self.font_scale_label = QLabel(f"×{_saved:.2f}")
+        self.font_scale_label.setMinimumWidth(50)
+        self.font_scale_label.setStyleSheet("font-weight:bold; color:#b4884e;")
+        fbl.addWidget(self.font_scale_label)
+        self.btn_font_apply = QPushButton("✓ 应用(需重启生效)")
+        self.btn_font_apply.setStyleSheet(
+            "QPushButton { background:#2ecc71; color:white; padding:4px 12px; border-radius:3px; }"
+            "QPushButton:hover { background:#27ae60; }")
+        fbl.addWidget(self.btn_font_apply)
+        # 拖动时只更新标签;点应用才写盘
+        def _on_font_slider(v):
+            self.font_scale_label.setText(f"×{v/100:.2f}")
+        self.font_scale_slider.valueChanged.connect(_on_font_slider)
+        def _on_font_apply():
+            v = self.font_scale_slider.value() / 100.0
+            _ss.setValue("font_scale", float(v))
+            QMessageBox.information(
+                None, "已保存",
+                f"字体倍数 ×{v:.2f} 已保存。\n\n"
+                f"请关闭程序后重新打开生效。\n"
+                f"(Qt 应用启动时设字体,运行中改无法即时生效)")
+        self.btn_font_apply.clicked.connect(_on_font_apply)
+        layout.addWidget(font_box)
+
         layout.addStretch()
 
         # 启动时从 QSettings 恢复白名单并应用
@@ -8802,30 +8850,48 @@ def main():
     app.setStyle("Fusion")
 
     # 检测屏幕分辨率,4K 及以上自动放大默认字体
+    # ★ 修订:用物理像素(逻辑像素 × devicePixelRatio),否则开了
+    #   Windows 系统缩放后逻辑分辨率会被除小,4K + 150% 缩放看到的是 2560×1440
     try:
+        # 优先读用户手动设的字体倍数(QSettings)
+        from PyQt5.QtCore import QSettings as _QSf
+        _manual = _QSf("NovelAI", "CreationSettings").value(
+            "font_scale", 0.0, type=float) or 0.0
         screen = app.primaryScreen()
+        _scale = 1.0
+        _w = _h = 0
+        _w_phys = _h_phys = 0
+        _dpr = 1.0
         if screen is not None:
             sz = screen.size()
-            w, h = sz.width(), sz.height()
-            # 4K: 3840x2160 或更高;2.5K: 2560x1440;1080P: 1920x1080
-            if w >= 3000 or h >= 1900:
-                # 4K → 字体 +50%
+            _w, _h = sz.width(), sz.height()
+            _dpr = screen.devicePixelRatio() or 1.0
+            # 物理像素 = 逻辑 × devicePixelRatio
+            _w_phys = int(_w * _dpr)
+            _h_phys = int(_h * _dpr)
+            if _manual > 0.5:
+                # 用户手动覆盖,优先
+                _scale = _manual
+            elif _w_phys >= 3000 or _h_phys >= 1900:
+                # 物理像素达 4K → 字体 ×1.5
                 _scale = 1.5
-            elif w >= 2400 or h >= 1500:
-                # 2.5K → 字体 +25%
+            elif _w_phys >= 2400 or _h_phys >= 1500:
+                # 物理像素达 2.5K → 字体 ×1.25
                 _scale = 1.25
-            else:
-                _scale = 1.0
-            if _scale > 1.0:
-                from PyQt5.QtGui import QFont
-                _font = app.font()
-                _base = _font.pointSizeF() if _font.pointSizeF() > 0 else 9.0
-                _font.setPointSizeF(_base * _scale)
-                app.setFont(_font)
-                # 标记到 app 属性供窗口启动时打日志用
-                app.setProperty("_novelai_dpi_scale", _scale)
-                app.setProperty("_novelai_screen_w", w)
-                app.setProperty("_novelai_screen_h", h)
+        if _scale > 1.0:
+            from PyQt5.QtGui import QFont
+            _font = app.font()
+            _base = _font.pointSizeF() if _font.pointSizeF() > 0 else 9.0
+            _font.setPointSizeF(_base * _scale)
+            app.setFont(_font)
+        # 都记到 app 属性,不管 scale 是不是 1.0 — 启动日志统一打
+        app.setProperty("_novelai_dpi_scale", _scale)
+        app.setProperty("_novelai_screen_w", _w)
+        app.setProperty("_novelai_screen_h", _h)
+        app.setProperty("_novelai_screen_w_phys", _w_phys)
+        app.setProperty("_novelai_screen_h_phys", _h_phys)
+        app.setProperty("_novelai_dpr", _dpr)
+        app.setProperty("_novelai_manual_scale", _manual)
     except Exception:
         pass
 
@@ -8838,15 +8904,26 @@ def main():
     try:
         win = MainWindow()
         win.show()
-        # 4K 缩放日志
+        # HiDPI 启动日志(无论缩放多少都打,方便诊断)
         try:
-            _sc = app.property("_novelai_dpi_scale")
-            if _sc and _sc > 1.0:
-                _w = app.property("_novelai_screen_w")
-                _h = app.property("_novelai_screen_h")
+            _sc      = app.property("_novelai_dpi_scale") or 1.0
+            _w       = app.property("_novelai_screen_w") or 0
+            _h       = app.property("_novelai_screen_h") or 0
+            _wp      = app.property("_novelai_screen_w_phys") or 0
+            _hp      = app.property("_novelai_screen_h_phys") or 0
+            _dpr     = app.property("_novelai_dpr") or 1.0
+            _man     = app.property("_novelai_manual_scale") or 0.0
+            _origin  = "用户手动" if _man > 0.5 else ("自动检测" if _sc > 1.0 else "未启用")
+            win.tab_generation.log(
+                f"屏幕诊断:逻辑 {_w}×{_h} / 物理 {_wp}×{_hp} / "
+                f"DPR={_dpr:.2f} → 字体缩放 ×{_sc} ({_origin})",
+                "success" if _sc > 1.0 else "info")
+            if _sc <= 1.0 and (_wp >= 3000 or _hp >= 1900):
+                # 物理像素是 4K 但 scale=1,可能是用户已经关了
                 win.tab_generation.log(
-                    f"✓ HiDPI 自动缩放已启用:屏幕 {_w}×{_h},字体放大 ×{_sc}",
-                    "success")
+                    "⚠️ 检测到 4K 物理分辨率但字体未放大 - "
+                    "去【创作设置】底部用'字体倍数'滑块手动调",
+                    "warn")
         except Exception:
             pass
     except Exception as e:
