@@ -5005,41 +5005,8 @@ class GenerationControl(QWidget):
 
 
 # =====================================================================
-# 七、封面生成页
+# 七、(原封面生成页已删除 — 用户不需要,2026-05-16 第十三批)
 # =====================================================================
-class CoverGeneration(QWidget):
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
-        title = QLabel("小说封面生成")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #1a4480;")
-        layout.addWidget(title)
-
-        layout.addWidget(QLabel("封面描述(Prompt):"))
-        self.desc_edit = QPlainTextEdit()
-        self.desc_edit.setMaximumHeight(150)
-        self.desc_edit.setPlaceholderText(
-            "例如:都市言情风格,女主侧脸特写,城市夜景背景,书名居中,"
-            "霓虹灯氛围,高饱和度,杂志大片质感...")
-        layout.addWidget(self.desc_edit)
-
-        brow = QHBoxLayout()
-        self.btn_gen_desc = QPushButton("AI生成封面描述")
-        self.btn_gen_cover = QPushButton("生成封面图(打开AI画图网页)")
-        self.btn_save_cover = QPushButton("保存封面")
-        for b in (self.btn_gen_desc, self.btn_gen_cover, self.btn_save_cover):
-            brow.addWidget(b)
-        brow.addStretch()
-        layout.addLayout(brow)
-
-        self.preview = QLabel()
-        self.preview.setMinimumSize(400, 500)
-        self.preview.setStyleSheet(
-            "background: white; border: 2px dashed #aaa; color: #888; font-size: 14px;")
-        self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setText("封面预览区\n\n请先生成封面描述,再生成封面图")
-        layout.addWidget(self.preview, 1)
 
 
 # =====================================================================
@@ -5346,7 +5313,6 @@ class MainWindow(QMainWindow):
         self.tab_skills = SkillLibrary()
         self.tab_generation = GenerationControl()
         self.tab_editor = ChapterEditor()
-        self.tab_cover = CoverGeneration()
         # 工作流可视化(可选模块,放最后实例化,因为依赖 self.workflow 已就绪)
         # 这里先占位 None,真正的 WorkflowPanel 在 __init__ 末尾装配
         self.tab_workflow = None
@@ -5364,7 +5330,6 @@ class MainWindow(QMainWindow):
         tab_list += [
             (self.tab_generation, "生成控制"),
             (self.tab_editor, "章节编辑器"),
-            (self.tab_cover, "小说封面生成"),
         ]
         for w, n in tab_list:
             self.tabs.addTab(w, n)
