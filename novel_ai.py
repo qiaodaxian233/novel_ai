@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI 写作工作台
+盘古超级写作助手
 =============================================
 基于 PyQt5 + Selenium 的本地小说创作辅助软件
 - 挂载真实 Chrome / Edge,自动操作 DeepSeek / 豆包 / Gemini / 元宝 等 AI 网页
 - 三种启动模式:attach(连接已开调试 Chrome,最稳)/ standalone / temp
-- 内置提示词模板(创意灵感、整套大纲、单章节、AI润色、书名、简介)
+- 内置盘古超级系统(禁用词过滤 + 感官铁律 + 压爆震 + 黄金三章公式)
 - 章节列表 / 项目存档(JSON) / 一键保存所有章节
-- 多题材 / 多平台 / 黄金三章 / 字数死磕 / 模拟人类延迟
+- 角色与世界 6 库自动同步 / 30 项质检 + AI 自动修复 / 章节元信息面板
 
 运行依赖:
     pip install PyQt5 selenium
     (selenium 4.6+ 自动管理 driver,无需单独装 chromedriver)
 """
+
+# ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
+APP_VERSION = "v1.0.0"
+APP_NAME    = "盘古超级写作助手"
+APP_FULL    = f"{APP_NAME} {APP_VERSION}"
 
 import sys
 import os
@@ -5093,7 +5098,7 @@ class GenerationControl(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("AI 写作工作台")
+        self.setWindowTitle(APP_FULL)
         self.resize(1280, 820)
         # 按 font_scale 把全局样式表里的 font-size: Npx 全部按倍率放大
         # 这是修 BUG-016 的关键 — 不然 app.setFont() 被这里的 13px 死压
@@ -5435,7 +5440,7 @@ class MainWindow(QMainWindow):
         _act_diff_info.triggered.connect(self._on_pangu_diff_info)
         _tb_pangu.addAction(_act_diff_info)
         self.setStatusBar(sb)
-        sb.addWidget(QLabel("© 2026 AI 写作工作台 | Python + PyQt5"))
+        sb.addWidget(QLabel(f"© 2026 {APP_NAME} {APP_VERSION} | Python + PyQt5"))
         self._status_indicator = QLabel("● 未启动")
         self._status_indicator.setStyleSheet(
             "color: #999; font-weight: bold; padding: 2px 8px;")
@@ -7967,6 +7972,20 @@ class MainWindow(QMainWindow):
                 from pangu_system import parse_chapter_meta as _pangu_parse
                 pangu_meta = _pangu_parse(content)
                 body_clean = pangu_meta.get("body") or content
+                # 诊断日志:让用户能看到是否真的剥离了元信息
+                _stripped = len(content) - len(body_clean)
+                if _stripped > 0:
+                    self.tab_generation.log(
+                        f"✓ 已剥离章节尾部元信息 {_stripped} 字"
+                        f"(钩子/爽点/伏笔/下章选项 → 移到面板)",
+                        "info")
+                elif "本章完" in content or "【断章钩子】" in content \
+                        or "断章钩子" in content or "下一章选项" in content:
+                    # 元信息标记还在正文里 → 剥离失败,打 warn
+                    self.tab_generation.log(
+                        "⚠️ 检测到元信息标记但剥离失败(parse_chapter_meta 没匹配)。"
+                        "请把这段章节末尾 30 行复制发给开发者,以便加新匹配规则",
+                        "warn")
             except ImportError:
                 pass
             except Exception as _pm_e:
@@ -9144,19 +9163,23 @@ class MainWindow(QMainWindow):
 
     def show_about(self):
         QMessageBox.about(
-            self, "关于",
-            "<h2>AI 写作工作台</h2>"
-            "<p><b>技术栈:</b>Python 3 + PyQt5 + QtWebEngine</p>"
+            self, f"关于 {APP_NAME}",
+            f"<h2>{APP_NAME}</h2>"
+            f"<p><b>版本:</b>{APP_VERSION}</p>"
+            "<p><b>技术栈:</b>Python 3 + PyQt5 + Selenium</p>"
             "<p><b>核心特性:</b></p>"
             "<ul>"
-            "<li>内置网页浏览器,挂载 DeepSeek/Doubao/Gemini 等 AI 网页</li>"
-            "<li>内置提示词模板(灵感/大纲/章节/润色/书名/简介)</li>"
-            "<li>章节管理 + JSON 项目存档 + 一键保存所有 TXT</li>"
-            "<li>多题材、多平台、黄金三章、字数死磕</li>"
-            "<li>JS 自动注入 + 半自动抓取回复</li>"
+            "<li>挂载真实 Chrome / Edge,自动驱动 DeepSeek/豆包/Gemini/元宝/小米AI/ChatGPT 镜像</li>"
+            "<li>盘古超级系统:禁用词过滤 + 感官铁律 + 压爆震 + 黄金三章公式</li>"
+            "<li>角色与世界 6 库(角色/关系/时间线/物品/战力/伏笔)自动同步</li>"
+            "<li>30 项质检 + 🔧 AI 自动修复</li>"
+            "<li>章节元信息面板(钩子/爽点/伏笔/下一章选项,点选项自动指引下章)</li>"
+            "<li>项目自动保存(每章+60s+章后立即)+ 最近 10 次版本备份</li>"
+            "<li>自定义题材/时代/金手指/主角人设 + 折叠链</li>"
+            "<li>设置菜单 → 🔍 界面字体大小(支持 4K HiDPI 手动放大)</li>"
             "</ul>"
-            "<p><i>提示:本程序为 UI 仿制 + 核心逻辑实现示例,"
-            "用于学习交流。各 AI 网页 DOM 不同,自动化提交/采集需根据实际 DOM 微调。</i></p>"
+            "<p><i>提示:本程序为 UI 仿制 + 核心逻辑实现示例,用于学习交流。"
+            "各 AI 网页 DOM 不同,自动化提交/采集需根据实际 DOM 微调。</i></p>"
         )
 
 

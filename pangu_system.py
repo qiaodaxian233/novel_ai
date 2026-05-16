@@ -262,10 +262,19 @@ def chapter_output_format(chapter_num: int = 1, show_options: bool = True) -> st
 # 这些元信息**不属于正文**,必须从入库的章节内容里剥离;
 # 同时把【伏笔状态】结构化提取出来,供 lifespan_loops 自动落库。
 
-_META_SECTION_TITLES = ("【断章钩子】", "【本章爽点】", "【伏笔状态】", "【下一章选项】")
+_META_SECTION_TITLES = (
+    "【断章钩子】", "【本章爽点】", "【伏笔状态】", "【下一章选项】",
+    # 容错:【XXX 】中间或两侧可能有空格
+    "【 断章钩子 】", "【 本章爽点 】", "【 伏笔状态 】", "【 下一章选项 】",
+    # 容错:有 AI 用方括号或井号代替
+    "[断章钩子]", "[本章爽点]", "[伏笔状态]", "[下一章选项]",
+    "## 断章钩子", "## 本章爽点", "## 伏笔状态", "## 下一章选项",
+)
 # 兼容容错:有时 AI 漏写"本章完"、或者把【XXX】换成 [XXX] / ## XXX
 _CHAPTER_END_MARKERS = (
     "本章完", "—— 本章完 ——", "（本章完）", "(本章完)",
+    "本章完。", "本章完！", "—本章完—", "***本章完***",
+    "（完）", "(完)",
 )
 
 
@@ -419,12 +428,23 @@ def parse_chapter_meta(content: str) -> Dict:
     if "下一章选项" in blocks:
         for line in blocks["下一章选项"].splitlines():
             line = line.strip()
+            if not line:
+                continue
             # "1. xxx" / "1、xxx" / "①xxx"
             m_opt = re.match(r'^\s*(?:\d+|[①-⑩])\s*[\.\、\:\：]?\s*(.+?)\s*$', line)
             if m_opt:
                 opt = m_opt.group(1).strip()
-                if opt and len(opt) > 2:
-                    out["next_options"].append(opt)
+            else:
+                # 兜底:整行视为选项(用户/AI 经常漏写数字前缀)
+                # 但要排除明显不是选项的内容(纯标点、太短、太长)
+                opt = line
+                if len(opt) < 4 or len(opt) > 120:
+                    continue
+                # 排除常见的元信息行
+                if re.match(r'^[\-\*\—\=\【\[]', opt):
+                    continue
+            if opt and len(opt) > 2:
+                out["next_options"].append(opt)
         # 截断到最多 5 个
         out["next_options"] = out["next_options"][:5]
 
