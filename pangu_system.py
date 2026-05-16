@@ -573,6 +573,60 @@ class PanguEngine:
     def build_spiral_diagnose_prompt(self, content: str) -> str:
         return SPIRAL_DIAGNOSE_PROMPT_TPL.format(content=content)
 
+    # ----- Phase C-1:章节段落差异化(防 AI 套路化) -----
+    def build_seed_variation_block(self, chapter_num: int, recent_chapters=None) -> str:
+        # 基于章节号生成差异化参数提示块,塞进 prompt 让 AI 每章用不同的写法
+        import random
+        seed_base = chapter_num * 1000
+        if recent_chapters:
+            for ch in recent_chapters[-2:]:
+                seed_base += sum(ord(c) for c in (ch or "")[:20]) % 997
+        rng = random.Random(seed_base)
+
+        openings = [
+            "对话开场(主角和某人正在说话,直接进入冲突或线索)",
+            "动作开场(主角正在做某事,身体感觉/动作描写起手)",
+            "内心独白开场(主角的情绪/思考/回忆切入)",
+            "环境特写开场(雨/雪/光/声/嗅觉一个具体细节起手)",
+            "倒叙开场(从一个未来场景倒回当下)",
+            "对比开场(两个场景平行剪辑或大小对比)",
+        ]
+        rhythms = [
+            "前慢后快(前 1/3 铺垫,后 2/3 推进+爆发)",
+            "前快后慢(开篇就冲突,后半深入情绪)",
+            "匀速推进(整章保持中速,靠细节堆叠)",
+            "三幕节奏(铺垫-发酵-反转,均匀三段)",
+            "波浪式(小高潮-喘息-大高潮)",
+        ]
+        sensories = [
+            "视觉主导(光影/色彩/形体/距离描写优先)",
+            "听觉主导(声音/对话/环境音/沉默优先)",
+            "触觉主导(温度/压力/材质/疼痛优先)",
+            "嗅觉味觉主导(气味/味道/呼吸优先)",
+            "通感混合(两种以上感官交替,适合情绪段)",
+        ]
+        word_offset_pct = rng.uniform(-0.10, 0.15)
+
+        opening = rng.choice(openings)
+        rhythm = rng.choice(rhythms)
+        sensory = rng.choice(sensories)
+
+        block = (
+            "【本章差异化参数(为防止 AI 重复套路,本章请严格遵守)】\n"
+            f"  · 开篇方式:{opening}\n"
+            f"  · 节奏:{rhythm}\n"
+            f"  · 感官重心:{sensory}\n"
+            f"  · 字数微调:目标 ±{int(word_offset_pct * 100)}%(基于章节目标)\n"
+            "  · 切忌重复上一章的开篇句式 / 转场词 / 情绪曲线"
+        )
+        return block
+
+    def get_word_count_jitter(self, chapter_num: int) -> float:
+        # 返回字数浮动系数 0.90-1.10,让每章字数略有差异
+        import random
+        rng = random.Random(chapter_num * 1000)
+        return rng.uniform(0.90, 1.10)
+
     def get_first_activation_banner(self) -> str:
         return FIRST_ACTIVATION_BANNER
 

@@ -4657,6 +4657,11 @@ class MainWindow(QMainWindow):
         # ---- 寿元台账 + 长期伏笔(新增) ----
         if LIFESPAN_LOOPS_AVAILABLE:
             LifespanLoopsExtension.install(self)
+            # Phase C-3:盘古 ↔ lifespan_loops 联动桥
+            try:
+                self._install_pangu_lifespan_bridge()
+            except Exception as e:
+                print(f"[warn] 盘古-lifespan 联动安装失败: {e}")
             if self.tab_lifespan is not None:
                 self.tab_lifespan.sync_from_mw()
                 self.tab_lifespan.request_save.connect(self.save_project)
@@ -4690,6 +4695,18 @@ class MainWindow(QMainWindow):
         # 先加载项目数据，再加载设置（QSettings优先级更高，覆盖项目文件中的旧设置）
         self._autoload()
         self.tab_settings.load_settings()
+
+        # Phase C-2:启动时加载用户自定义风格库(覆盖内置)
+        try:
+            from PyQt5.QtCore import QSettings as _QS2
+            _ps_settings = _QS2("NovelAI", "PanguStyleLib")
+            _custom_styles = _ps_settings.value("custom_mapping", None)
+            if _custom_styles and isinstance(_custom_styles, list) and _custom_styles:
+                from pangu_system import STYLE_MAPPING as _SM
+                _SM.clear()
+                _SM.extend(_custom_styles)
+        except Exception:
+            pass
 
         # ───── 首次启动盘古介绍 banner(Phase A,真位置) ─────
         try:
@@ -4849,6 +4866,16 @@ class MainWindow(QMainWindow):
         _act_batch = QAction("🛡️ 全书巡检", self)
         _act_batch.triggered.connect(self._on_pangu_batch_scan)
         _tb_pangu.addAction(_act_batch)
+        # Phase C-2:风格库编辑器
+        _act_style_edit = QAction("🎨 风格库", self)
+        _act_style_edit.setToolTip("打开盘古风格库可视化编辑器")
+        _act_style_edit.triggered.connect(self._on_pangu_style_editor)
+        _tb_pangu.addAction(_act_style_edit)
+        # Phase C-1:差异化状态查看
+        _act_diff_info = QAction("🎲 差异化", self)
+        _act_diff_info.setToolTip("查看章节差异化(防 AI 套路)当前状态和下一章预览参数")
+        _act_diff_info.triggered.connect(self._on_pangu_diff_info)
+        _tb_pangu.addAction(_act_diff_info)
         self.setStatusBar(sb)
         sb.addWidget(QLabel("© 2026 AI 写作工作台 | Python + PyQt5"))
         self._status_indicator = QLabel("● 未启动")
@@ -5988,6 +6015,221 @@ class MainWindow(QMainWindow):
         btn_save_html.clicked.connect(do_save_html)
         dlg.exec_()
 
+    # ───── Phase C-1:差异化说明弹窗 ─────
+    def _on_pangu_diff_info(self):
+        # 显示当前差异化状态 + 预览下一章会用什么参数
+        try:
+            from pangu_system import get_default_engine as _pg
+        except ImportError:
+            QMessageBox.warning(self, "缺少盘古", "找不到 pangu_system.py")
+            return
+        enabled = (getattr(self.tab_settings, "pangu_check", None)
+                   and self.tab_settings.pangu_check.isChecked())
+        next_ch = len(self.chapters) + 1
+        engine = _pg()
+        recent = [c.get("content", "") for c in self.chapters[-3:]] if self.chapters else []
+        preview = engine.build_seed_variation_block(next_ch, recent)
+        jitter = engine.get_word_count_jitter(next_ch)
+        status = "✅ 已启用" if enabled else "⊘ 已停用(盘古总开关关闭)"
+        msg = (
+            f"章节差异化:{status}\n\n"
+            "原理:每章用不同的 RNG 种子,锁定到不同的开篇/节奏/感官组合,\n"
+            "防止 AI 反复用同一套套路写章节。\n\n"
+            f"下一章(第 {next_ch} 章)预览参数:\n{preview}\n\n"
+            f"字数浮动:×{jitter:.2f}"
+        )
+        QMessageBox.information(self, "🎲 章节差异化(防套路)", msg)
+
+    # ───── Phase C-3:盘古 ↔ lifespan_loops 联动 ─────
+    def _install_pangu_lifespan_bridge(self):
+        # 在 workflow post_write 加一个低优先级步骤:
+        # 寿元/伏笔 audit 完后,自动跑盘古词扫,有问题就在日志提示用户做 30 项质检
+        if not (getattr(self, "workflow", None) and self.workflow):
+            return
+        if not getattr(self.workflow, "_registry", None):
+            return
+        try:
+            from workflow_pipeline import PipelineStep
+        except ImportError:
+            return
+
+        mw = self
+
+        class _PanguLifespanBridgeStep(PipelineStep):
+            name = "pangu_lifespan_bridge"
+
+            @property
+            def enabled(self_step):
+                pangu_on = (getattr(mw.tab_settings, "pangu_check", None)
+                            and mw.tab_settings.pangu_check.isChecked())
+                lifespan_on = bool(getattr(mw, "lifespan_ledger", {}).get("enabled"))
+                return pangu_on and lifespan_on
+
+            def run(self_step, ctx, done):
+                content = getattr(ctx, "content", "")
+                if not content:
+                    done()
+                    return
+                try:
+                    from pangu_system import get_default_engine
+                    e = get_default_engine()
+                    r = e.quick_chapter_lint(content)
+                    if not r.get("pass") and hasattr(mw, "tab_generation"):
+                        score = r.get("score", 0)
+                        issues_cnt = len(r.get("issues", []))
+                        level = "warn" if score < 70 else "info"
+                        mw.tab_generation.log(
+                            f"🌀 盘古-lifespan 联动:本章盘古词扫 {score}/100 ({issues_cnt} 处问题)。"
+                            f"建议在章节编辑器点 📊 30项质检 做深度审稿。",
+                            level
+                        )
+                except Exception:
+                    pass
+                done()
+
+        self.workflow._registry.register(
+            "post_write", _PanguLifespanBridgeStep(),
+            priority=45  # 在 lifespan audit (35) / open_loops (40) 之后
+        )
+
+    # ───── Phase C-2:盘古风格库可视化编辑器 ─────
+    def _on_pangu_style_editor(self):
+        try:
+            from pangu_system import STYLE_MAPPING, PanguEngine
+        except ImportError:
+            QMessageBox.warning(self, "缺少盘古", "找不到 pangu_system.py")
+            return
+        from PyQt5.QtCore import QSettings as _QS
+        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+        _s = _QS("NovelAI", "PanguStyleLib")
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🎨 盘古风格库编辑器")
+        dlg.resize(1200, 700)
+        lay = QVBoxLayout(dlg)
+        info = QLabel(
+            "在此编辑/添加/删除风格映射规则。每行一组:\n"
+            "  · 关键词(用 | 分隔)\n"
+            "  · 主风格 / 辅风格 / 点缀风格\n"
+            "  · 女角色基调 / 适合平台\n"
+            "保存后会持久化到本机,覆盖内置规则。点【恢复内置】可还原。"
+        )
+        info.setStyleSheet("color:#666;padding:6px;background:#f5f5f5;border-radius:4px;")
+        lay.addWidget(info)
+
+        table = QTableWidget()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["关键词(|分隔)", "主风格", "辅风格", "点缀", "女基调 / 平台"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+        saved = _s.value("custom_mapping", None)
+        if saved and isinstance(saved, list) and saved:
+            rules = saved
+        else:
+            rules = [dict(r) for r in STYLE_MAPPING]
+
+        def load_table(rs):
+            table.setRowCount(len(rs))
+            for i, r in enumerate(rs):
+                table.setItem(i, 0, QTableWidgetItem(r.get("kw", "")))
+                table.setItem(i, 1, QTableWidgetItem(r.get("main", "")))
+                table.setItem(i, 2, QTableWidgetItem(r.get("sub", "")))
+                table.setItem(i, 3, QTableWidgetItem(r.get("accent", "")))
+                table.setItem(i, 4, QTableWidgetItem(
+                    f"{r.get('female', '')} / {r.get('platform', '')}"))
+
+        load_table(rules)
+        lay.addWidget(table, 1)
+
+        btn_row = QHBoxLayout()
+        btn_add = QPushButton("➕ 添加")
+        btn_del = QPushButton("🗑️ 删除选中")
+        btn_save = QPushButton("💾 保存(覆盖内置)")
+        btn_save.setStyleSheet("background:#16a085;color:white;padding:6px 14px;border-radius:3px;")
+        btn_reset = QPushButton("🔄 恢复内置")
+        btn_export = QPushButton("📤 导出")
+        btn_close = QPushButton("关闭")
+        btn_row.addWidget(btn_add)
+        btn_row.addWidget(btn_del)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_export)
+        btn_row.addWidget(btn_reset)
+        btn_row.addWidget(btn_save)
+        btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
+
+        def do_add():
+            r = table.rowCount()
+            table.insertRow(r)
+            for col in range(5):
+                table.setItem(r, col, QTableWidgetItem(""))
+
+        def do_del():
+            rows = sorted({i.row() for i in table.selectedIndexes()}, reverse=True)
+            for r in rows:
+                table.removeRow(r)
+
+        def serialize_table():
+            out = []
+            for i in range(table.rowCount()):
+                kw = table.item(i, 0).text().strip() if table.item(i, 0) else ""
+                if not kw:
+                    continue
+                main = table.item(i, 1).text().strip() if table.item(i, 1) else ""
+                sub = table.item(i, 2).text().strip() if table.item(i, 2) else ""
+                accent = table.item(i, 3).text().strip() if table.item(i, 3) else ""
+                fp = table.item(i, 4).text().strip() if table.item(i, 4) else ""
+                if "/" in fp:
+                    female, platform = [s.strip() for s in fp.split("/", 1)]
+                else:
+                    female, platform = fp, ""
+                out.append({
+                    "kw": kw, "main": main, "sub": sub,
+                    "accent": accent, "female": female, "platform": platform,
+                })
+            return out
+
+        def do_save():
+            data = serialize_table()
+            if not data:
+                QMessageBox.warning(dlg, "保存失败", "至少需要 1 条规则")
+                return
+            _s.setValue("custom_mapping", data)
+            from pangu_system import STYLE_MAPPING as _SM
+            _SM.clear()
+            _SM.extend(data)
+            QMessageBox.information(dlg, "已保存",
+                f"已保存 {len(data)} 条规则到本机,并立即生效。\n下次启动会自动加载。")
+
+        def do_reset():
+            if QMessageBox.question(
+                dlg, "确认", "恢复成内置规则?会丢失你的自定义编辑。"
+            ) != QMessageBox.Yes:
+                return
+            _s.remove("custom_mapping")
+            import importlib
+            import pangu_system as _ps
+            importlib.reload(_ps)
+            load_table(list(_ps.STYLE_MAPPING))
+
+        def do_export():
+            data = serialize_table()
+            fn, _ = QFileDialog.getSaveFileName(
+                dlg, "导出风格库", "盘古风格库.json", "JSON (*.json)")
+            if fn:
+                import json as _json
+                Path(fn).write_text(_json.dumps(data, ensure_ascii=False, indent=2),
+                                     encoding="utf-8")
+                QMessageBox.information(dlg, "已导出", fn)
+
+        btn_add.clicked.connect(do_add)
+        btn_del.clicked.connect(do_del)
+        btn_save.clicked.connect(do_save)
+        btn_reset.clicked.connect(do_reset)
+        btn_export.clicked.connect(do_export)
+        btn_close.clicked.connect(dlg.reject)
+        dlg.exec_()
+
 
     def _charlib_extract_from_chapters(self):
         """从已写章节用 AI 一键提取角色/关系/物品/事件/伏笔"""
@@ -6445,6 +6687,19 @@ class MainWindow(QMainWindow):
         target = self.tab_settings.get_words_per_chapter()
         offset = self.tab_settings.get_prompt_offset()
         target_with_offset = max(500, target + offset)
+        # Phase C-1:盘古章节差异化(随盘古总开关启用)
+        _diff_block = ""
+        try:
+            if (getattr(self.tab_settings, "pangu_check", None)
+                    and self.tab_settings.pangu_check.isChecked()):
+                from pangu_system import get_default_engine as _pg_get
+                _recent = [c.get("content", "") for c in self.chapters[-3:]] if self.chapters else []
+                _diff_block = _pg_get().build_seed_variation_block(ch_num, _recent)
+                # 字数浮动 ±10%(章节确定性,同章重试拿同样结果)
+                _jitter = _pg_get().get_word_count_jitter(ch_num)
+                target_with_offset = max(500, int(target_with_offset * _jitter))
+        except Exception:
+            pass
         min_words = max(300, int(target_with_offset * 0.85))
         full = self.tab_settings.get_full_settings_block()
         prompt = PROMPTS["chapter"].format(
@@ -6455,6 +6710,8 @@ class MainWindow(QMainWindow):
             chapter_outline=co[:2500],
             min_words=min_words, target_words=target_with_offset,
         ) + f"\n\n【完整设定参考】\n{full}"
+        if _diff_block:
+            prompt += f"\n\n{_diff_block}"
 
         # ★ 注入对话记忆(旧路径兜底:仅在 workflow 不可用时执行)
         if not self.workflow:
