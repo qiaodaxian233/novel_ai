@@ -2193,6 +2193,9 @@ class CharacterLibrary(QWidget):
         self.timeline   = []   # [{ch_num, event, hero_state}]
         self.items      = []   # [{name, owner, source, ability, status}]
         self.foreshadows= []   # [{ch_num, content, plan_pay_at, paid, paid_at}]
+        # 新增:钩子编年 + 爽点编年
+        self.hooks      = []   # [{ch_num, type, intensity, content}]
+        self.cool_pts   = []   # [{ch_num, type, content}]
         
         self._build_ui()
     
@@ -2200,7 +2203,7 @@ class CharacterLibrary(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         
-        # 顶部: 内嵌标签页 (5个子模块)
+        # 顶部: 内嵌标签页 (7个子模块)
         self.sub_tabs = QTabWidget()
         layout.addWidget(self.sub_tabs)
         
@@ -2210,6 +2213,8 @@ class CharacterLibrary(QWidget):
         self._build_items_tab()
         self._build_power_tab()
         self._build_foreshadows_tab()
+        self._build_hooks_tab()      # 新增:钩子编年
+        self._build_coolpts_tab()    # 新增:爽点编年
         
         # 底部: 操作按钮
         btn_row = QHBoxLayout()
@@ -2636,6 +2641,111 @@ class CharacterLibrary(QWidget):
         rows = sorted(set(idx.row() for idx in self.tbl_fore.selectedIndexes()), reverse=True)
         for r in rows:
             self.tbl_fore.removeRow(r)
+
+    # ── 6. 钩子编年子页 ────────────────────────────────────
+    def _build_hooks_tab(self):
+        from PyQt5.QtWidgets import QTableWidget
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(6, 6, 6, 6)
+        
+        ops = QHBoxLayout()
+        btn_add = QPushButton("➕ 手动添加")
+        btn_add.setMaximumWidth(110)
+        btn_add.clicked.connect(self._add_hook)
+        ops.addWidget(btn_add)
+        btn_del = QPushButton("🗑 删除选中")
+        btn_del.setMaximumWidth(110)
+        btn_del.clicked.connect(self._del_hook)
+        ops.addWidget(btn_del)
+        ops.addStretch()
+        lay.addLayout(ops)
+        
+        self.tbl_hooks = QTableWidget(0, 4)
+        self.tbl_hooks.setHorizontalHeaderLabels([
+            "章节", "钩子类型", "强度", "内容(每章末尾留的悬念)"])
+        self.tbl_hooks.horizontalHeader().setStretchLastSection(True)
+        self.tbl_hooks.verticalHeader().setVisible(False)
+        self.tbl_hooks.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_hooks.setColumnWidth(0, 60)
+        self.tbl_hooks.setColumnWidth(1, 110)
+        self.tbl_hooks.setColumnWidth(2, 70)
+        lay.addWidget(self.tbl_hooks)
+        
+        tip = QLabel(
+            "💡 每章生成完后,AI 输出的【断章钩子】自动入这里。\n"
+            "    用途:全书钩子审计 — 看强度分布、避免连用同类型(对话没说完 + 对话没说完 = 重复)。\n"
+            "    类型常见:对话没说完 / 人物出现 / 秘密暴露 / 倒计时 / 关键动作")
+        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+        
+        self.sub_tabs.addTab(w, "🎣 钩子编年")
+    
+    def _add_hook(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_hooks.rowCount()
+        self.tbl_hooks.insertRow(r)
+        defaults = [str(r+1), "对话没说完", "★★★", "新钩子"]
+        for c, v in enumerate(defaults):
+            self.tbl_hooks.setItem(r, c, QTableWidgetItem(v))
+    
+    def _del_hook(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_hooks.selectedIndexes()), reverse=True)
+        for r in rows:
+            self.tbl_hooks.removeRow(r)
+
+    # ── 7. 爽点编年子页 ────────────────────────────────────
+    def _build_coolpts_tab(self):
+        from PyQt5.QtWidgets import QTableWidget
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(6, 6, 6, 6)
+        
+        ops = QHBoxLayout()
+        btn_add = QPushButton("➕ 手动添加")
+        btn_add.setMaximumWidth(110)
+        btn_add.clicked.connect(self._add_coolpt)
+        ops.addWidget(btn_add)
+        btn_del = QPushButton("🗑 删除选中")
+        btn_del.setMaximumWidth(110)
+        btn_del.clicked.connect(self._del_coolpt)
+        ops.addWidget(btn_del)
+        ops.addStretch()
+        lay.addLayout(ops)
+        
+        self.tbl_cool = QTableWidget(0, 3)
+        self.tbl_cool.setHorizontalHeaderLabels([
+            "章节", "爽点类型", "内容"])
+        self.tbl_cool.horizontalHeader().setStretchLastSection(True)
+        self.tbl_cool.verticalHeader().setVisible(False)
+        self.tbl_cool.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_cool.setColumnWidth(0, 60)
+        self.tbl_cool.setColumnWidth(1, 110)
+        lay.addWidget(self.tbl_cool)
+        
+        tip = QLabel(
+            "💡 每章 AI 输出的【本章爽点】自动入这里。\n"
+            "    用途:全书爽点审计 — 看类型分布,避免连续 3 章都是同种(全是打脸=审美疲劳)。\n"
+            "    类型常见:打脸 / 反转 / 碾压 / 揭秘 / 救场 / 装逼 / 复仇")
+        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+        
+        self.sub_tabs.addTab(w, "🎯 爽点编年")
+    
+    def _add_coolpt(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_cool.rowCount()
+        self.tbl_cool.insertRow(r)
+        defaults = [str(r+1), "打脸", "新爽点"]
+        for c, v in enumerate(defaults):
+            self.tbl_cool.setItem(r, c, QTableWidgetItem(v))
+    
+    def _del_coolpt(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_cool.selectedIndexes()), reverse=True)
+        for r in rows:
+            self.tbl_cool.removeRow(r)
     
     # ── 数据序列化(保存/加载到项目JSON) ────────────────────
     def serialize(self):
@@ -2657,6 +2767,8 @@ class CharacterLibrary(QWidget):
             "items":      tbl_to_list(self.tbl_items, 5),
             "power_levels": tbl_to_list(self.tbl_power, 4),
             "foreshadows":tbl_to_list(self.tbl_fore, 5),
+            "hooks":      tbl_to_list(self.tbl_hooks, 4),  # 新增
+            "cool_pts":   tbl_to_list(self.tbl_cool, 3),   # 新增
             "hero_state": {
                 "age":      self.hero_age.text(),
                 "realm":    self.hero_realm.text(),
@@ -2688,6 +2800,8 @@ class CharacterLibrary(QWidget):
         list_to_tbl(self.tbl_items,     data.get("items", []), 5)
         list_to_tbl(self.tbl_power,     data.get("power_levels", []), 4)
         list_to_tbl(self.tbl_fore,      data.get("foreshadows", []), 5)
+        list_to_tbl(self.tbl_hooks,     data.get("hooks", []), 4)      # 新增
+        list_to_tbl(self.tbl_cool,      data.get("cool_pts", []), 3)   # 新增
         
         hs = data.get("hero_state", {})
         self.hero_age.setText(hs.get("age", "18"))
@@ -8004,6 +8118,43 @@ class MainWindow(QMainWindow):
                         f"已自动注入上一章承接信息({len(bridge_lines)} 条)",
                         "info")
 
+                # 防重复:扫最近 3 章钩子类型 + 爽点类型,如有连用同种,提示 AI 换花样
+                recent_3 = self.chapters[-3:]
+                hook_types = [
+                    (c.get("hook") or {}).get("type", "")
+                    for c in recent_3
+                    if c.get("hook")
+                ]
+                cool_types = []
+                for c in recent_3:
+                    for cp in (c.get("cool_points") or []):
+                        # 取 "类型:内容" 的类型部分
+                        m = re.match(r'^\s*([^::]{1,8})\s*[::]', cp)
+                        if m:
+                            cool_types.append(m.group(1).strip())
+                # 找连用同种(2 次及以上)
+                from collections import Counter
+                hook_cnt = Counter(hook_types)
+                cool_cnt = Counter(cool_types)
+                avoid_lines = []
+                for t, n in hook_cnt.items():
+                    if t and n >= 2:
+                        avoid_lines.append(
+                            f"- 钩子类型【{t}】最近{n}章已用,本章换其他类型"
+                            f"(对话没说完/人物出现/秘密暴露/倒计时/关键动作)")
+                for t, n in cool_cnt.items():
+                    if t and n >= 2:
+                        avoid_lines.append(
+                            f"- 爽点类型【{t}】最近{n}章已用,本章换其他类型"
+                            f"(打脸/反转/碾压/揭秘/救场/装逼/复仇)")
+                if avoid_lines:
+                    prompt += (
+                        "\n\n【避免审美疲劳(最近章节统计)】\n"
+                        + "\n".join(avoid_lines))
+                    self.tab_generation.log(
+                        f"已注入防重复提示({len(avoid_lines)} 条):避免连用同类型钩子/爽点",
+                        "info")
+
         # ★ 注入对话记忆(旧路径兜底:仅在 workflow 不可用时执行)
         if not self.workflow:
             if self.tab_memory.auto_inject.isChecked():
@@ -8625,6 +8776,8 @@ class MainWindow(QMainWindow):
             # ── 把【伏笔状态】同步到 lifespan_loops 伏笔库
             if pangu_meta:
                 self._sync_pangu_seeds_to_lifespan(pangu_meta, ch_num)
+                # ── 钩子 + 爽点 自动写入 🎭 角色与世界 → 🎣 钩子编年 / 🎯 爽点编年
+                self._sync_hook_and_cool_to_charlib(pangu_meta, ch_num)
 
             self._refresh_chapter_list()
             if self.tab_generation.auto_save.isChecked():
@@ -8648,6 +8801,65 @@ class MainWindow(QMainWindow):
         # 后置链:Canon 抽取 → 摘要 → after_chapter 技能 → 下一章
         # (用 QTimer 错开,避免一窝蜂砸到 worker)
         self._post_chapter_chain(last_ch_num)
+
+    def _sync_hook_and_cool_to_charlib(self, pangu_meta: dict, ch_num: int):
+        """把【断章钩子】+【本章爽点】写入 🎭 角色与世界 → 🎣 钩子编年 / 🎯 爽点编年
+        每章一行。如同章重复触发(死磕重写),会按章号去重,只保留最新。"""
+        if not hasattr(self, "tab_charlib"):
+            return
+        from PyQt5.QtWidgets import QTableWidgetItem
+        cl = self.tab_charlib
+
+        # 钩子
+        hook = pangu_meta.get("hook") or {}
+        if hook and hook.get("content"):
+            # 先去掉同章号旧行(死磕重写时)
+            for r in range(cl.tbl_hooks.rowCount() - 1, -1, -1):
+                if cl.tbl_hooks.item(r, 0) and cl.tbl_hooks.item(r, 0).text() == str(ch_num):
+                    cl.tbl_hooks.removeRow(r)
+            r = cl.tbl_hooks.rowCount()
+            cl.tbl_hooks.insertRow(r)
+            vals = [
+                str(ch_num),
+                hook.get("type", ""),
+                hook.get("intensity", ""),
+                hook.get("content", ""),
+            ]
+            for c, v in enumerate(vals):
+                cl.tbl_hooks.setItem(r, c, QTableWidgetItem(str(v)))
+            try:
+                self.tab_generation.log(
+                    f"  · 钩子已入库:第{ch_num}章 / {hook.get('type','')} "
+                    f"/ 强度{hook.get('intensity','')}", "info")
+            except Exception:
+                pass
+
+        # 爽点(可能多条,每条一行;同样按章号去重)
+        cool_list = pangu_meta.get("cool_points") or []
+        if cool_list:
+            # 先去掉同章号旧行
+            for r in range(cl.tbl_cool.rowCount() - 1, -1, -1):
+                if cl.tbl_cool.item(r, 0) and cl.tbl_cool.item(r, 0).text() == str(ch_num):
+                    cl.tbl_cool.removeRow(r)
+            for cool_str in cool_list:
+                # 格式可能是 "类型:内容" 或纯内容
+                cool_type = ""
+                cool_content = cool_str
+                if ":" in cool_str or ":" in cool_str:
+                    parts = re.split(r'[::]', cool_str, 1)
+                    if len(parts) == 2:
+                        cool_type = parts[0].strip()
+                        cool_content = parts[1].strip()
+                r = cl.tbl_cool.rowCount()
+                cl.tbl_cool.insertRow(r)
+                vals = [str(ch_num), cool_type, cool_content]
+                for c, v in enumerate(vals):
+                    cl.tbl_cool.setItem(r, c, QTableWidgetItem(str(v)))
+            try:
+                self.tab_generation.log(
+                    f"  · 爽点已入库:第{ch_num}章 / {len(cool_list)} 条", "info")
+            except Exception:
+                pass
 
     def _sync_pangu_seeds_to_lifespan(self, pangu_meta: dict, ch_num: int):
         """把盘古【伏笔状态】的埋雷/收雷自动写入 lifespan_loops 的伏笔库。
