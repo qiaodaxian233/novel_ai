@@ -8681,6 +8681,22 @@ class MainWindow(QMainWindow):
                     "章末缺少钩子:最后一段没有问号/省略号/转折词,"
                     "读者追更欲不足。请在结尾留一个新悬念或反转")
 
+        # 3. 禁用词扫描(高严重度 → 直接触发死磕重写)
+        # 阈值:总命中次数 >5 或 单词命中 >2 都算违反
+        try:
+            from pangu_system import PanguEngine as _PE
+            hits = _PE.detect_forbidden_words(content)
+            total_count = sum(c for _, c in hits)
+            heavy_words = [(w, c) for w, c in hits if c >= 2]
+            if total_count > 5 or heavy_words:
+                top_str = ", ".join(f"{w}×{c}" for w, c in hits[:8])
+                issues.append(
+                    f"禁用词违规(累计 {total_count} 次,触发铁律):{top_str}。"
+                    f"必须全部删除或换说法,这是盘古铁律第 15 条"
+                )
+        except Exception:
+            pass
+
         return issues, (cfg.get("canon") or cfg.get("rhythm") or cfg.get("character"))
 
     def _retry_chapter_with_reasons(self, meta, reasons):
@@ -8697,8 +8713,28 @@ class MainWindow(QMainWindow):
         new_meta["retry_left"] = retry - 1
         new_meta.pop("_held_content", None)
         reason_block = "\n".join(f"  · {r}" for r in reasons)
+        # 如果违规里有禁用词,加超强力指令
+        has_forbidden = any("禁用词违规" in r for r in reasons)
+        forbidden_extra = ""
+        if has_forbidden:
+            forbidden_extra = (
+                "\n\n🚨【最高优先级:禁用词清零】🚨\n"
+                "上次本章用了禁用词,这是盘古铁律不可违反的死规。\n"
+                "重写本章时,每写一句都问自己:这句有禁用词吗?\n"
+                "替换策略:\n"
+                "- 副词类(顿时/连忙/显然/似乎/可能/几乎...)→ 直接删除,不加任何替代\n"
+                "- 心理动词(知道/觉得/想/认为)→ 换成具体动作或对话\n"
+                "  错例:他知道这不对   正例:他咬了咬牙\n"
+                "  错例:她觉得很冷    正例:她搓了搓手臂,起了一层鸡皮疙瘩\n"
+                "- 套话(嘴角勾起/眼中闪过/心下了然)→ 整句重写\n"
+                "- 比喻词(仿佛/如同/像)→ 改成直接断言\n"
+                "  错例:他仿佛被雷劈了    正例:他僵在原地\n"
+                "重写完后自查一遍,如果还有任何禁用词,继续删继续换,直到清零。\n"
+            )
+
         stronger = (meta.get("original_prompt", "")
                     + "\n\n【上次问题清单(必须修正)】\n" + reason_block
+                    + forbidden_extra
                     + "\n\n请重写本章,严格规避以上所有问题。")
         self._pending_task_target = new_meta
         self.tab_generation.log(
