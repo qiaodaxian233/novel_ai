@@ -5034,7 +5034,23 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("AI 写作工作台")
         self.resize(1280, 820)
-        self.setStyleSheet(STYLESHEET)
+        # 按 font_scale 把全局样式表里的 font-size: Npx 全部按倍率放大
+        # 这是修 BUG-016 的关键 — 不然 app.setFont() 被这里的 13px 死压
+        _scale = 1.0
+        try:
+            from PyQt5.QtWidgets import QApplication as _QA
+            _scale = float(_QA.instance().property("_novelai_dpi_scale") or 1.0)
+        except Exception:
+            pass
+        if _scale > 1.0:
+            import re as _re
+            def _sz(m):
+                n = int(m.group(1))
+                return f"font-size: {int(round(n * _scale))}px"
+            scaled_qss = _re.sub(r'font-size:\s*(\d+)px', _sz, STYLESHEET)
+            self.setStyleSheet(scaled_qss)
+        else:
+            self.setStyleSheet(STYLESHEET)
 
         # 恢复上次窗口大小和位置
         from PyQt5.QtCore import QSettings
@@ -5154,17 +5170,32 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # BUG-016 配套:遍历所有子 widget 把局部 setStyleSheet 里的 font-size 也按倍率放大
+        # (全文 26 处 setStyleSheet 写死 font-size,只改全局 STYLESHEET 还不够)
+        if _scale > 1.0:
+            try:
+                import re as _re2
+                def _scale_qss_str(s):
+                    return _re2.sub(r'font-size:\s*(\d+)px',
+                        lambda m: f"font-size: {int(round(int(m.group(1)) * _scale))}px", s)
+                for w in self.findChildren(QWidget):
+                    ss = w.styleSheet()
+                    if ss and "font-size" in ss:
+                        w.setStyleSheet(_scale_qss_str(ss))
+            except Exception:
+                pass
+
         # ───── 启动时按当前 AI 站点联动 3 checkbox 默认值 ─────
-        # 用户原话:'如果选择DeepSeek 这三个默认不勾选 如果选了gpt 镜像站自动勾选'
+        # 用户原话:'除了镜像站和GPT 其他都不勾选'
         try:
             _cur_btn = self.tab_settings.ai_group.checkedButton()
             if _cur_btn is not None:
                 _ai = _cur_btn.text()
-                if _ai == "ChatGPT镜像":
+                if _ai in ("ChatGPT", "ChatGPT镜像"):
                     self.tab_generation.auto_save.setChecked(True)
                     self.tab_generation.auto_grab.setChecked(True)
                     self.tab_generation.use_attachment.setChecked(True)
-                elif _ai in ("DeepSeek", "豆包", "Gemini", "元宝", "小米AI"):
+                elif _ai != "自定义":
                     self.tab_generation.auto_save.setChecked(False)
                     self.tab_generation.auto_grab.setChecked(False)
                     self.tab_generation.use_attachment.setChecked(False)
@@ -5534,22 +5565,23 @@ class MainWindow(QMainWindow):
             self.tab_generation.log(f"已切换到 {ai}: {url}", "info")
             if self.worker.is_ready():
                 self.worker.submit({"action": "navigate", "url": url})
-        # AI 站点联动:DeepSeek 等无审核站 → 关掉附件/自动抓取/TXT 备份
-        # ChatGPT 镜像等需绕审核 → 全部打开
-        # 用户原话:"如果选择DeepSeek 这三个默认不勾选 如果选了gpt 镜像站自动勾选"
+        # AI 站点联动:ChatGPT/镜像站 → 3 checkbox 全开;其他 AI → 全关
+        # 用户原话:"除了镜像站和GPT 其他都不勾选"
+        # 注意:radio text 是 "ChatGPT"(不是 AI_URLS 里的 "ChatGPT镜像")
         try:
             tg = self.tab_generation
-            if ai == "ChatGPT镜像":
+            if ai in ("ChatGPT", "ChatGPT镜像"):
                 tg.auto_save.setChecked(True)
                 tg.auto_grab.setChecked(True)
                 tg.use_attachment.setChecked(True)
-                tg.log("已切到镜像站 → 自动保存TXT/自动抓取/附件模式 全部打开", "info")
-            elif ai in ("DeepSeek", "豆包", "Gemini", "元宝", "小米AI"):
+                tg.log(f"已切到 {ai} → 自动保存TXT/自动抓取/附件模式 全部打开", "info")
+            elif ai == "自定义":
+                pass  # 不动用户当前选择
+            else:
                 tg.auto_save.setChecked(False)
                 tg.auto_grab.setChecked(False)
                 tg.use_attachment.setChecked(False)
                 tg.log(f"已切到 {ai} → 自动保存TXT/自动抓取/附件模式 全部关闭(此站无审核,直发更快)", "info")
-            # 其他(自定义)保持现状不动
         except Exception:
             pass
 
