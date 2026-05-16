@@ -882,6 +882,7 @@ class CreationSettings(QWidget):
 
         # ---- 题材 ----
         gbox = QGroupBox("题材选择")
+        self.box_genre = gbox  # 第 7 项:用于折叠链
         glay = QGridLayout(gbox)
         self.genre_checks = {}
         for r, row_data in enumerate(GENRES):
@@ -891,6 +892,16 @@ class CreationSettings(QWidget):
                     cb.setChecked(True)
                 self.genre_checks[name] = cb
                 glay.addWidget(cb, r, c)
+        # 第 3 项:加 "✏️ 自定义" 按钮(末行),弹 QInputDialog 输入新题材
+        self._genre_custom_row = len(GENRES)
+        self._genre_custom_col = 0
+        self.btn_genre_custom = QPushButton("✏️ 自定义题材")
+        self.btn_genre_custom.setStyleSheet(
+            "QPushButton { color:#1a4480; padding:4px 8px; border:1px dashed #1a4480; }"
+            "QPushButton:hover { background:#eaf3ff; }")
+        self.btn_genre_custom.clicked.connect(self._add_custom_genre)
+        glay.addWidget(self.btn_genre_custom, self._genre_custom_row, 0, 1, 4)
+        self._genre_layout = glay  # 留引用,自定义条目时往里加
         layout.addWidget(gbox)
 
         # ---- 灵感 ----
@@ -1033,15 +1044,49 @@ class CreationSettings(QWidget):
 
         # ---- 时代背景 ----
         era_box = QGroupBox("时代背景")
+        self.box_era = era_box  # 第 7 项
         era_lay = QHBoxLayout(era_box)
         self.era_combo = QComboBox()
+        self.era_combo.setEditable(False)
         self.era_combo.addItems(ERAS)
+        # 末尾加一个"✏️ 自定义..."条目
+        self.era_combo.addItem("✏️ 自定义...")
         self.era_combo.setCurrentText("古代王朝")
+        # 第 4 项:选中"自定义..."条目 → 弹输入框,新值加进下拉并选中
+        def _on_era_changed(text):
+            if text == "✏️ 自定义...":
+                from PyQt5.QtWidgets import QInputDialog
+                new_era, ok = QInputDialog.getText(
+                    self, "自定义时代背景",
+                    "输入新的时代背景(回车确认):")
+                if ok and new_era.strip():
+                    new_era = new_era.strip()
+                    # 插入到"自定义..."条目前
+                    insert_idx = self.era_combo.count() - 1
+                    # 检查是否已存在
+                    exist = self.era_combo.findText(new_era)
+                    if exist >= 0:
+                        self.era_combo.setCurrentIndex(exist)
+                    else:
+                        self.era_combo.insertItem(insert_idx, new_era)
+                        self.era_combo.setCurrentText(new_era)
+                    # 持久化自定义时代列表
+                    self._save_custom_eras()
+                else:
+                    # 取消 → 回到上一个选项(不是自定义占位符)
+                    if self.era_combo.count() > 1:
+                        self.era_combo.setCurrentIndex(0)
+        self.era_combo.currentTextChanged.connect(_on_era_changed)
         era_lay.addWidget(self.era_combo, 1)
         era_lay.addWidget(QLabel("自定义:"))
         self.era_custom = QLineEdit("古代王朝")
         era_lay.addWidget(self.era_custom, 1)
         layout.addWidget(era_box)
+        # 启动时加载用户保存过的自定义时代
+        try:
+            self._load_custom_eras()
+        except Exception:
+            pass
 
         # ---- 生成规模 ----
         scale_label = QLabel("生成规模")
@@ -1194,6 +1239,7 @@ class CreationSettings(QWidget):
 
         # ---- 金手指(可多选) ----
         gf_box = QGroupBox("金手指 (可多选)")
+        self.box_golden = gf_box  # 第 7 项
         gf_outer = QVBoxLayout(gf_box)
         # 工具按钮:全选 / 清空
         gf_tools = QHBoxLayout()
@@ -1213,6 +1259,14 @@ class CreationSettings(QWidget):
         gf_outer.addLayout(gf_grid)
         btn_gf_all.clicked.connect(lambda: [cb.setChecked(True) for cb in self.golden_checks.values()])
         btn_gf_clear.clicked.connect(lambda: [cb.setChecked(False) for cb in self.golden_checks.values()])
+        # 第 5 项:金手指自定义按钮
+        self._golden_grid = gf_grid
+        btn_gf_custom = QPushButton("✏️ 自定义金手指")
+        btn_gf_custom.setStyleSheet(
+            "QPushButton { color:#1a4480; padding:4px 8px; border:1px dashed #1a4480; }"
+            "QPushButton:hover { background:#eaf3ff; }")
+        btn_gf_custom.clicked.connect(self._add_custom_golden)
+        gf_outer.addWidget(btn_gf_custom)
         layout.addWidget(gf_box)
 
         # ---- 主角人设(可多选) ----
@@ -1235,6 +1289,14 @@ class CreationSettings(QWidget):
         pe_outer.addLayout(pe_grid)
         btn_pe_all.clicked.connect(lambda: [cb.setChecked(True) for cb in self.persona_checks.values()])
         btn_pe_clear.clicked.connect(lambda: [cb.setChecked(False) for cb in self.persona_checks.values()])
+        # 第 6 项:主角人设自定义按钮
+        self._persona_grid = pe_grid
+        btn_pe_custom = QPushButton("✏️ 自定义主角人设")
+        btn_pe_custom.setStyleSheet(
+            "QPushButton { color:#1a4480; padding:4px 8px; border:1px dashed #1a4480; }"
+            "QPushButton:hover { background:#eaf3ff; }")
+        btn_pe_custom.clicked.connect(self._add_custom_persona)
+        pe_outer.addWidget(btn_pe_custom)
         layout.addWidget(pe_box)
 
         layout.addStretch()
@@ -1485,6 +1547,202 @@ class CreationSettings(QWidget):
         special = s.value("special_edit", "")
         if special and hasattr(self, "special_edit"):
             self.special_edit.setPlainText(special)
+
+    def enable_auto_save(self):
+        """第 1 项: 任何设置改动后 1.5 秒自动持久化(debounce)
+        防止用户改了设置没关窗口就丢失"""
+        from PyQt5.QtCore import QTimer
+        if hasattr(self, "_auto_save_timer"):
+            return  # 已安装,不重复
+        self._auto_save_timer = QTimer(self)
+        self._auto_save_timer.setSingleShot(True)
+        self._auto_save_timer.setInterval(1500)
+        self._auto_save_timer.timeout.connect(self._auto_save_fire)
+
+        def _dirty(*_a, **_kw):
+            self._auto_save_timer.start()
+
+        # 多选 checkbox 组
+        for d in (self.genre_checks, self.ending_checks,
+                  self.golden_checks, self.persona_checks):
+            for cb in d.values():
+                cb.toggled.connect(_dirty)
+        # 单选 button group
+        for grp in (self.platform_group, self.audience_group,
+                    self.density_group, self.growth_group,
+                    self.conflict_group, self.detail_group,
+                    self.rhythm_group, self.mode_group, self.ai_group):
+            grp.buttonClicked.connect(_dirty)
+        # 数值 spinbox
+        for sb in (self.chapter_custom, self.words_custom, self.prompt_offset):
+            sb.valueChanged.connect(_dirty)
+        # ComboBox / LineEdit / 单 checkbox / TextEdit
+        self.era_combo.currentTextChanged.connect(_dirty)
+        self.era_custom.textChanged.connect(_dirty)
+        self.custom_url.textChanged.connect(_dirty)
+        self.delay_check.toggled.connect(_dirty)
+        self.pangu_check.toggled.connect(_dirty)
+        self.pangu_whitelist_edit.textChanged.connect(_dirty)
+        if hasattr(self, "special_edit"):
+            self.special_edit.textChanged.connect(_dirty)
+        # 风格滑块
+        for sl in self.style_sliders.values():
+            sl.valueChanged.connect(_dirty)
+
+    def _auto_save_fire(self):
+        """timer 到点,真实写盘"""
+        try:
+            self.save_settings()
+        except Exception:
+            pass  # 自动保存失败不影响 UI
+
+    # ── 第 3/5/6 项:自定义选项 helpers ──────────────────
+    def _add_custom_checkbox(self, title, target_dict, grid_layout, prefs_key):
+        """通用:弹输入框 → 加 QCheckBox → 持久化到 QSettings"""
+        from PyQt5.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(
+            self, f"自定义{title}", f"输入新的{title}名称(回车确认):")
+        if not (ok and name.strip()):
+            return
+        name = name.strip()
+        if name in target_dict:
+            return  # 重复忽略
+        cb = QCheckBox(name)
+        cb.setChecked(True)
+        cb.setStyleSheet("QCheckBox { color:#b4884e; }")  # 自定义条目用米色区分
+        target_dict[name] = cb
+        # 找空格子追加(末行末尾)
+        from PyQt5.QtCore import QSettings
+        s = QSettings("NovelAI", "CreationSettings")
+        existing = s.value(prefs_key, [], type=list) or []
+        if name not in existing:
+            existing.append(name)
+        s.setValue(prefs_key, existing)
+        # 添加到 grid:扫一遍找空位
+        n = len(target_dict) - 1  # 当前位置
+        r, c = n // 4, n % 4
+        grid_layout.addWidget(cb, r + 100, c)  # 加大 row 偏移,避开预定义条目
+        # 通知 auto_save dirty
+        try:
+            cb.toggled.connect(lambda: self._auto_save_timer.start()
+                               if hasattr(self, "_auto_save_timer") else None)
+        except Exception:
+            pass
+
+    def _add_custom_genre(self):
+        self._add_custom_checkbox(
+            "题材", self.genre_checks, self._genre_layout, "custom_genres")
+
+    def _add_custom_golden(self):
+        self._add_custom_checkbox(
+            "金手指", self.golden_checks, self._golden_grid, "custom_goldens")
+
+    def _add_custom_persona(self):
+        self._add_custom_checkbox(
+            "主角人设", self.persona_checks, self._persona_grid, "custom_personas")
+
+    def _save_custom_eras(self):
+        """把当前下拉里所有用户自定义的时代保存到 QSettings"""
+        from PyQt5.QtCore import QSettings
+        builtins = set(ERAS) | {"✏️ 自定义..."}
+        custom = []
+        for i in range(self.era_combo.count()):
+            t = self.era_combo.itemText(i)
+            if t not in builtins:
+                custom.append(t)
+        QSettings("NovelAI", "CreationSettings").setValue("custom_eras", custom)
+
+    def _load_custom_eras(self):
+        """启动时加载用户保存过的自定义时代,插到"自定义..."条目前"""
+        from PyQt5.QtCore import QSettings
+        custom = QSettings("NovelAI", "CreationSettings").value(
+            "custom_eras", [], type=list) or []
+        insert_at = self.era_combo.count() - 1  # 在"自定义..."前
+        for era in custom:
+            if era and self.era_combo.findText(era) < 0:
+                self.era_combo.insertItem(insert_at, era)
+                insert_at += 1
+
+    def _load_custom_checks(self):
+        """启动时把 QSettings 里的自定义题材/金手指/人设条目加回 UI"""
+        from PyQt5.QtCore import QSettings
+        s = QSettings("NovelAI", "CreationSettings")
+        for prefs_key, target_dict, grid in [
+            ("custom_genres",   self.genre_checks,   self._genre_layout),
+            ("custom_goldens",  self.golden_checks,  self._golden_grid),
+            ("custom_personas", self.persona_checks, self._persona_grid),
+        ]:
+            items = s.value(prefs_key, [], type=list) or []
+            for name in items:
+                if name in target_dict:
+                    continue
+                cb = QCheckBox(name)
+                cb.setStyleSheet("QCheckBox { color:#b4884e; }")
+                target_dict[name] = cb
+                n = len(target_dict) - 1
+                r, c = n // 4, n % 4
+                grid.addWidget(cb, r + 100, c)
+
+    def _install_collapsible_chain(self):
+        """第 7 项:把题材/时代/金手指/主角人设 4 个 group 串成折叠链
+        - 每个 box.setCheckable(True),勾掉 = 折叠内容(节省空间)
+        - 每个 box(除最后)末尾加 ✓ 完成,继续下一项按钮:折叠当前 + 展开下一个
+        - 配合 enable_auto_save 一起,改了立刻持久化"""
+        boxes = [
+            getattr(self, "box_genre", None),
+            getattr(self, "box_era", None),
+            getattr(self, "box_golden", None),
+            getattr(self, "box_persona", None),
+        ]
+        boxes = [b for b in boxes if b is not None and b.layout() is not None]
+        if len(boxes) < 2:
+            return
+
+        box_inner = {}
+        # 步骤 1:让每个 box 可折叠
+        for box in boxes:
+            # 收集"现在的"layout 里所有 widget(我们加按钮之前)
+            inner = []
+            def _walk(lay, _out=inner):
+                for j in range(lay.count()):
+                    it = lay.itemAt(j)
+                    w = it.widget() if it else None
+                    if w:
+                        _out.append(w)
+                    sub = it.layout() if it else None
+                    if sub:
+                        _walk(sub, _out)
+            _walk(box.layout())
+            box_inner[id(box)] = inner
+            box.setCheckable(True)
+            box.setChecked(True)
+            box.setToolTip("点标题左侧的勾选框可折叠 / 展开")
+
+            def make_handler(w_list):
+                def _on_toggled(checked):
+                    for w in w_list:
+                        w.setVisible(checked)
+                return _on_toggled
+            box.toggled.connect(make_handler(inner))
+
+        # 步骤 2:除最后一个 box,都加 ✓ 完成按钮 → 折叠当前 + 展开下一个
+        for i in range(len(boxes) - 1):
+            cur = boxes[i]
+            nxt = boxes[i + 1]
+            btn = QPushButton("✓ 完成此项,自动跳到下一项")
+            btn.setStyleSheet(
+                "QPushButton { color:white; background:#2ecc71; padding:6px 14px; "
+                "border-radius:3px; font-weight:bold; margin-top:6px; }"
+                "QPushButton:hover { background:#27ae60; }")
+            def make_next(cur_box=cur, nxt_box=nxt):
+                def _f():
+                    cur_box.setChecked(False)  # 折叠
+                    nxt_box.setChecked(True)   # 展开下一个
+                return _f
+            btn.clicked.connect(make_next())
+            cur.layout().addWidget(btn)
+            # 按钮也归到 inner list:折叠时一起隐藏(只剩标题条)
+            box_inner[id(cur)].append(btn)
 
 
 # =====================================================================
@@ -4850,6 +5108,18 @@ class MainWindow(QMainWindow):
         # 先加载项目数据，再加载设置（QSettings优先级更高，覆盖项目文件中的旧设置）
         self._autoload()
         self.tab_settings.load_settings()
+        # 第 3/5/6 项:恢复用户保存过的自定义题材/金手指/人设条目
+        try:
+            self.tab_settings._load_custom_checks()
+        except Exception:
+            pass
+        # 第 1 项:加载完之后再装自动保存钩子(避免 load 过程被当作 dirty)
+        self.tab_settings.enable_auto_save()
+        # 第 7 项:把题材/时代/金手指/人设串成折叠链
+        try:
+            self.tab_settings._install_collapsible_chain()
+        except Exception:
+            pass
 
         # Phase C-2:启动时加载用户自定义风格库(覆盖内置)
         try:
@@ -4860,6 +5130,16 @@ class MainWindow(QMainWindow):
                 from pangu_system import STYLE_MAPPING as _SM
                 _SM.clear()
                 _SM.extend(_custom_styles)
+        except Exception:
+            pass
+
+        # ───── 第 9 项:60 秒定时 autosave(防止崩溃丢失对话记忆) ─────
+        try:
+            from PyQt5.QtCore import QTimer as _AsT
+            self._periodic_autosave_timer = _AsT(self)
+            self._periodic_autosave_timer.setInterval(60_000)  # 60 秒
+            self._periodic_autosave_timer.timeout.connect(self._periodic_autosave_fire)
+            self._periodic_autosave_timer.start()
         except Exception:
             pass
 
@@ -4927,6 +5207,7 @@ class MainWindow(QMainWindow):
             ("新建项目", self.new_project, ""),
             ("打开项目", self.open_project, "Ctrl+O"),
             ("保存项目", self.save_project, "Ctrl+S"),
+            ("🕓 恢复历史版本(最近 10 次)", self.restore_project_backup, ""),
             (None, None, ""),
             ("退出", self.close, ""),
         ]:
@@ -5461,6 +5742,12 @@ class MainWindow(QMainWindow):
                     ch["summary"] = summary
                     self.tab_memory.append_summary(ch_num, ch["title"], summary)
                 self.tab_generation.log(f"✓ 第 {ch_num} 章摘要已记入对话记忆", "success")
+                # 第 9 项:摘要进盘 → 立即 autosave,保证不丢
+                try:
+                    self._autosave()
+                    self.tab_generation.log("  · 已自动保存到项目文件", "info")
+                except Exception:
+                    pass
             # 链式触发:正在跑后置流水线 → 推进
             if getattr(self, "_post_chapter_pipeline", None):
                 QTimer.singleShot(500, self._run_next_post_chapter_step)
@@ -8057,6 +8344,25 @@ class MainWindow(QMainWindow):
             pass
         event.accept()
 
+    def _periodic_autosave_fire(self):
+        """第 9 项配套:60 秒定时 autosave,只在有项目文件且内容有变化时跑,
+        避免无意义的写盘和日志噪音"""
+        try:
+            # 没打开任何项目,跳过
+            if not self.current_project_file:
+                return
+            # 章节为空且记忆为空 → 跳过
+            if not self.chapters and not self.tab_memory.summaries_edit.toPlainText().strip():
+                return
+            self._autosave()
+            # 静默写日志(不弹 UI),便于事后追溯
+            try:
+                self.tab_generation.log("⏱ 60s 定时 autosave 已执行", "info")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _autosave(self):
         """自动保存到当前项目文件，若无则保存到 autosave.json"""
         try:
@@ -8364,6 +8670,8 @@ class MainWindow(QMainWindow):
             "saved_at": datetime.now().isoformat(),
         }
         try:
+            # 第 2 项:写入前先备份当前文件,保留最近 10 次
+            self._rotate_project_backups(self.current_project_file)
             Path(self.current_project_file).write_text(
                 json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
             self.statusBar().showMessage(f"已保存:{self.current_project_file}", 3000)
@@ -8373,6 +8681,83 @@ class MainWindow(QMainWindow):
                 f"无法写入项目文件:\n{self.current_project_file}\n\n错误:{e}\n\n"
                 "请检查:1) 路径是否可写  2) 磁盘是否已满  3) 文件名是否合法")
             self.tab_generation.log(f"✗ 保存项目失败:{e}", "error")
+
+    def _rotate_project_backups(self, project_path: str, keep: int = 10):
+        """第 2 项:在 .backups/ 子目录里保留最近 N 次保存的快照。
+        命名:<项目名>.YYYYMMDD-HHMMSS.json  超过 keep 个的最老备份删除。"""
+        try:
+            p = Path(project_path)
+            if not p.exists():
+                return  # 第一次保存没旧文件可备份
+            backup_dir = p.parent / ".backups"
+            backup_dir.mkdir(exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_path = backup_dir / f"{p.stem}.{ts}{p.suffix}"
+            backup_path.write_bytes(p.read_bytes())
+            # 清理超过 keep 个的旧备份(只清同名前缀的)
+            siblings = sorted(
+                backup_dir.glob(f"{p.stem}.*{p.suffix}"),
+                key=lambda x: x.stat().st_mtime,
+                reverse=True,
+            )
+            for old in siblings[keep:]:
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass  # 备份失败不影响主保存
+
+    def restore_project_backup(self):
+        """第 2 项配套:从 .backups/ 里挑一个版本恢复"""
+        if not self.current_project_file:
+            QMessageBox.information(self, "提示", "当前没有打开的项目文件,无备份可选")
+            return
+        p = Path(self.current_project_file)
+        backup_dir = p.parent / ".backups"
+        if not backup_dir.exists():
+            QMessageBox.information(self, "提示", f"找不到 {backup_dir}\n还没产生过备份")
+            return
+        backups = sorted(
+            backup_dir.glob(f"{p.stem}.*{p.suffix}"),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True,
+        )
+        if not backups:
+            QMessageBox.information(self, "提示", "备份目录为空")
+            return
+        items = [f"{i+1}. {b.name}  ({datetime.fromtimestamp(b.stat().st_mtime).strftime('%m-%d %H:%M:%S')})"
+                 for i, b in enumerate(backups)]
+        choice, ok = QInputDialog.getItem(
+            self, "选择恢复版本",
+            f"从最近 {len(backups)} 个备份里选:",
+            items, 0, False)
+        if not ok or not choice:
+            return
+        idx = items.index(choice)
+        chosen = backups[idx]
+        ret = QMessageBox.question(
+            self, "确认恢复",
+            f"将用以下备份覆盖当前项目文件:\n\n{chosen.name}\n\n"
+            f"当前文件会先备份为 .before_restore 后缀。继续?",
+            QMessageBox.Yes | QMessageBox.No)
+        if ret != QMessageBox.Yes:
+            return
+        try:
+            # 当前先额外存一份
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            before = backup_dir / f"{p.stem}.before_restore.{ts}{p.suffix}"
+            if p.exists():
+                before.write_bytes(p.read_bytes())
+            p.write_bytes(chosen.read_bytes())
+            QMessageBox.information(
+                self, "已恢复",
+                f"恢复完成。现重新打开项目以加载内容。\n\n"
+                f"恢复前的版本另存为:{before.name}")
+            # 重新加载
+            self.open_project(self.current_project_file)
+        except Exception as e:
+            QMessageBox.critical(self, "恢复失败", str(e))
 
     def new_directory(self):
         name, ok = QInputDialog.getText(self, "新建目录", "目录名:")
@@ -8408,8 +8793,41 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # ── 第 8 项: 4K HiDPI 自动缩放 ──────────────────────
+    # 必须在 QApplication 创建 *之前* 设置这两个属性
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    # 检测屏幕分辨率,4K 及以上自动放大默认字体
+    try:
+        screen = app.primaryScreen()
+        if screen is not None:
+            sz = screen.size()
+            w, h = sz.width(), sz.height()
+            # 4K: 3840x2160 或更高;2.5K: 2560x1440;1080P: 1920x1080
+            if w >= 3000 or h >= 1900:
+                # 4K → 字体 +50%
+                _scale = 1.5
+            elif w >= 2400 or h >= 1500:
+                # 2.5K → 字体 +25%
+                _scale = 1.25
+            else:
+                _scale = 1.0
+            if _scale > 1.0:
+                from PyQt5.QtGui import QFont
+                _font = app.font()
+                _base = _font.pointSizeF() if _font.pointSizeF() > 0 else 9.0
+                _font.setPointSizeF(_base * _scale)
+                app.setFont(_font)
+                # 标记到 app 属性供窗口启动时打日志用
+                app.setProperty("_novelai_dpi_scale", _scale)
+                app.setProperty("_novelai_screen_w", w)
+                app.setProperty("_novelai_screen_h", h)
+    except Exception:
+        pass
 
     # ── 授权验证 ──────────────────────────
     from license_guard import LicenseGuard
@@ -8420,6 +8838,17 @@ def main():
     try:
         win = MainWindow()
         win.show()
+        # 4K 缩放日志
+        try:
+            _sc = app.property("_novelai_dpi_scale")
+            if _sc and _sc > 1.0:
+                _w = app.property("_novelai_screen_w")
+                _h = app.property("_novelai_screen_h")
+                win.tab_generation.log(
+                    f"✓ HiDPI 自动缩放已启用:屏幕 {_w}×{_h},字体放大 ×{_sc}",
+                    "success")
+        except Exception:
+            pass
     except Exception as e:
         import traceback
         from PyQt5.QtWidgets import QMessageBox
