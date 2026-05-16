@@ -7850,7 +7850,14 @@ class MainWindow(QMainWindow):
         return None
 
     def _strip_chapter_title(self, content):
-        """如果首行是章节标题就移除"""
+        """如果首行是章节标题就移除 + 最终防线剥离任何残留元信息"""
+        # ── 最终防线:强制再 strip 一次元信息(双保险,不管上游有没有剥过)
+        try:
+            from pangu_system import strip_chapter_meta
+            content = strip_chapter_meta(content)
+        except Exception:
+            pass
+
         lines = content.splitlines()
         if not lines:
             return content
@@ -8577,8 +8584,8 @@ class MainWindow(QMainWindow):
                 _stripped = len(content) - len(body_clean)
                 if _stripped > 0:
                     self.tab_generation.log(
-                        f"✓ 已剥离章节尾部元信息 {_stripped} 字"
-                        f"(钩子/爽点/伏笔/下章选项 → 移到面板)",
+                        f"✓ 已剥离章节尾部元信息 {_stripped} 字 → 切到【章节编辑器】Tab,"
+                        f"字数下方📌米色面板可看钩子/爽点/伏笔/下一章选项",
                         "info")
                 elif "本章完" in content or "【断章钩子】" in content \
                         or "断章钩子" in content or "下一章选项" in content:
