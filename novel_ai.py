@@ -512,19 +512,6 @@ class _PanguForbiddenHighlighter(QSyntaxHighlighter):
         except Exception:
             self._words = []
 
-        # ───── 首次启动盘古介绍 banner(Phase A 新增) ─────
-        try:
-            from PyQt5.QtCore import QSettings as _QS
-            _s = _QS("NovelAI", "Pangu")
-            if not _s.value("first_seen", False, type=bool):
-                from pangu_system import get_default_engine as _pe
-                _banner = _pe().get_first_activation_banner() if hasattr(_pe(), "get_first_activation_banner") else None
-                if _banner:
-                    QMessageBox.information(self, "🛕 欢迎使用【盘古超级系统】", _banner)
-                _s.setValue("first_seen", True)
-        except Exception:
-            pass
-
     def refresh_words(self):
         try:
             from pangu_system import PanguEngine
@@ -4704,6 +4691,28 @@ class MainWindow(QMainWindow):
         self._autoload()
         self.tab_settings.load_settings()
 
+        # ───── 首次启动盘古介绍 banner(Phase A,真位置) ─────
+        try:
+            from PyQt5.QtCore import QSettings as _QS, QTimer as _QT
+            _s = _QS("NovelAI", "Pangu")
+            if not _s.value("first_seen", False, type=bool):
+                try:
+                    from pangu_system import get_default_engine as _pe
+                    _banner = _pe().get_first_activation_banner()
+                except Exception:
+                    _banner = None
+                if _banner:
+                    # 延迟 500ms,等主窗口完全显示后再弹
+                    def _show_banner():
+                        QMessageBox.information(
+                            self, "🛕 欢迎使用【盘古超级系统】", _banner)
+                        _s.setValue("first_seen", True)
+                    _QT.singleShot(500, _show_banner)
+                else:
+                    _s.setValue("first_seen", True)
+        except Exception:
+            pass
+
     def _connect_worker(self):
         self.worker.log_signal.connect(self.tab_generation.log_signal.emit)
         self.worker.status_signal.connect(self.update_browser_status)
@@ -5166,7 +5175,8 @@ class MainWindow(QMainWindow):
         })
 
     def _on_response_received(self, task_id, content):
-        # Phase B:盘古质检结果路由
+        """worker 回调:某次提示词的 AI 回复已抓取完毕"""
+        # Phase B:盘古质检结果路由(优先级最高,不走原回填逻辑)
         try:
             tgt = (self._pending_task_target or {}).get("target", "") if hasattr(self, "_pending_task_target") else ""
             if tgt == "pangu_qcheck":
@@ -5188,7 +5198,6 @@ class MainWindow(QMainWindow):
                 return
         except Exception:
             pass
-        """worker 回调:某次提示词的 AI 回复已抓取完毕"""
         if not content or not content.strip():
             self.tab_generation.log(f"任务『{task_id}』未抓到内容(选择器需调整)", "warn")
             content = ""
@@ -5673,7 +5682,7 @@ class MainWindow(QMainWindow):
         except ImportError:
             QMessageBox.warning(self, "缺少盘古", "找不到 pangu_system.py")
             return
-        report = get_default_engine().build_style_report(kw, topk=3)
+        report = get_default_engine().build_style_report(kw)
         dlg = QMessageBox(self)
         dlg.setWindowTitle("🎯 盘古风格匹配")
         dlg.setText("基于你的关键词,推荐 Top 3 风格组合:")
@@ -5740,13 +5749,25 @@ class MainWindow(QMainWindow):
             ch = {}
         # 用当前已生成最后一章作为"上下文",预览下一章 prompt
         s = self.tab_settings
+        # BUG #3 修复:从真实大纲控件读取(原 self._outline_text 不存在)
+        try:
+            _outline_real = (
+                self.tab_outline.worldview_edit.toPlainText() + "\n"
+                + self.tab_outline.structure_edit.toPlainText()
+            ).strip() or "(尚未填写世界观和结构大纲)"
+        except Exception:
+            _outline_real = "(无法读取大纲)"
+        try:
+            _ch_outline = self.tab_outline.chapter_outline_edit.toPlainText().strip() or "(无章节大纲)"
+        except Exception:
+            _ch_outline = "(无章节大纲)"
         try:
             preview_prompt = PROMPTS["chapter"].format(
                 title=s.get_title(),
                 chapter_num=cur_idx + 2,
                 genre="/".join(s.get_selected_genres()) or "通用",
-                outline=getattr(self, "_outline_text", "(无大纲示例)")[:1000],
-                chapter_outline=ch.get("outline", "(无本章大纲)")[:1000],
+                outline=_outline_real[:1500],
+                chapter_outline=_ch_outline[:2500],
                 min_words=int(s.get_words_per_chapter() * 0.9),
                 target_words=s.get_words_per_chapter(),
             )
