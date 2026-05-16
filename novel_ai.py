@@ -1299,54 +1299,6 @@ class CreationSettings(QWidget):
         pe_outer.addWidget(btn_pe_custom)
         layout.addWidget(pe_box)
 
-        # ---- 第 8 项配套:手动字体倍数滑块(自动检测不准时用) ----
-        font_box = QGroupBox("🔍 界面字体大小(4K 屏看不清时调大)")
-        font_box.setStyleSheet(
-            "QGroupBox { border: 2px solid #b4884e; margin-top: 8px; padding-top: 14px; }"
-            "QGroupBox::title { color: #b4884e; font-weight: bold; left: 10px; }")
-        fbl = QHBoxLayout(font_box)
-        fbl.addWidget(QLabel("字体倍数:"))
-        self.font_scale_slider = QSlider(Qt.Horizontal)
-        self.font_scale_slider.setRange(80, 220)        # 0.8 ~ 2.2
-        self.font_scale_slider.setSingleStep(5)
-        self.font_scale_slider.setPageStep(10)
-        self.font_scale_slider.setTickPosition(QSlider.TicksBelow)
-        self.font_scale_slider.setTickInterval(20)
-        # 从 QSettings 读;若 0 则用自动检测的当前值
-        from PyQt5.QtCore import QSettings as _QSf2
-        _ss = _QSf2("NovelAI", "CreationSettings")
-        _saved = _ss.value("font_scale", 0.0, type=float) or 0.0
-        if _saved < 0.5:
-            # 用应用当前实际倍数
-            from PyQt5.QtWidgets import QApplication as _QA
-            _cur = (_QA.instance().property("_novelai_dpi_scale") or 1.0)
-            _saved = float(_cur)
-        self.font_scale_slider.setValue(int(round(_saved * 100)))
-        fbl.addWidget(self.font_scale_slider, 1)
-        self.font_scale_label = QLabel(f"×{_saved:.2f}")
-        self.font_scale_label.setMinimumWidth(50)
-        self.font_scale_label.setStyleSheet("font-weight:bold; color:#b4884e;")
-        fbl.addWidget(self.font_scale_label)
-        self.btn_font_apply = QPushButton("✓ 应用(需重启生效)")
-        self.btn_font_apply.setStyleSheet(
-            "QPushButton { background:#2ecc71; color:white; padding:4px 12px; border-radius:3px; }"
-            "QPushButton:hover { background:#27ae60; }")
-        fbl.addWidget(self.btn_font_apply)
-        # 拖动时只更新标签;点应用才写盘
-        def _on_font_slider(v):
-            self.font_scale_label.setText(f"×{v/100:.2f}")
-        self.font_scale_slider.valueChanged.connect(_on_font_slider)
-        def _on_font_apply():
-            v = self.font_scale_slider.value() / 100.0
-            _ss.setValue("font_scale", float(v))
-            QMessageBox.information(
-                None, "已保存",
-                f"字体倍数 ×{v:.2f} 已保存。\n\n"
-                f"请关闭程序后重新打开生效。\n"
-                f"(Qt 应用启动时设字体,运行中改无法即时生效)")
-        self.btn_font_apply.clicked.connect(_on_font_apply)
-        layout.addWidget(font_box)
-
         layout.addStretch()
 
         # 启动时从 QSettings 恢复白名单并应用
@@ -5267,6 +5219,10 @@ class MainWindow(QMainWindow):
             fm.addAction(a)
 
         sm = m.addMenu("设置(&S)")
+        a_font = QAction("🔍 界面字体大小...", self)
+        a_font.triggered.connect(self.show_font_scale_dialog)
+        sm.addAction(a_font)
+        sm.addSeparator()
         a = QAction("关于", self); a.triggered.connect(self.show_about)
         sm.addAction(a)
 
@@ -8821,6 +8777,75 @@ class MainWindow(QMainWindow):
         self.tab_editor.content_edit.setReadOnly(not ro)
         self.tab_editor.title_input.setReadOnly(not ro)
         self.statusBar().showMessage("已解锁,可以编辑" if ro else "已锁定,只读模式", 3000)
+
+    def show_font_scale_dialog(self):
+        """界面字体大小对话框 — 从顶部菜单'设置 → 🔍 界面字体大小...' 弹出"""
+        from PyQt5.QtCore import QSettings
+        from PyQt5.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
+            QDialogButtonBox, QApplication as _QA)
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🔍 界面字体大小")
+        dlg.setMinimumWidth(500)
+        lay = QVBoxLayout(dlg)
+
+        tip = QLabel(
+            "调字体倍数 — 4K 屏 / 老花眼 / 看不清都用这个。\n"
+            "拖滑块到你舒服的位置,点确定,**关闭程序重新打开**生效。\n"
+            "(Qt 字体只能在启动时设,运行中没法即时变)")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color:#666; padding:6px; background:#f4f4f4; border-radius:3px;")
+        lay.addWidget(tip)
+
+        # 读当前值
+        s = QSettings("NovelAI", "CreationSettings")
+        cur = s.value("font_scale", 0.0, type=float) or 0.0
+        if cur < 0.5:
+            cur = float(_QA.instance().property("_novelai_dpi_scale") or 1.0)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("字体倍数:"))
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(80, 220)         # ×0.80 ~ ×2.20
+        slider.setSingleStep(5)
+        slider.setPageStep(10)
+        slider.setTickPosition(QSlider.TicksBelow)
+        slider.setTickInterval(20)
+        slider.setValue(int(round(cur * 100)))
+        row.addWidget(slider, 1)
+        lab = QLabel(f"×{cur:.2f}")
+        lab.setMinimumWidth(60)
+        lab.setStyleSheet("font-weight:bold; font-size:14px; color:#b4884e;")
+        row.addWidget(lab)
+        lay.addLayout(row)
+
+        # 实时更新标签
+        slider.valueChanged.connect(lambda v: lab.setText(f"×{v/100:.2f}"))
+
+        # 常用预设
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("快速预设:"))
+        for label, val in [("1.0(默认)", 100), ("1.25", 125),
+                            ("1.5(推荐 4K)", 150), ("1.75", 175), ("2.0", 200)]:
+            btn = QPushButton(label)
+            btn.setMaximumWidth(110)
+            btn.clicked.connect(lambda _, v=val: slider.setValue(v))
+            preset_row.addWidget(btn)
+        preset_row.addStretch()
+        lay.addLayout(preset_row)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+
+        if dlg.exec_() == QDialog.Accepted:
+            v = slider.value() / 100.0
+            s.setValue("font_scale", float(v))
+            QMessageBox.information(
+                self, "已保存",
+                f"字体倍数 ×{v:.2f} 已保存。\n\n"
+                f"请关闭程序后重新打开生效。")
 
     def show_about(self):
         QMessageBox.about(
