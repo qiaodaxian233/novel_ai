@@ -338,6 +338,22 @@ PROMPTS = {
         "请直接输出严格 JSON,不要任何前后缀、不要 markdown 代码块,格式:\n"
         '{{"score":8,"reason":"林晚晚台词到位,但顾砚深这章过于温和,与高冷禁欲设定有偏差"}}'
     ),
+
+    "pangu_autofix": (
+        "你是【盘古超级系统】驻场修复员。下面是一篇章节,以及盘古 30 项质检发现的问题。\n"
+        "请按建议**直接修复原文**,不要解释、不要 JSON、不要 markdown 代码块。\n\n"
+        "修复规则:\n"
+        "1. **只改有问题的地方**,没问题的段落原样保留,不要随意改\n"
+        "2. **字数和章节结构基本保持**(允许 ±5%)\n"
+        "3. 严格遵循盘古铁律(感官铁律 / 对话只用「说」/ 禁用词如「仿佛/似乎/知道/喊道/笑道」等)\n"
+        "4. **不要在末尾加任何元信息**(不加【断章钩子】【本章爽点】【伏笔状态】【下一章选项】【本章完】等)\n"
+        "5. 输出**整篇修复后的章节正文**,从第一句到最后一句,完整一篇\n\n"
+        "【质检得分】{score} / 100\n"
+        "【失败项编号】{failed}\n"
+        "【AI 修改建议】\n{advice}\n\n"
+        "【原章节正文】\n{content}\n\n"
+        "现在请直接输出修复后的完整章节正文(只输出小说正文,无任何前后缀):"
+    ),
 }
 
 # ---- 盘古超级系统(零侵入集成,新增) ----
@@ -5743,6 +5759,14 @@ class MainWindow(QMainWindow):
                 self.tab_generation.log(f"✓ 盘古模式切换完成:\n{content[:200]}", "info")
                 self._pending_task_target = None
                 return
+            if tgt == "pangu_autofix":
+                # AI 修复完成 → 把内容回填当前章节
+                meta = self._pending_task_target or {}
+                ch_idx = meta.get("ch_idx", -1)
+                orig = meta.get("original_chapter", "")
+                self._on_pangu_autofix_response(content, ch_idx, orig)
+                self._pending_task_target = None
+                return
         except Exception:
             pass
         if not content or not content.strip():
@@ -6403,11 +6427,154 @@ class MainWindow(QMainWindow):
                     block_ids.add(block_no)
         if hasattr(self.tab_editor, "pangu_highlighter") and self.tab_editor.pangu_highlighter:
             self.tab_editor.pangu_highlighter.set_qcheck_blocks(block_ids)
-        # 弹结果框
-        msg = f"得分:{score}/100\n失败项:{failed}\n\n建议:\n{advice}"
+
+        # 弹结果对话框(改成 QDialog,加"AI 自动修复"按钮)
+        dlg = QDialog(self)
+        dlg.setWindowTitle("📊 盘古 30 项质检结果")
+        dlg.setMinimumWidth(600)
+        lay = QVBoxLayout(dlg)
+
+        # 顶部得分行
+        score_lab = QLabel(f"<h2>得分:{score}/100</h2><b>失败项:</b>{failed}")
+        score_lab.setStyleSheet("color:#1a4480; padding:6px;")
+        lay.addWidget(score_lab)
+
+        # 建议(可滚动)
+        advice_lab = QLabel(f"<b>建议:</b><br>{advice}")
+        advice_lab.setWordWrap(True)
+        advice_lab.setStyleSheet("padding:8px; background:#f7f7f7; border:1px solid #ddd;")
+        advice_scroll = QScrollArea()
+        advice_scroll.setWidget(advice_lab)
+        advice_scroll.setWidgetResizable(True)
+        advice_scroll.setMinimumHeight(150)
+        lay.addWidget(advice_scroll, 1)
+
         if block_ids:
-            msg += f"\n\n相关段落已在编辑器里浅黄高亮(段号:{sorted(block_ids)[:10]})"
-        QMessageBox.information(self, "📊 盘古 30 项质检结果", msg)
+            seg_lab = QLabel(
+                f"<i>相关段落已在编辑器里浅黄高亮(段号:{sorted(block_ids)[:10]})</i>")
+            seg_lab.setStyleSheet("color:#888; padding:4px;")
+            lay.addWidget(seg_lab)
+
+        # 按钮区
+        btn_row = QHBoxLayout()
+        btn_autofix = QPushButton("🔧 让 AI 自动修复这些问题")
+        btn_autofix.setStyleSheet(
+            "QPushButton { background:#e67e22; color:white; padding:8px 16px; "
+            "border-radius:3px; font-weight:bold; font-size:14px; }"
+            "QPushButton:hover { background:#d35400; }")
+        btn_autofix.setToolTip(
+            "把章节正文 + 失败项 + 建议发给 AI,让它直接重写有问题的部分。\n"
+            "完成后修复版本会自动覆盖当前章节内容(原版本通过项目备份找回:菜单 → 🕓 恢复历史版本)。")
+        btn_close = QPushButton("先关掉(我手动改)")
+        btn_close.setStyleSheet("QPushButton { background:#888; padding:8px 16px; }")
+
+        # 失败项太少时不必修复
+        if not failed:
+            btn_autofix.setEnabled(False)
+            btn_autofix.setText("✓ 已无失败项,无需修复")
+            btn_autofix.setStyleSheet(
+                "QPushButton { background:#2ecc71; color:white; padding:8px 16px; "
+                "border-radius:3px; font-weight:bold; }")
+
+        def _on_autofix():
+            dlg.accept()
+            self._on_pangu_autofix_request(score, failed, advice, original_chapter)
+
+        btn_autofix.clicked.connect(_on_autofix)
+        btn_close.clicked.connect(dlg.reject)
+        btn_row.addWidget(btn_autofix, 2)
+        btn_row.addWidget(btn_close, 1)
+        lay.addLayout(btn_row)
+
+        dlg.exec_()
+
+    def _on_pangu_autofix_request(self, score, failed, advice, original_chapter):
+        """触发 AI 自动修复 — 把 issues + content 发给 AI 让它重写问题段落"""
+        if not original_chapter or not original_chapter.strip():
+            QMessageBox.warning(self, "提示", "原章节内容为空,无法修复")
+            return
+        if not self.worker.is_ready():
+            QMessageBox.warning(
+                self, "请先启动浏览器",
+                "请先在『生成控制』页点『🚀 启动浏览器』并完成 AI 网站登录")
+            return
+        # 记下当前章节 idx,用于回填(用户可能中途切章节)
+        ch_idx = getattr(self.tab_editor, "current_index", -1)
+        if ch_idx < 0 or ch_idx >= len(self.chapters):
+            QMessageBox.warning(
+                self, "提示",
+                "请先在左侧章节列表里选中要修复的章节(_current_index 无效)")
+            return
+        prompt = PROMPTS["pangu_autofix"].format(
+            score=score,
+            failed=failed if failed else "[]",
+            advice=advice or "(无具体建议,请按盘古铁律检查并修复)",
+            content=original_chapter[:8000],   # 安全截断
+        )
+        self.tab_generation.log(
+            f"▶ 让 AI 修复第 {ch_idx+1} 章(失败项 {failed}),约 1 分钟回填……",
+            "info")
+        self._send_to_ai(
+            prompt, f"AI 修复-第{ch_idx+1}章",
+            target="pangu_autofix",
+            ch_idx=ch_idx,
+            original_chapter=original_chapter,
+        )
+
+    def _on_pangu_autofix_response(self, content, ch_idx, original_chapter):
+        """AI 修复返回 → 回填当前章节(原内容已通过 save_project 的 .backups 备份)"""
+        if not content or not content.strip():
+            QMessageBox.warning(
+                self, "AI 修复失败", "AI 没返回任何内容,请重试或先检查浏览器/网络。")
+            return
+        # 容错:去掉可能的 markdown 包裹 / 元信息块(用 pangu_system.strip_chapter_meta)
+        fixed = content.strip()
+        try:
+            from pangu_system import strip_chapter_meta
+            fixed = strip_chapter_meta(fixed)
+        except Exception:
+            pass
+        # 比较长度,异常时给提示
+        orig_len = len(original_chapter)
+        new_len = len(fixed)
+        ratio = new_len / orig_len if orig_len > 0 else 1.0
+        if ratio < 0.5 or ratio > 1.8:
+            ret = QMessageBox.question(
+                self, "⚠️ 修复结果异常",
+                f"AI 返回内容长度跟原章节差太多:\n"
+                f"  原章节:{orig_len} 字  →  AI 返回:{new_len} 字(变化 {(ratio-1)*100:+.1f}%)\n\n"
+                f"前 300 字预览:\n{fixed[:300]}...\n\n"
+                f"还要回填吗?\n"
+                f"  ✓ 是 → 覆盖当前章节(原内容已通过 .backups 备份)\n"
+                f"  ✗ 否 → 放弃这次修复",
+                QMessageBox.Yes | QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                self.tab_generation.log("已放弃 AI 修复结果(长度异常)", "warn")
+                return
+        # 回填
+        if 0 <= ch_idx < len(self.chapters):
+            self.chapters[ch_idx]["content"] = fixed
+            # 如果当前正在编辑这一章,刷新编辑器
+            if self.tab_editor.current_index == ch_idx:
+                self.tab_editor.content_edit.setPlainText(fixed)
+            # 清掉质检高亮(修完了)
+            if hasattr(self.tab_editor, "pangu_highlighter") and self.tab_editor.pangu_highlighter:
+                self.tab_editor.pangu_highlighter.set_qcheck_blocks(set())
+            # 立即 autosave + 备份
+            try:
+                self.save_project()  # save_project 会触发 _rotate_project_backups 保留 10 次
+            except Exception:
+                self._autosave()
+            self.tab_generation.log(
+                f"✓ AI 修复完成第 {ch_idx+1} 章:{orig_len}→{new_len} 字。"
+                f"原版本可通过菜单 → 🕓 恢复历史版本 找回",
+                "success")
+            QMessageBox.information(
+                self, "✓ AI 修复完成",
+                f"第 {ch_idx+1} 章已自动修复 + 回填 + 保存。\n\n"
+                f"字数变化:{orig_len} → {new_len}\n"
+                f"想要旧版本?菜单 → 文件 → 🕓 恢复历史版本(最近 10 次)\n\n"
+                f"建议:再点一次「📊 30项质检」看新得分。")
 
     # ───── Phase B:盘古帮助查询面板 ─────
     def _on_pangu_show_manual(self):
