@@ -4166,23 +4166,57 @@ class BrowserWorker(QObject):
             f"提示词已发送 ({len(prompt)} 字符),等待 AI 回复...", "info")
 
         # 4) 等新回复出现(对话条数 +1)
+        # 因 DeepSeek 计数策略升级,先等 3 秒让 DOM 稳定再开始计数对比
+        time.sleep(3)
         deadline = time.time() + 30
         while time.time() < deadline:
             if self._stop.is_set(): return
-            if self._count_responses(prof) > prev_count:
+            cur_cnt = self._count_responses(prof)
+            # 计数增加 OR 已经能抓到回复内容(> 50 字)就认为开始了
+            if cur_cnt > prev_count:
                 break
+            try:
+                early_text = self._grab_last_response(prof)
+                if early_text and len(early_text) > 50:
+                    # 可能 prev_count 算错了(DeepSeek p 数变化),但实际已有内容
+                    self.log_signal.emit(
+                        f"检测到回复内容(prev_count={prev_count}, 已抓 {len(early_text)} 字符),进入稳定等待",
+                        "info")
+                    break
+            except Exception:
+                pass
             time.sleep(0.5)
         else:
             self.log_signal.emit(
                 "未检测到新回复条目,可能选择器需调整(到 SITE_PROFILES 微调)", "warn")
 
-        # 5) 等内容稳定 N 秒
+        # 5) 等内容稳定 N 秒 / stop 按钮消失 / 完成后按钮出现 任一条件
         last_text = ""
         last_change = time.time()
         start = time.time()
         while time.time() - start < self.max_wait:
             if self._stop.is_set(): return
             cur = self._grab_last_response(prof)
+
+            # 新增完成信号 1:stop 按钮消失(AI 在写时显示停止按钮)
+            try:
+                stopping = self.driver.execute_script(r"""
+                    // DeepSeek 停止按钮: 输入框附近含 SVG 的方形按钮(填充图标)
+                    // 或者通用 aria-label 含'停止'/'stop'
+                    let stopBtn = document.querySelector(
+                        'div[role="button"][aria-label*="停止"]') ||
+                        document.querySelector('button[aria-label*="停止"]') ||
+                        document.querySelector('button[aria-label*="Stop" i]') ||
+                        document.querySelector('button[data-testid*="stop"]');
+                    return stopBtn && stopBtn.offsetParent !== null;
+                """)
+                # stop 不可见 + 已抓到 >50 字 + 内容跟上次相同 → 完成
+                if not stopping and cur and len(cur) > 50 and cur == last_text:
+                    self.log_signal.emit("✓ 检测到 stop 按钮消失 + 内容稳定 → 完成", "info")
+                    break
+            except Exception:
+                pass
+
             if cur and cur == last_text:
                 if time.time() - last_change >= self.stable_wait:
                     break
