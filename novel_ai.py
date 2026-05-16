@@ -8347,12 +8347,25 @@ class MainWindow(QMainWindow):
                          target="canon_extract", ch_num=ch_num)
 
     def _on_canon_extract_response(self, content, meta):
-        """处理 Canon 抽取 AI 回复"""
+        """处理 Canon 抽取 AI 回复
+        既写 Canon Tab(单值条目),也按前缀分发到 🎭 角色与世界 6 库"""
         ch_num = meta.get("ch_num", 0)
         try:
             text = self._extract_json_blob(content)
             arr = json.loads(text)
             count = 0
+            # 用于按前缀分发到 charlib 的结构化 dict
+            charlib_data = {
+                "characters": [],
+                "relations": [],
+                "items": [],
+                "events": [],   # 时间线
+                "foreshadows": [],
+            }
+            # 角色聚合:同一角色多字段合并到一行
+            chars_acc = {}      # name -> {role, appearance, personality, ability, state, first_ch}
+            items_acc = {}      # name -> {owner, source, status, ability}
+
             for it in arr:
                 key = it.get("key", "").strip()
                 value = it.get("value", "").strip()
@@ -8360,13 +8373,95 @@ class MainWindow(QMainWindow):
                 ch = it.get("ch", ch_num)
                 if not key or not value:
                     continue
+
+                # 1) 写 Canon Tab (保留全字段路径,任意 key 都能录)
                 self.tab_canon.add_item(
                     key, value, mode=mode,
                     severity="high" if mode == "locked" else "mid",
                     ch=ch)
                 count += 1
+
+                # 2) 按前缀分发到 charlib 的结构化 dict
+                #    格式: <类别>.<主键>.<字段>  (例如 角色.林远.身份)
+                parts = key.split(".", 2)  # 最多分 3 段
+                if len(parts) < 2:
+                    continue
+                category = parts[0]
+                main_key = parts[1] if len(parts) >= 2 else ""
+                field = parts[2] if len(parts) >= 3 else "info"
+
+                if category == "角色":
+                    if main_key not in chars_acc:
+                        chars_acc[main_key] = {"name": main_key, "first_ch": ch}
+                    # 字段映射到 charlib 8 列
+                    fmap = {
+                        "身份": "role", "角色": "role",
+                        "外貌": "appearance", "样貌": "appearance",
+                        "性格": "personality", "人设": "personality",
+                        "标志": "mark", "标记": "mark", "独有称号": "mark",
+                        "能力": "ability", "技能": "ability", "战力": "ability",
+                        "状态": "state", "当前状态": "state",
+                    }
+                    col_key = fmap.get(field, "personality")  # 未知字段塞 personality
+                    # 合并 value(同字段多次提取 → 用 / 拼接)
+                    cur = chars_acc[main_key].get(col_key, "")
+                    chars_acc[main_key][col_key] = (cur + " / " + value) if cur else value
+                elif category == "关系":
+                    # main_key = "X-Y" 或 "X与Y"
+                    m = re.match(r'^(.+?)\s*[-与]\s*(.+)$', main_key)
+                    if m:
+                        a, b = m.group(1).strip(), m.group(2).strip()
+                        charlib_data["relations"].append({
+                            "a": a, "type": field, "b": b, "note": value,
+                        })
+                elif category == "时间线":
+                    # main_key = 第N章 (或 三年前 / 十八岁 等),作为时间锚
+                    charlib_data["events"].append({
+                        "time": main_key, "event": value, "ch": ch,
+                    })
+                elif category == "物品":
+                    if main_key not in items_acc:
+                        items_acc[main_key] = {"name": main_key}
+                    fmap_it = {
+                        "持有人": "owner", "拥有者": "owner",
+                        "来源": "source",
+                        "状态": "status", "当前状态": "status",
+                        "能力": "ability", "效果": "ability", "功效": "ability",
+                    }
+                    col_key = fmap_it.get(field, "source")
+                    cur = items_acc[main_key].get(col_key, "")
+                    items_acc[main_key][col_key] = (cur + " / " + value) if cur else value
+                elif category == "战力":
+                    # 战力体系归到角色 ability 或单独物品行(看用户偏好)
+                    # 这里塞到 items_acc 以"<体系名>"作 name,字段 ability 存所有细节
+                    if main_key not in items_acc:
+                        items_acc[main_key] = {"name": main_key, "source": "(战力体系)"}
+                    cur = items_acc[main_key].get("ability", "")
+                    items_acc[main_key]["ability"] = \
+                        (cur + " / " + f"{field}:{value}") if cur else f"{field}:{value}"
+                elif category == "伏笔":
+                    charlib_data["foreshadows"].append({
+                        "content": main_key + ("|" + value if main_key != value else ""),
+                        "ch": ch,
+                        "plan_pay_at": 0,
+                    })
+
+            # 合并累积的 chars / items
+            charlib_data["characters"] = list(chars_acc.values())
+            charlib_data["items"] = list(items_acc.values())
+
+            # 同步到 🎭 角色与世界
+            added = {}
+            try:
+                added = self._merge_into_charlib(charlib_data)
+            except Exception as _me:
+                self.tab_generation.log(f"同步 6 库失败:{_me}", "warn")
+
             self.tab_generation.log(
-                f"✓ Canon 抽取完成,新增/更新 {count} 条", "success")
+                f"✓ Canon 抽取完成:Canon Tab +{count} 条 / "
+                f"🎭 角色与世界 角色+{added.get('ch',0)} 关系+{added.get('rel',0)} "
+                f"物品+{added.get('it',0)} 时间线+{added.get('ev',0)} 伏笔+{added.get('fo',0)}",
+                "success")
         except Exception as e:
             self.tab_generation.log(f"Canon 抽取解析失败:{e}", "warn")
 
