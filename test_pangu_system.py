@@ -261,5 +261,113 @@ class TestConstants(unittest.TestCase):
         self.assertNotIn("下一章选项", f2)
 
 
+class TestChapterMetaParse(unittest.TestCase):
+    """剥离 + 解析【断章钩子】【本章爽点】【伏笔状态】【下一章选项】"""
+
+    SAMPLE = """第一章 觉醒
+
+林远把砍柴刀握得发白,刀刃上还沾着昨夜未干的血。
+他十八岁,父亲三年前死于妖兽袭击,留给他一本《混元功》。
+
+林悦跑得气喘吁吁:"哥哥,我饿。"
+
+本章完
+
+【断章钩子】
+类型:对话没说完
+强度:★★★★★
+内容:林悦追上来质问，话没说完就被打断
+
+【本章爽点】
+打脸王屠户:林远直接要债，王屠户理亏词穷
+越级杀怪:林远用虚弱诅咒杀死妖兽，完成首杀
+
+【伏笔状态】
+本章埋雷:天剑宗搜捕诅咒者(计划第8-10章收)
+本章收雷:王屠户欠债(第1章所埋)
+
+【下一章选项】
+1. 林悦冲上来抱住林远
+2. 赵师兄赶到，强行带走
+3. 林远让林悦快跑
+"""
+
+    def test_strip_keeps_body_drops_meta(self):
+        from pangu_system import strip_chapter_meta
+        body = strip_chapter_meta(self.SAMPLE)
+        self.assertIn("林远把砍柴刀", body)          # 正文在
+        self.assertIn('"哥哥,我饿。"', body)          # 正文最后一段在
+        self.assertNotIn("本章完", body)             # 标记切掉
+        self.assertNotIn("断章钩子", body)
+        self.assertNotIn("本章爽点", body)
+        self.assertNotIn("伏笔状态", body)
+        self.assertNotIn("下一章选项", body)
+
+    def test_parse_hook(self):
+        from pangu_system import parse_chapter_meta
+        m = parse_chapter_meta(self.SAMPLE)
+        self.assertIsNotNone(m["hook"])
+        self.assertEqual(m["hook"]["type"], "对话没说完")
+        self.assertEqual(m["hook"]["intensity"], "★★★★★")
+        self.assertIn("林悦", m["hook"]["content"])
+
+    def test_parse_cool_points(self):
+        from pangu_system import parse_chapter_meta
+        m = parse_chapter_meta(self.SAMPLE)
+        self.assertEqual(len(m["cool_points"]), 2)
+        self.assertTrue(any("打脸王屠户" in c for c in m["cool_points"]))
+        self.assertTrue(any("越级杀怪" in c for c in m["cool_points"]))
+
+    def test_parse_seeds_planted_with_range(self):
+        from pangu_system import parse_chapter_meta
+        m = parse_chapter_meta(self.SAMPLE)
+        self.assertEqual(len(m["seeds_planted"]), 1)
+        seed = m["seeds_planted"][0]
+        self.assertEqual(seed["desc"], "天剑宗搜捕诅咒者")  # 不带括号尾巴
+        self.assertEqual(seed["plan_pay_at"], 8)         # 范围数字取首
+
+    def test_parse_seeds_paid(self):
+        from pangu_system import parse_chapter_meta
+        m = parse_chapter_meta(self.SAMPLE)
+        self.assertEqual(len(m["seeds_paid"]), 1)
+        paid = m["seeds_paid"][0]
+        self.assertEqual(paid["desc"], "王屠户欠债")
+        self.assertEqual(paid["planted_at"], 1)
+
+    def test_parse_next_options(self):
+        from pangu_system import parse_chapter_meta
+        m = parse_chapter_meta(self.SAMPLE)
+        self.assertEqual(len(m["next_options"]), 3)
+        self.assertIn("抱住林远", m["next_options"][0])
+        self.assertIn("强行带走", m["next_options"][1])
+
+    def test_seeds_filter_wu(self):
+        """伏笔写 '无' 不应该误存进库"""
+        from pangu_system import parse_chapter_meta
+        sample = "本章完\n\n【伏笔状态】\n本章埋雷:无\n本章收雷:无\n"
+        m = parse_chapter_meta(sample)
+        self.assertEqual(m["seeds_planted"], [])
+        self.assertEqual(m["seeds_paid"], [])
+
+    def test_no_meta_returns_clean(self):
+        """章节没附元信息(AI 偶尔会漏),应该原文返回不出错"""
+        from pangu_system import parse_chapter_meta, strip_chapter_meta
+        sample = "第一章 觉醒\n\n这是干净的章节正文,没有任何元信息标记。"
+        m = parse_chapter_meta(sample)
+        self.assertEqual(m["hook"], None)
+        self.assertEqual(m["cool_points"], [])
+        self.assertEqual(m["seeds_planted"], [])
+        self.assertEqual(m["next_options"], [])
+        self.assertEqual(strip_chapter_meta(sample), sample.rstrip())
+
+    def test_empty_input(self):
+        from pangu_system import parse_chapter_meta, strip_chapter_meta
+        self.assertEqual(strip_chapter_meta(""), "")
+        self.assertEqual(strip_chapter_meta(None or ""), "")
+        m = parse_chapter_meta("")
+        self.assertEqual(m["body"], "")
+        self.assertEqual(m["next_options"], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

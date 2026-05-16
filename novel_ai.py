@@ -7196,15 +7196,53 @@ class MainWindow(QMainWindow):
             last_ch_num = len(self.chapters)
         else:
             ch_num = meta.get("ch_num", len(self.chapters) + 1)
-            ch_title = self._extract_chapter_title(content) or f"第{ch_num}章"
-            ch_body = self._strip_chapter_title(content)
-            self.chapters.append({"title": ch_title, "content": ch_body, "summary": ""})
+            # ── 解析并剥离盘古章节尾部元信息(【断章钩子】【本章爽点】
+            #     【伏笔状态】【下一章选项】),只把正文写入 chapter['content']
+            pangu_meta = None
+            body_clean = content
+            try:
+                from pangu_system import parse_chapter_meta as _pangu_parse
+                pangu_meta = _pangu_parse(content)
+                body_clean = pangu_meta.get("body") or content
+            except ImportError:
+                pass
+            except Exception as _pm_e:
+                self.tab_generation.log(f"盘古元信息解析失败(降级保留原文):{_pm_e}", "warn")
+
+            ch_title = self._extract_chapter_title(body_clean) or f"第{ch_num}章"
+            ch_body = self._strip_chapter_title(body_clean)
+            chapter = {"title": ch_title, "content": ch_body, "summary": ""}
+
+            # ── 元信息存进 chapter dict,供 UI/工作流后续用
+            if pangu_meta:
+                if pangu_meta.get("hook"):
+                    chapter["hook"] = pangu_meta["hook"]
+                if pangu_meta.get("cool_points"):
+                    chapter["cool_points"] = pangu_meta["cool_points"]
+                if pangu_meta.get("next_options"):
+                    chapter["next_options"] = pangu_meta["next_options"]
+
+            self.chapters.append(chapter)
+
+            # ── 把【伏笔状态】同步到 lifespan_loops 伏笔库
+            if pangu_meta:
+                self._sync_pangu_seeds_to_lifespan(pangu_meta, ch_num)
+
             self._refresh_chapter_list()
             if self.tab_generation.auto_save.isChecked():
                 self._save_chapter_to_disk(self.chapters[-1])
-            actual = len(re.sub(r'\s', '', content))
+            actual = len(re.sub(r'\s', '', ch_body))
             self.tab_generation.log(
                 f"✓ 第 {ch_num} 章生成成功!字数:{actual} 字", "success")
+            if pangu_meta and (pangu_meta.get("hook") or pangu_meta.get("cool_points")
+                               or pangu_meta.get("seeds_planted") or pangu_meta.get("next_options")):
+                bits = []
+                if pangu_meta.get("hook"):          bits.append("钩子")
+                if pangu_meta.get("cool_points"):   bits.append(f"爽点×{len(pangu_meta['cool_points'])}")
+                if pangu_meta.get("seeds_planted"): bits.append(f"埋雷×{len(pangu_meta['seeds_planted'])}")
+                if pangu_meta.get("seeds_paid"):    bits.append(f"收雷×{len(pangu_meta['seeds_paid'])}")
+                if pangu_meta.get("next_options"):  bits.append(f"下章选项×{len(pangu_meta['next_options'])}")
+                self.tab_generation.log("  · 盘古元信息已剥离并归档:" + " / ".join(bits), "info")
             last_ch_num = ch_num
 
         self._batch_remaining -= 1
@@ -7212,6 +7250,67 @@ class MainWindow(QMainWindow):
         # 后置链:Canon 抽取 → 摘要 → after_chapter 技能 → 下一章
         # (用 QTimer 错开,避免一窝蜂砸到 worker)
         self._post_chapter_chain(last_ch_num)
+
+    def _sync_pangu_seeds_to_lifespan(self, pangu_meta: dict, ch_num: int):
+        """把盘古【伏笔状态】的埋雷/收雷自动写入 lifespan_loops 的伏笔库。
+        如果 lifespan_loops 未加载或未初始化 open_loops,静默跳过。"""
+        try:
+            from lifespan_loops_steps import LifespanLoopsExtension
+        except ImportError:
+            return
+        # 收雷:遍历现有 open_loops,desc 子串匹配则 close
+        for paid in pangu_meta.get("seeds_paid", []):
+            desc = paid.get("desc", "")
+            if not desc:
+                continue
+            loops = (getattr(self, "open_loops", None) or {}).get("loops", []) if hasattr(self, "open_loops") else []
+            matched = None
+            for loop in loops:
+                if loop.get("status") == "closed":
+                    continue
+                ld = loop.get("desc", "")
+                # 双向子串匹配(短的在长的里 或 反过来),避免 AI 措辞微差就匹配不上
+                if (ld and (ld in desc or desc in ld)):
+                    matched = loop
+                    break
+            if matched:
+                LifespanLoopsExtension.close_loop(self, matched["id"], ch_num)
+                try:
+                    self.tab_generation.log(
+                        f"  · 伏笔自动闭环:「{matched.get('desc','')[:30]}」 @第{ch_num}章", "info")
+                except Exception:
+                    pass
+        # 埋雷:每条新加一条伏笔
+        existing_ids = set(
+            l.get("id") for l in (getattr(self, "open_loops", None) or {}).get("loops", [])
+            if hasattr(self, "open_loops")
+        )
+        for i, seed in enumerate(pangu_meta.get("seeds_planted", [])):
+            desc = seed.get("desc", "")
+            if not desc:
+                continue
+            # 生成 unique id
+            loop_id = f"pangu_ch{ch_num}_seed{i+1}"
+            while loop_id in existing_ids:
+                i += 1
+                loop_id = f"pangu_ch{ch_num}_seed{i+1}"
+            existing_ids.add(loop_id)
+            # 关键词:取 desc 前 6 个字作为粗略关键词(用于章节文本扫描自动刷新 last_seen_ch)
+            keyword = desc[:6] if len(desc) >= 6 else desc
+            LifespanLoopsExtension.add_loop(
+                self,
+                loop_id=loop_id,
+                desc=desc,
+                added_ch=ch_num,
+                keyword=keyword,
+            )
+            try:
+                self.tab_generation.log(
+                    f"  · 伏笔自动入库:「{desc[:30]}」 @第{ch_num}章 "
+                    + (f"(计划第{seed['plan_pay_at']}章收)" if seed.get("plan_pay_at") else ""),
+                    "info")
+            except Exception:
+                pass
 
     def _post_chapter_chain(self, ch_num):
         """章节通过后的链式处理:Canon 抽取 → 章末技能 → 摘要 → 下一章"""

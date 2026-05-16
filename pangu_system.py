@@ -248,6 +248,190 @@ def chapter_output_format(chapter_num: int = 1, show_options: bool = True) -> st
 
 
 # ============================================================
+# 五·B、章节元信息解析(配合 chapter_output_format 的反向操作)
+# ============================================================
+# AI 按 chapter_output_format 输出的章节回复结构:
+#   [正文]
+#   本章完
+#
+#   【断章钩子】...
+#   【本章爽点】...
+#   【伏笔状态】本章埋雷:...  /  本章收雷:...
+#   【下一章选项】1. ... 2. ... 3. ...
+#
+# 这些元信息**不属于正文**,必须从入库的章节内容里剥离;
+# 同时把【伏笔状态】结构化提取出来,供 lifespan_loops 自动落库。
+
+_META_SECTION_TITLES = ("【断章钩子】", "【本章爽点】", "【伏笔状态】", "【下一章选项】")
+# 兼容容错:有时 AI 漏写"本章完"、或者把【XXX】换成 [XXX] / ## XXX
+_CHAPTER_END_MARKERS = (
+    "本章完", "—— 本章完 ——", "（本章完）", "(本章完)",
+)
+
+
+def strip_chapter_meta(content: str) -> str:
+    """
+    从 AI 章节回复里剥离尾部元信息块,只保留正文。
+    
+    剥离策略(按优先级):
+    1. 找到"本章完"(或变体),从该处截断,前面全是正文
+    2. 找不到"本章完" → 找第一个【断章钩子】/【本章爽点】等元信息标题,截断
+    3. 都找不到 → 内容本身就是干净正文,原样返回
+    
+    末尾保留正文最后段落的空白裁剪。
+    """
+    if not content:
+        return ""
+    text = content
+    cut_at = -1
+
+    # 1) 优先按 "本章完" 切
+    for marker in _CHAPTER_END_MARKERS:
+        idx = text.rfind(marker)
+        # 用 rfind:章节正文里很少有"本章完"三个字,即使有,
+        # 最后那个一定是 AI 加的尾部标记
+        if idx >= 0:
+            cut_at = idx
+            break
+
+    # 2) 退路:找第一个元信息标题
+    if cut_at < 0:
+        for title in _META_SECTION_TITLES:
+            idx = text.find(title)
+            if idx >= 0 and (cut_at < 0 or idx < cut_at):
+                cut_at = idx
+
+    # 3) 没找到任何标记,原样返回
+    if cut_at < 0:
+        return text.rstrip()
+
+    body = text[:cut_at].rstrip()
+    # 再扫一遍,把可能黏在前面的 ``` 代码围栏移除
+    body = re.sub(r'\n+```\s*$', '', body).rstrip()
+    return body
+
+
+def parse_chapter_meta(content: str) -> Dict:
+    """
+    从 AI 章节回复里解析出元信息块。
+    返回 dict:
+      {
+        "body":          str   净化后的章节正文(已剥离元信息)
+        "hook":          {"type": str, "intensity": str, "content": str} | None
+        "cool_points":   [str, ...]
+        "seeds_planted": [{"desc": str, "plan_pay_at": int|None}, ...]
+        "seeds_paid":    [{"desc": str, "planted_at": int|None}, ...]
+        "next_options":  [str, str, str]
+      }
+    
+    解析尽可能宽容:AI 不按格式输出/漏字段/中文标点变化都不应抛异常,
+    抓不到的字段返回空/默认即可。
+    """
+    out = {
+        "body":          "",
+        "hook":          None,
+        "cool_points":   [],
+        "seeds_planted": [],
+        "seeds_paid":    [],
+        "next_options":  [],
+    }
+    if not content:
+        return out
+
+    out["body"] = strip_chapter_meta(content)
+
+    # 取出元信息那段(本章完 之后的所有内容)
+    tail = ""
+    for marker in _CHAPTER_END_MARKERS:
+        idx = content.rfind(marker)
+        if idx >= 0:
+            tail = content[idx + len(marker):]
+            break
+    if not tail:
+        # 没"本章完"标记,从第一个元标题开始当尾
+        for title in _META_SECTION_TITLES:
+            idx = content.find(title)
+            if idx >= 0:
+                tail = content[idx:]
+                break
+
+    if not tail:
+        return out  # 没元信息,只回 body
+
+    # 把尾部按【XXX】切成块
+    blocks = {}
+    # 正则:【任一标题】至下一个【或字符串末尾
+    pattern = r'【(断章钩子|本章爽点|伏笔状态|下一章选项)(?:\(必须给\))?】([\s\S]*?)(?=【(?:断章钩子|本章爽点|伏笔状态|下一章选项)|```|$)'
+    for m in re.finditer(pattern, tail):
+        title = m.group(1)
+        body  = m.group(2).strip().strip('`').strip()
+        blocks[title] = body
+
+    # ── 断章钩子 ──
+    if "断章钩子" in blocks:
+        hook = {"type": "", "intensity": "", "content": ""}
+        for line in blocks["断章钩子"].splitlines():
+            line = line.strip()
+            if line.startswith("类型"):
+                hook["type"] = line.split(":", 1)[-1].split(":", 1)[-1].strip()
+            elif line.startswith("强度"):
+                hook["intensity"] = line.split(":", 1)[-1].split(":", 1)[-1].strip()
+            elif line.startswith("内容"):
+                hook["content"] = line.split(":", 1)[-1].split(":", 1)[-1].strip()
+        if any(hook.values()):
+            out["hook"] = hook
+
+    # ── 本章爽点 ──
+    if "本章爽点" in blocks:
+        for line in blocks["本章爽点"].splitlines():
+            line = line.strip().lstrip("-").lstrip("*").strip()
+            if line and not line.startswith("[") and len(line) > 2:
+                out["cool_points"].append(line)
+
+    # ── 伏笔状态 ──
+    if "伏笔状态" in blocks:
+        for line in blocks["伏笔状态"].splitlines():
+            line = line.strip().lstrip("-").lstrip("*").strip()
+            if not line:
+                continue
+            # "本章埋雷:XXX(计划第 N 章收)" / "(计划第 N-M 章收)"
+            m_plant = re.match(
+                r'本章埋雷[:：](.+?)(?:[(（]\s*计划第\s*(\d+)(?:\s*[-~—]\s*\d+)?\s*章收\s*[)）])?\s*$', line)
+            if m_plant:
+                desc = m_plant.group(1).strip()
+                # 如果 desc 末尾还残留 "(计划第..." 没被吃掉,清理一下
+                desc = re.sub(r'\s*[(（]\s*计划第\s*\d+(?:\s*[-~—]\s*\d+)?\s*章收\s*[)）]\s*$', '', desc).strip()
+                if desc and desc not in ("无", "无。", "(无)"):
+                    plan = int(m_plant.group(2)) if m_plant.group(2) else None
+                    out["seeds_planted"].append({"desc": desc, "plan_pay_at": plan})
+                continue
+            # "本章收雷:XXX(第 N 章所埋)" / "(第 N-M 章所埋)"
+            m_pay = re.match(
+                r'本章收雷[:：](.+?)(?:[(（]\s*第\s*(\d+)(?:\s*[-~—]\s*\d+)?\s*章所埋\s*[)）])?\s*$', line)
+            if m_pay:
+                desc = m_pay.group(1).strip()
+                desc = re.sub(r'\s*[(（]\s*第\s*\d+(?:\s*[-~—]\s*\d+)?\s*章所埋\s*[)）]\s*$', '', desc).strip()
+                if desc and desc not in ("无", "无。", "(无)"):
+                    planted = int(m_pay.group(2)) if m_pay.group(2) else None
+                    out["seeds_paid"].append({"desc": desc, "planted_at": planted})
+
+    # ── 下一章选项 ──
+    if "下一章选项" in blocks:
+        for line in blocks["下一章选项"].splitlines():
+            line = line.strip()
+            # "1. xxx" / "1、xxx" / "①xxx"
+            m_opt = re.match(r'^\s*(?:\d+|[①-⑩])\s*[\.\、\:\：]?\s*(.+?)\s*$', line)
+            if m_opt:
+                opt = m_opt.group(1).strip()
+                if opt and len(opt) > 2:
+                    out["next_options"].append(opt)
+        # 截断到最多 5 个
+        out["next_options"] = out["next_options"][:5]
+
+    return out
+
+
+# ============================================================
 # 六、四模式切换(Part 8)
 # ============================================================
 MODE_PROMPTS = {
