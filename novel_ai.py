@@ -3782,6 +3782,169 @@ class BrowserWorker(QObject):
         self.driver.get(url)
         self.log_signal.emit(f"已访问:{url}", "info")
 
+    def run_dom_diagnostics(self):
+        """诊断:对当前页跑所有候选选择器,返回命中情况
+        给主线程调,通过 future 同步返回结果"""
+        try:
+            from selenium.common.exceptions import WebDriverException
+            url = self._current_url()
+            prof = _profile_for_url(url)
+            # 收集要测的选择器
+            test_selectors = {
+                "input(输入框)": prof.get("input", ""),
+                "send_btn(发送按钮)": prof.get("send_btn", ""),
+                "response(回复区)": prof.get("response", ""),
+                "stop_btn(停止按钮)": prof.get("stop_btn", ""),
+            }
+            fb = prof.get("_response_fallback", [])
+            for i, s in enumerate(fb):
+                test_selectors[f"_response_fallback[{i}]"] = s
+
+            # 浏览器里跑诊断
+            js = r"""
+            const sels = arguments[0];
+            const result = {};
+            for (const [name, sel] of Object.entries(sels)) {
+                if (!sel) { result[name] = {selector: sel, count: 0, samples: []}; continue; }
+                try {
+                    const els = document.querySelectorAll(sel);
+                    const samples = [];
+                    for (let i = 0; i < Math.min(els.length, 3); i++) {
+                        const el = els[i];
+                        const visible = el.offsetParent !== null;
+                        const text = (el.innerText || el.value || '').slice(0, 80).replace(/\n/g, '⏎');
+                        samples.push({
+                            tag: el.tagName.toLowerCase(),
+                            class: (el.className || '').toString().slice(0, 60),
+                            visible: visible,
+                            text: text
+                        });
+                    }
+                    result[name] = {selector: sel, count: els.length, samples: samples};
+                } catch (e) {
+                    result[name] = {selector: sel, error: e.message};
+                }
+            }
+            // 额外:统计页面 DOM 概况
+            result['__overview__'] = {
+                title: document.title,
+                url: location.href,
+                total_textareas: document.querySelectorAll('textarea').length,
+                total_contenteditable: document.querySelectorAll('[contenteditable="true"]').length,
+                total_buttons: document.querySelectorAll('button, [role="button"]').length,
+                ds_markdown_count: document.querySelectorAll('div.ds-markdown').length,
+                ds_assistant_count: document.querySelectorAll('div.ds-markdown.ds-assistant-message-main-content').length,
+            };
+            return result;
+            """
+            return self.driver.execute_script(js, test_selectors)
+        except WebDriverException as e:
+            return {"__error__": str(e)}
+        except Exception as e:
+            return {"__error__": f"诊断失败:{e}"}
+
+    def install_dom_picker(self):
+        """在页面上安装现场拾取助手:
+        - 鼠标 hover 时高亮元素并显示选择器建议
+        - 点击时把选择器写入 window.__novelai_picked
+        - 按 ESC 退出
+        Python 端可以轮询 window.__novelai_picked 拿到用户选的"""
+        try:
+            self.driver.execute_script(r"""
+            if (window.__novelai_picker_active) return;
+            window.__novelai_picker_active = true;
+            window.__novelai_picked = null;
+
+            // 建议选择器:优先 id,其次 [data-testid],其次 class chain,最次 tagName
+            function suggestSelector(el) {
+                if (!el) return null;
+                if (el.id && /^[A-Za-z][\w-]*$/.test(el.id)) {
+                    return '#' + el.id;
+                }
+                const tid = el.getAttribute('data-testid');
+                if (tid) return `[data-testid="${tid}"]`;
+                const aria = el.getAttribute('aria-label');
+                if (aria) return `${el.tagName.toLowerCase()}[aria-label*="${aria.slice(0,20)}"]`;
+                // 优先用稳定 class(过滤 hash 形式)
+                const cls = (el.className || '').toString().split(/\s+/)
+                    .filter(c => c && c.length > 2 && !/^_[a-f0-9]/.test(c) && !/^[a-f0-9]{6,}$/.test(c))
+                    .slice(0, 2);
+                if (cls.length > 0) {
+                    return el.tagName.toLowerCase() + '.' + cls.join('.');
+                }
+                // 兜底:tagName + nth-child
+                const parent = el.parentElement;
+                if (parent) {
+                    const idx = Array.from(parent.children).indexOf(el);
+                    return parent.tagName.toLowerCase() + ' > ' +
+                           el.tagName.toLowerCase() + ':nth-child(' + (idx+1) + ')';
+                }
+                return el.tagName.toLowerCase();
+            }
+
+            // 浮动提示框
+            let tip = document.createElement('div');
+            tip.style.cssText = `
+                position:fixed; z-index:999999; padding:8px 12px;
+                background:#1a4480; color:white; font:13px/1.4 monospace;
+                border-radius:4px; pointer-events:none;
+                box-shadow:0 4px 12px rgba(0,0,0,0.3);
+                max-width:600px; word-break:break-all;
+            `;
+            tip.innerHTML = '🎯 拾取模式 — hover 看选择器, 点击采集, ESC 退出';
+            tip.style.top = '10px';
+            tip.style.left = '10px';
+            document.body.appendChild(tip);
+
+            let lastHover = null;
+            function onHover(e) {
+                if (lastHover) lastHover.style.outline = '';
+                lastHover = e.target;
+                lastHover.style.outline = '3px solid red';
+                const sel = suggestSelector(e.target);
+                const cnt = document.querySelectorAll(sel).length;
+                const txt = (e.target.innerText || e.target.value || '').slice(0, 50).replace(/\n/g, '⏎');
+                tip.innerHTML = `🎯 选择器: <b>${sel}</b><br>命中 ${cnt} 个 | tag=${e.target.tagName.toLowerCase()} | text="${txt}"`;
+            }
+            function onClick(e) {
+                e.preventDefault(); e.stopPropagation();
+                const sel = suggestSelector(e.target);
+                const cnt = document.querySelectorAll(sel).length;
+                window.__novelai_picked = {selector: sel, count: cnt, tag: e.target.tagName.toLowerCase()};
+                tip.innerHTML = `✅ 已拾取: <b>${sel}</b><br>命中 ${cnt} 个。回 PyQt 程序点用即可,或继续 hover 拾取其他。`;
+                tip.style.background = '#2ecc71';
+                setTimeout(() => { tip.style.background = '#1a4480'; }, 1500);
+                return false;
+            }
+            function onKey(e) {
+                if (e.key === 'Escape') {
+                    if (lastHover) lastHover.style.outline = '';
+                    tip.remove();
+                    document.removeEventListener('mouseover', onHover, true);
+                    document.removeEventListener('click', onClick, true);
+                    document.removeEventListener('keydown', onKey, true);
+                    window.__novelai_picker_active = false;
+                }
+            }
+            document.addEventListener('mouseover', onHover, true);
+            document.addEventListener('click', onClick, true);
+            document.addEventListener('keydown', onKey, true);
+            """)
+            return True
+        except Exception:
+            return False
+
+    def get_picked_selector(self):
+        """轮询读取拾取结果"""
+        try:
+            return self.driver.execute_script(r"""
+                const p = window.__novelai_picked;
+                if (p) { window.__novelai_picked = null; return p; }
+                return null;
+            """)
+        except Exception:
+            return None
+
     def _inject_kbd_guard(self):
         """注入 DeepSeek 搜索 modal 三重防护(BUG-013 + 用户报告的搜索 modal 弹窗):
         1. Ctrl+K / Cmd+K 键盘拦截(capture 阶段)
@@ -5220,6 +5383,11 @@ class MainWindow(QMainWindow):
             pass
         # 第 1 项:加载完之后再装自动保存钩子(避免 load 过程被当作 dirty)
         self.tab_settings.enable_auto_save()
+        # 加载用户为站点存的选择器覆盖(BUG-018:DOM 不稳定的解决)
+        try:
+            self._load_site_profile_overrides()
+        except Exception:
+            pass
         # 第 7 项:把题材/时代/金手指/人设串成折叠链
         try:
             self.tab_settings._install_collapsible_chain()
@@ -5362,6 +5530,19 @@ class MainWindow(QMainWindow):
         sm.addSeparator()
         a = QAction("关于", self); a.triggered.connect(self.show_about)
         sm.addAction(a)
+
+        # 工具菜单(诊断 / 现场拾取)
+        tm = m.addMenu("工具(&T)")
+        a_diag = QAction("🔬 诊断当前 AI 网页 DOM(看选择器命中)", self)
+        a_diag.triggered.connect(self.show_dom_diagnostics)
+        tm.addAction(a_diag)
+        a_pick = QAction("🎯 现场拾取选择器(点页面元素自动生成)", self)
+        a_pick.triggered.connect(self.start_dom_picker)
+        tm.addAction(a_pick)
+        tm.addSeparator()
+        a_override = QAction("📝 手动编辑当前站点选择器...", self)
+        a_override.triggered.connect(self.edit_site_profile_override)
+        tm.addAction(a_override)
 
     def _build_ui(self):
         central = QWidget(); self.setCentralWidget(central)
@@ -9201,6 +9382,266 @@ class MainWindow(QMainWindow):
                 self, "已保存",
                 f"字体倍数 ×{v:.2f} 已保存。\n\n"
                 f"请关闭程序后重新打开生效。")
+
+    # ==================== DOM 诊断 / 拾取工具(BUG-018 配套) ====================
+    def show_dom_diagnostics(self):
+        """🔬 诊断当前 AI 网页 DOM:看每个选择器在当前页命中了多少元素"""
+        if not self.worker.is_ready():
+            QMessageBox.warning(
+                self, "请先启动浏览器",
+                "请先在『生成控制』页点『🚀 启动浏览器』并打开 AI 网站")
+            return
+        # 在 worker 线程跑(driver 必须在 worker 线程访问)
+        # 用一个简单的 deferred:postEvent / Queue 都行,这里用 invokeMethod
+        from PyQt5.QtCore import QMetaObject, Qt, Q_RETURN_ARG
+        # 简单点:同步走 — DOM 诊断很快,worker 当前如果不忙,直接调
+        try:
+            result = self.worker.run_dom_diagnostics()
+        except Exception as e:
+            QMessageBox.critical(self, "诊断失败", str(e))
+            return
+        # 渲染结果对话框
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🔬 DOM 诊断结果")
+        dlg.resize(800, 600)
+        lay = QVBoxLayout(dlg)
+        if "__error__" in result:
+            lay.addWidget(QLabel(f"<b>诊断失败:</b>{result['__error__']}"))
+        else:
+            ov = result.get("__overview__", {})
+            top = QLabel(
+                f"<h3>页面概况</h3>"
+                f"<p><b>URL:</b>{ov.get('url', '?')}</p>"
+                f"<p><b>标题:</b>{ov.get('title', '?')}</p>"
+                f"<p><b>页面统计:</b>textarea×{ov.get('total_textareas', 0)},"
+                f"contenteditable×{ov.get('total_contenteditable', 0)},"
+                f"button×{ov.get('total_buttons', 0)}"
+                f"<br>DeepSeek 特有:ds-markdown×{ov.get('ds_markdown_count', 0)},"
+                f"ds-assistant-message-main-content×{ov.get('ds_assistant_count', 0)}</p>")
+            top.setTextFormat(Qt.RichText)
+            top.setWordWrap(True)
+            lay.addWidget(top)
+            # 详细结果
+            txt = QPlainTextEdit()
+            txt.setReadOnly(True)
+            txt.setStyleSheet("font-family:monospace; font-size:12px;")
+            lines = ["<选择器诊断>\n" + "=" * 60]
+            for name, info in result.items():
+                if name == "__overview__":
+                    continue
+                sel = info.get("selector", "")
+                cnt = info.get("count", 0)
+                err = info.get("error", "")
+                flag = "✓" if cnt > 0 else ("✗" if not err else "⚠")
+                lines.append(f"\n[{flag}] {name}")
+                lines.append(f"  选择器: {sel}")
+                if err:
+                    lines.append(f"  错误: {err}")
+                else:
+                    lines.append(f"  命中: {cnt} 个")
+                    for j, s in enumerate(info.get("samples", [])):
+                        vis = "可见" if s.get("visible") else "隐藏"
+                        lines.append(f"    [{j}] <{s['tag']}.{s['class']}> [{vis}] '{s['text']}'")
+            txt.setPlainText("\n".join(lines))
+            lay.addWidget(txt, 1)
+        # 关闭按钮
+        btn_row = QHBoxLayout()
+        btn_pick = QPushButton("🎯 改用现场拾取")
+        btn_pick.clicked.connect(lambda: (dlg.accept(), self.start_dom_picker()))
+        btn_pick.setStyleSheet(
+            "QPushButton { background:#e67e22; color:white; padding:6px 14px; "
+            "border-radius:3px; font-weight:bold; }")
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dlg.accept)
+        btn_row.addWidget(btn_pick)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
+        dlg.exec_()
+
+    def start_dom_picker(self):
+        """🎯 现场拾取:在浏览器开 picker,用户 hover/点击,Python 端轮询读结果"""
+        if not self.worker.is_ready():
+            QMessageBox.warning(self, "请先启动浏览器", "请先启动浏览器并打开 AI 网页")
+            return
+        ok = self.worker.install_dom_picker()
+        if not ok:
+            QMessageBox.warning(self, "安装失败", "JS 注入失败,请确认浏览器已挂载到 AI 网页")
+            return
+        # 弹引导对话框,用户每点一次 "采集刚才点的",就读一次 picked
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🎯 现场拾取选择器")
+        dlg.setMinimumWidth(700)
+        lay = QVBoxLayout(dlg)
+        guide = QLabel(
+            "<h3>用法</h3>"
+            "<ol>"
+            "<li>切到浏览器(挂载的 AI 网页)</li>"
+            "<li>鼠标 hover 各元素,左上角蓝条会显示建议的选择器</li>"
+            "<li>点击 <b>输入框</b> / <b>发送按钮</b> / <b>AI 回复区</b> 任一</li>"
+            "<li>回到这里,点下方对应的[采集...为...]按钮,把刚点的选择器存到对应字段</li>"
+            "<li>采集完点【💾 保存覆盖】生效</li>"
+            "<li>浏览器里按 ESC 退出拾取模式</li>"
+            "</ol>")
+        guide.setWordWrap(True)
+        guide.setStyleSheet("background:#f5f5f5; padding:10px; border-radius:3px;")
+        lay.addWidget(guide)
+
+        # 当前已采集的字段
+        url = self.tab_generation.url_input.text() or "?"
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc
+        lay.addWidget(QLabel(f"<b>目标站点:</b>{host}"))
+
+        # 三个字段的"采集到此"
+        fields = {}
+        for key, label in [("input", "输入框"), ("send_btn", "发送按钮"), ("response", "AI 回复区"),
+                            ("stop_btn", "停止按钮(可选)")]:
+            row = QHBoxLayout()
+            edit = QLineEdit()
+            edit.setPlaceholderText(f"<未采集 {label} 的选择器>")
+            row.addWidget(QLabel(f"{label}:"))
+            row.addWidget(edit, 1)
+            btn = QPushButton(f"📥 用刚点击的元素填入")
+            btn.setStyleSheet("QPushButton { background:#3498db; color:white; padding:4px 8px; }")
+            def make_cap(e=edit, k=key, l=label):
+                def _cap():
+                    p = self.worker.get_picked_selector()
+                    if p:
+                        e.setText(p.get("selector", ""))
+                        QMessageBox.information(
+                            dlg, "✓ 已采集",
+                            f"{l} 选择器:\n{p.get('selector')}\n命中 {p.get('count')} 个元素")
+                    else:
+                        QMessageBox.warning(
+                            dlg, "没采到",
+                            f"还没在浏览器里点元素,请先去浏览器 hover + 点{l}")
+                return _cap
+            btn.clicked.connect(make_cap())
+            row.addWidget(btn)
+            fields[key] = edit
+            lay.addLayout(row)
+
+        # 保存按钮
+        btn_row = QHBoxLayout()
+        btn_save = QPushButton("💾 保存覆盖到 QSettings(立即生效)")
+        btn_save.setStyleSheet(
+            "QPushButton { background:#2ecc71; color:white; padding:8px 16px; "
+            "border-radius:3px; font-weight:bold; }")
+        def _save():
+            overrides = {k: e.text().strip() for k, e in fields.items() if e.text().strip()}
+            if not overrides:
+                QMessageBox.warning(dlg, "提示", "至少要填一个选择器")
+                return
+            self._apply_site_profile_override(host, overrides)
+            QMessageBox.information(
+                dlg, "✓ 已保存",
+                f"{host} 选择器覆盖已保存。\n"
+                f"立即生效,下次发消息会用新选择器。\n"
+                f"覆盖项:{list(overrides.keys())}")
+            dlg.accept()
+        btn_save.clicked.connect(_save)
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(dlg.reject)
+        btn_row.addWidget(btn_save)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_cancel)
+        lay.addLayout(btn_row)
+
+        dlg.exec_()
+
+    def _apply_site_profile_override(self, host, overrides):
+        """把用户拾取的选择器覆盖到运行时 SITE_PROFILES + 持久化到 QSettings"""
+        global SITE_PROFILES
+        # 找最匹配的 host key
+        match_key = None
+        for hk in SITE_PROFILES:
+            if hk in host or host.endswith(hk):
+                match_key = hk
+                break
+        if not match_key:
+            # 新建一份(复制 _default 当底)
+            match_key = host
+            base = dict(SITE_PROFILES.get("_default", {}))
+            base["name"] = host
+            SITE_PROFILES[match_key] = base
+        # 应用覆盖
+        for k, v in overrides.items():
+            SITE_PROFILES[match_key][k] = v
+        # 持久化
+        from PyQt5.QtCore import QSettings
+        s = QSettings("NovelAI", "SiteProfiles")
+        for k, v in overrides.items():
+            s.setValue(f"{match_key}/{k}", v)
+        self.tab_generation.log(
+            f"✓ 已更新 {match_key} 选择器:{list(overrides.keys())}", "success")
+
+    def _load_site_profile_overrides(self):
+        """启动时加载用户在 QSettings 里存的选择器覆盖"""
+        global SITE_PROFILES
+        from PyQt5.QtCore import QSettings
+        s = QSettings("NovelAI", "SiteProfiles")
+        for host in list(SITE_PROFILES.keys()) + ['__custom__']:
+            s.beginGroup(host)
+            for k in s.childKeys():
+                v = s.value(k)
+                if v:
+                    if host not in SITE_PROFILES:
+                        SITE_PROFILES[host] = dict(SITE_PROFILES.get("_default", {}))
+                    SITE_PROFILES[host][k] = v
+            s.endGroup()
+
+    def edit_site_profile_override(self):
+        """📝 手动编辑当前站点选择器(高级用户)"""
+        url = self.tab_generation.url_input.text() or ""
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc or "chat.deepseek.com"
+        match_key = None
+        for hk in SITE_PROFILES:
+            if hk in host or host.endswith(hk):
+                match_key = hk
+                break
+        if not match_key:
+            match_key = "_default"
+        cur = SITE_PROFILES.get(match_key, {})
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"📝 编辑 {match_key} 选择器")
+        dlg.setMinimumWidth(700)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(
+            f"<b>当前站点:</b>{host}<br>"
+            f"<b>使用 profile:</b>{match_key}<br>"
+            f"<i>修改后立即生效,持久化到 QSettings。</i>"))
+        fields = {}
+        for key, label in [("input", "输入框 input"),
+                            ("send_btn", "发送按钮 send_btn"),
+                            ("response", "AI 回复区 response"),
+                            ("stop_btn", "停止按钮 stop_btn")]:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"{label}:"))
+            edit = QLineEdit(cur.get(key, ""))
+            edit.setMinimumWidth(450)
+            row.addWidget(edit, 1)
+            fields[key] = edit
+            lay.addLayout(row)
+
+        btn_row = QHBoxLayout()
+        btn_ok = QPushButton("💾 保存覆盖")
+        btn_ok.setStyleSheet("QPushButton { background:#2ecc71; color:white; padding:6px 14px; }")
+        def _ok():
+            overrides = {k: e.text().strip() for k, e in fields.items() if e.text().strip()}
+            if overrides:
+                self._apply_site_profile_override(host, overrides)
+            dlg.accept()
+        btn_ok.clicked.connect(_ok)
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(dlg.reject)
+        btn_row.addWidget(btn_ok)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_cancel)
+        lay.addLayout(btn_row)
+        dlg.exec_()
 
     def show_about(self):
         QMessageBox.about(
