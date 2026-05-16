@@ -4091,6 +4091,37 @@ class BrowserWorker(QObject):
 
         prev_count = self._count_responses(prof)
 
+        # 发送前快照 textarea 附近 icon 按钮的 SVG 形状,
+        # 这样 AI 写完后可以对比"按钮 SVG 是不是变回发送前的样子"判定完成
+        try:
+            self._btn_snapshot_before = self.driver.execute_script(r"""
+                const ta = document.querySelector('textarea');
+                if (!ta) return null;
+                let container = ta.parentElement;
+                for (let i = 0; i < 5 && container; i++) {
+                    const btns = container.querySelectorAll('div[role="button"]');
+                    if (btns.length > 0) {
+                        // 把按钮们的 SVG path/rect d 属性拼成指纹
+                        const fp = [];
+                        for (const b of btns) {
+                            if (b.offsetParent === null) continue;
+                            const paths = b.querySelectorAll('svg path, svg rect');
+                            const dlist = [];
+                            for (const p of paths) {
+                                dlist.push((p.getAttribute('d') || '') +
+                                           '|' + (p.getAttribute('width') || ''));
+                            }
+                            fp.push(dlist.join(';'));
+                        }
+                        return fp.join('||');
+                    }
+                    container = container.parentElement;
+                }
+                return null;
+            """)
+        except Exception:
+            self._btn_snapshot_before = None
+
         # 发送前清除 TamperMonkey bridge 旧数据,防止读到上一轮回复
         if prof.get("tm_bridge"):
             try:
@@ -4208,42 +4239,69 @@ class BrowserWorker(QObject):
             if self._stop.is_set(): return
             cur = self._grab_last_response(prof)
 
-            # 完成信号 1: stop 按钮消失(AI 在写时显示停止按钮)
-            # 加强检测:DeepSeek 的 stop 按钮可能在 textarea 附近,SVG path 形状特征
+            # 完成信号 1: 按钮快照恢复(AI 写完后,textarea 旁边按钮 SVG 变回发送前的样子)
+            # 这是最稳的完成信号:不依赖任何 class/aria-label,只看按钮 SVG 形状指纹
+            # AI 在写时,纸飞机(发送)→ 方块(停止),所以指纹会变;
+            # 写完后停止按钮消失/变回纸飞机 → 指纹恢复成发送前的样子
             stopping = False
             try:
-                stopping = self.driver.execute_script(r"""
-                    // 通用: aria-label / data-testid
-                    let s = document.querySelector('div[role="button"][aria-label*="停止"]') ||
-                            document.querySelector('button[aria-label*="停止"]') ||
-                            document.querySelector('button[aria-label*="Stop" i]') ||
-                            document.querySelector('button[data-testid*="stop"]');
-                    if (s && s.offsetParent !== null) return true;
-                    // DeepSeek 特征:输入框旁边有 SVG 含 rect 的方形按钮(停止图标是个填充方块)
-                    // AI 生成中时这个按钮会替换发送的纸飞机
+                cur_snapshot = self.driver.execute_script(r"""
                     const ta = document.querySelector('textarea');
-                    if (ta) {
-                        let container = ta.parentElement;
-                        for (let i = 0; i < 5 && container; i++) {
-                            // 找 SVG path d 含 'M11 5L18.5'(方形 stop 图标) 的按钮
-                            const btns = container.querySelectorAll('div[role="button"]:has(svg rect)');
-                            if (btns.length > 0) {
-                                for (const b of btns) {
-                                    if (b.offsetParent !== null) return true;
+                    if (!ta) return null;
+                    let container = ta.parentElement;
+                    for (let i = 0; i < 5 && container; i++) {
+                        const btns = container.querySelectorAll('div[role="button"]');
+                        if (btns.length > 0) {
+                            const fp = [];
+                            for (const b of btns) {
+                                if (b.offsetParent === null) continue;
+                                const paths = b.querySelectorAll('svg path, svg rect');
+                                const dlist = [];
+                                for (const p of paths) {
+                                    dlist.push((p.getAttribute('d') || '') +
+                                               '|' + (p.getAttribute('width') || ''));
                                 }
+                                fp.push(dlist.join(';'));
                             }
-                            container = container.parentElement;
+                            return fp.join('||');
                         }
+                        container = container.parentElement;
                     }
-                    return false;
+                    return null;
                 """)
+                # 快照变化中 → 还在写;快照跟"发送前"一致 → 写完了
+                snap_before = getattr(self, "_btn_snapshot_before", None)
+                if snap_before and cur_snapshot is not None:
+                    # 快照不一致 = 现在有"停止按钮"在 → AI 还在写
+                    # 快照一致 = 按钮 SVG 变回发送前样子 → AI 写完了
+                    if cur_snapshot != snap_before:
+                        stopping = True
+                else:
+                    # 快照不可用,退化到原 selector 检测
+                    stopping = self.driver.execute_script(r"""
+                        let s = document.querySelector('div[role="button"][aria-label*="停止"]') ||
+                                document.querySelector('button[aria-label*="停止"]') ||
+                                document.querySelector('button[aria-label*="Stop" i]') ||
+                                document.querySelector('button[data-testid*="stop"]');
+                        if (s && s.offsetParent !== null) return true;
+                        const ta = document.querySelector('textarea');
+                        if (ta) {
+                            let c = ta.parentElement;
+                            for (let i = 0; i < 5 && c; i++) {
+                                const b = c.querySelectorAll('div[role="button"]:has(svg rect)');
+                                for (const x of b) if (x.offsetParent !== null) return true;
+                                c = c.parentElement;
+                            }
+                        }
+                        return false;
+                    """) or False
             except Exception:
                 pass
 
-            # stop 不可见 + 抓到内容 + 连续 1 轮内容不变 → 立即完成(最快路径)
+            # stop 不可见(按钮恢复) + 抓到内容 + 内容跟上次相同 → 立即完成(最快路径)
             if not stopping and cur and len(cur) > 30 and cur == last_text:
                 self.log_signal.emit(
-                    f"✓ stop 按钮已消失 + 内容稳定 → 完成 ({len(cur)} 字符)", "info")
+                    f"✓ 按钮快照已恢复(AI 写完)+ 内容稳定 → 完成 ({len(cur)} 字符)", "info")
                 break
 
             if cur and cur == last_text:
