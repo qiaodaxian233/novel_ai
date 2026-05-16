@@ -3393,6 +3393,9 @@ SITE_PROFILES = {
         # (BUG-012 修复:Canon 数组与 score JSON 都因为这个被抓断或抓错)
         "response": 'div.ds-markdown.ds-assistant-message-main-content',
         "_response_fallback": [
+            # 用户报告:DeepSeek 改版后回复可能是单段 p,直接挂在外面
+            # 选 last 用,但用 has() 排除掉用户提问块(用户块没 p.ds-markdown-paragraph)
+            'p.ds-markdown-paragraph',
             # 兜底:DeepSeek UI 改版时保留宽匹配,但放到 fallback 优先级靠后
             'div.ds-markdown',
             '[class*="ds-message-content"]',
@@ -3400,6 +3403,9 @@ SITE_PROFILES = {
         ],
         # 标准 CSS 不支持 :has-text,改用 aria-label
         "stop_btn": 'div[role="button"][aria-label*="停止"]',
+        # ── 针对 DeepSeek 的特殊抓取策略:把同一回复块内的所有 p 段落拼起来
+        # 因为新版可能没有外层 div.ds-markdown 容器,只有一堆 p
+        "_grab_strategy": "deepseek_paragraphs",
     },
     "doubao.com": {
         "name": "豆包",
@@ -4798,6 +4804,32 @@ class BrowserWorker(QObject):
 
     # ---------- 抓取/计数(用 querySelectorAll,跳过 selenium 的 CSS 解析)----------
     def _count_responses(self, prof):
+        # DeepSeek 专属:用"p.ds-markdown-paragraph 的父分组数"做计数
+        # 这样新版 / 旧版都能用一致计数
+        if prof.get("_grab_strategy") == "deepseek_paragraphs":
+            try:
+                n = int(self.driver.execute_script(r"""
+                    let n1 = document.querySelectorAll(
+                        'div.ds-markdown.ds-assistant-message-main-content').length;
+                    if (n1 > 0) return n1;
+                    // 退路:数 p.ds-markdown-paragraph 的"父分组数"
+                    const paragraphs = document.querySelectorAll('p.ds-markdown-paragraph');
+                    if (!paragraphs.length) return 0;
+                    let groups = 0;
+                    let curParent = null;
+                    for (const p of paragraphs) {
+                        if (p.parentElement !== curParent) {
+                            groups++;
+                            curParent = p.parentElement;
+                        }
+                    }
+                    return groups;
+                """) or 0)
+                if n > 0:
+                    return n
+            except Exception:
+                pass  # 降级到通用流程
+
         # 依次尝试 response 主选择器 + fallback，返回第一个有结果的数量
         selectors = []
         primary = prof.get('response', '')
@@ -4844,6 +4876,49 @@ class BrowserWorker(QObject):
                     return bridge.strip()
             except Exception:
                 pass  # bridge 不可用则降级到 DOM 选择器
+
+        # ── 1.5. DeepSeek 专属策略:把"最近一组 p.ds-markdown-paragraph"拼成完整回复
+        # 用户报告 DeepSeek DOM 变化:
+        #   div.ds-markdown.ds-assistant-message-main-content 是外层容器
+        #   p.ds-markdown-paragraph 是段落,但新版可能拿不到外层 div,只有 p
+        # 策略:扫所有 p.ds-markdown-paragraph,按 DOM 顺序找最后一组连续的(共同父亲)
+        if prof.get("_grab_strategy") == "deepseek_paragraphs":
+            try:
+                ds_text = self.driver.execute_script(r"""
+                    // 1) 优先用外层 div.ds-markdown.ds-assistant-message-main-content
+                    let containers = document.querySelectorAll(
+                        'div.ds-markdown.ds-assistant-message-main-content');
+                    if (containers.length > 0) {
+                        const last = containers[containers.length - 1];
+                        return (last.innerText || last.textContent || '').trim();
+                    }
+                    // 2) 退路:扫所有 p.ds-markdown-paragraph,按"父节点分组"取最后一组
+                    const paragraphs = document.querySelectorAll('p.ds-markdown-paragraph');
+                    if (!paragraphs.length) return '';
+                    // 按 immediate parent 分组(同一回复的 p 共父亲)
+                    const groups = [];
+                    let curParent = null;
+                    let curGroup = [];
+                    for (const p of paragraphs) {
+                        if (p.parentElement !== curParent) {
+                            if (curGroup.length) groups.push(curGroup);
+                            curParent = p.parentElement;
+                            curGroup = [p];
+                        } else {
+                            curGroup.push(p);
+                        }
+                    }
+                    if (curGroup.length) groups.push(curGroup);
+                    if (!groups.length) return '';
+                    // 用最后一组
+                    const lastGroup = groups[groups.length - 1];
+                    return lastGroup.map(p => (p.innerText || p.textContent || '').trim())
+                                    .filter(t => t).join('\n\n');
+                """) or ""
+                if ds_text and len(ds_text.strip()) > 10:
+                    return ds_text.strip()
+            except Exception:
+                pass  # 降级到通用 selector 流程
 
         # ── 2. DOM 选择器(优先抓 assistant role 的最后一条)
         # 顺序: assistant 容器内的 markdown > assistant 容器 > 任意 markdown
