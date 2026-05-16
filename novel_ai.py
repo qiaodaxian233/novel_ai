@@ -4880,8 +4880,18 @@ class GenerationControl(QWidget):
         glay.addLayout(crow)
 
         crow2 = QHBoxLayout()
+        self.auto_save_project = QCheckBox("💾 自动保存项目(每章后立即写盘)")
+        self.auto_save_project.setChecked(True)
+        self.auto_save_project.setToolTip(
+            "勾选后,每生成完一章会立即把项目保存到当前 .json 文件\n"
+            "+ 摘要写完后再自动保存一次\n"
+            "+ 每 60 秒额外定时保存一次\n"
+            "防止意外关机/崩溃丢章节,强烈推荐保留。")
+        self.auto_save_project.setStyleSheet("QCheckBox { color: #2ecc71; font-weight: bold; }")
+        crow2.addWidget(self.auto_save_project)
         self.auto_save = QCheckBox("自动保存到 TXT")
         self.auto_save.setChecked(True)
+        self.auto_save.setToolTip("生成完后另存一份独立 TXT 到项目目录(章节标题做文件名)")
         crow2.addWidget(self.auto_save)
         self.auto_grab = QCheckBox("自动抓取并回填(生成完即写入章节)")
         self.auto_grab.setChecked(True)
@@ -4891,7 +4901,8 @@ class GenerationControl(QWidget):
         self.use_attachment.setToolTip(
             "勾选后,所有任务(包括短任务)都通过 txt 附件发送给 AI\n"
             "✅ 推荐: 镜像站对短文本也可能触发审核,统一走附件最稳\n"
-            "⚠️ 不勾: 直接发文本,可能被 flagged_by_moderation 拦截")
+            "⚠️ 不勾: 直接发文本,可能被 flagged_by_moderation 拦截\n"
+            "── DeepSeek 等无审核站默认会关掉这个 + 自动抓取 + 自动 TXT")
         crow2.addWidget(self.use_attachment)
         crow2.addStretch()
         self.btn_clear = QPushButton("清除日志")
@@ -5140,6 +5151,23 @@ class MainWindow(QMainWindow):
             self._periodic_autosave_timer.setInterval(60_000)  # 60 秒
             self._periodic_autosave_timer.timeout.connect(self._periodic_autosave_fire)
             self._periodic_autosave_timer.start()
+        except Exception:
+            pass
+
+        # ───── 启动时按当前 AI 站点联动 3 checkbox 默认值 ─────
+        # 用户原话:'如果选择DeepSeek 这三个默认不勾选 如果选了gpt 镜像站自动勾选'
+        try:
+            _cur_btn = self.tab_settings.ai_group.checkedButton()
+            if _cur_btn is not None:
+                _ai = _cur_btn.text()
+                if _ai == "ChatGPT镜像":
+                    self.tab_generation.auto_save.setChecked(True)
+                    self.tab_generation.auto_grab.setChecked(True)
+                    self.tab_generation.use_attachment.setChecked(True)
+                elif _ai in ("DeepSeek", "豆包", "Gemini", "元宝", "小米AI"):
+                    self.tab_generation.auto_save.setChecked(False)
+                    self.tab_generation.auto_grab.setChecked(False)
+                    self.tab_generation.use_attachment.setChecked(False)
         except Exception:
             pass
 
@@ -5506,6 +5534,24 @@ class MainWindow(QMainWindow):
             self.tab_generation.log(f"已切换到 {ai}: {url}", "info")
             if self.worker.is_ready():
                 self.worker.submit({"action": "navigate", "url": url})
+        # AI 站点联动:DeepSeek 等无审核站 → 关掉附件/自动抓取/TXT 备份
+        # ChatGPT 镜像等需绕审核 → 全部打开
+        # 用户原话:"如果选择DeepSeek 这三个默认不勾选 如果选了gpt 镜像站自动勾选"
+        try:
+            tg = self.tab_generation
+            if ai == "ChatGPT镜像":
+                tg.auto_save.setChecked(True)
+                tg.auto_grab.setChecked(True)
+                tg.use_attachment.setChecked(True)
+                tg.log("已切到镜像站 → 自动保存TXT/自动抓取/附件模式 全部打开", "info")
+            elif ai in ("DeepSeek", "豆包", "Gemini", "元宝", "小米AI"):
+                tg.auto_save.setChecked(False)
+                tg.auto_grab.setChecked(False)
+                tg.use_attachment.setChecked(False)
+                tg.log(f"已切到 {ai} → 自动保存TXT/自动抓取/附件模式 全部关闭(此站无审核,直发更快)", "info")
+            # 其他(自定义)保持现状不动
+        except Exception:
+            pass
 
     def _init_demo_chapters(self):
         # 不再预填示例章节,启动时章节列表为空
@@ -5747,11 +5793,14 @@ class MainWindow(QMainWindow):
                     self.tab_memory.append_summary(ch_num, ch["title"], summary)
                 self.tab_generation.log(f"✓ 第 {ch_num} 章摘要已记入对话记忆", "success")
                 # 第 9 项:摘要进盘 → 立即 autosave,保证不丢
-                try:
-                    self._autosave()
-                    self.tab_generation.log("  · 已自动保存到项目文件", "info")
-                except Exception:
-                    pass
+                # 尊重 auto_save_project 开关(用户可关掉)
+                if getattr(self.tab_generation, "auto_save_project", None) is None \
+                        or self.tab_generation.auto_save_project.isChecked():
+                    try:
+                        self._autosave()
+                        self.tab_generation.log("  · 已自动保存到项目文件", "info")
+                    except Exception:
+                        pass
             # 链式触发:正在跑后置流水线 → 推进
             if getattr(self, "_post_chapter_pipeline", None):
                 QTimer.singleShot(500, self._run_next_post_chapter_step)
@@ -8352,6 +8401,10 @@ class MainWindow(QMainWindow):
         """第 9 项配套:60 秒定时 autosave,只在有项目文件且内容有变化时跑,
         避免无意义的写盘和日志噪音"""
         try:
+            # 尊重用户开关:auto_save_project 关掉就不跑定时
+            cb = getattr(self.tab_generation, "auto_save_project", None)
+            if cb is not None and not cb.isChecked():
+                return
             # 没打开任何项目,跳过
             if not self.current_project_file:
                 return
