@@ -209,7 +209,7 @@ else:
 # 补丁 3：gen_outline_all 末尾自动回填大纲各输入框
 # =====================================================================
 
-AUTO_FILL_METHOD = '''
+AUTO_FILL_METHOD = r'''
     # ---- 补丁3：大纲自动回填 ----
     def _auto_fill_outline(self, text: str):
         """

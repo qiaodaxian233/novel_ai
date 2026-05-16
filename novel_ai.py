@@ -3517,7 +3517,7 @@ class BrowserWorker(QObject):
         try:
             # 多轮清除（点一个删除按钮后 React 重渲染，需要再扫一遍）
             for round_idx in range(5):
-                removed = self.driver.execute_script("""
+                removed = self.driver.execute_script(r"""
                     let count = 0;
                     
                     // 找页面上所有按钮（不限定在 composer 内，因为附件有时挂在 composer 外）
@@ -6430,6 +6430,9 @@ class MainWindow(QMainWindow):
     def _send_next_chapter(self):
         """批量生成里发下一章(自动注入对话记忆+伏笔提醒)"""
         if self._batch_paused or self._batch_remaining <= 0:
+            # 批量结束,清 silent 标记(下次单章生成或重启批量恢复正常)
+            if getattr(self, "_batch_silent", False):
+                self._batch_silent = False
             return
         co = self.tab_outline.chapter_outline_edit.toPlainText()
         ch_num = len(self.chapters) + 1
@@ -7403,6 +7406,9 @@ class MainWindow(QMainWindow):
         # 启动批量
         self._batch_remaining = self.tab_generation.batch_count.value()
         self._batch_paused = False
+        # BUG #8 修复:批量生成时静默伏笔提醒,避免阻塞自动化流程
+        # 伏笔信息仍会注入到 prompt,只是不弹 modal
+        self._batch_silent = True
         target = self.tab_settings.get_words_per_chapter()
         offset = self.tab_settings.get_prompt_offset()
         target_with_offset = max(500, target + offset)
@@ -7417,6 +7423,7 @@ class MainWindow(QMainWindow):
     def pause_generation(self):
         self._batch_paused = True
         self._batch_remaining = 0
+        self._batch_silent = False  # 退出批量,恢复伏笔提醒
         self.tab_generation.log("⏸ 已请求停止批量(等待当前任务结束)", "warn")
 
     def grab_response(self):
@@ -7785,9 +7792,16 @@ class MainWindow(QMainWindow):
             },
             "saved_at": datetime.now().isoformat(),
         }
-        Path(self.current_project_file).write_text(
-            json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.statusBar().showMessage(f"已保存:{self.current_project_file}", 3000)
+        try:
+            Path(self.current_project_file).write_text(
+                json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.statusBar().showMessage(f"已保存:{self.current_project_file}", 3000)
+        except Exception as e:
+            QMessageBox.critical(
+                self, "保存失败",
+                f"无法写入项目文件:\n{self.current_project_file}\n\n错误:{e}\n\n"
+                "请检查:1) 路径是否可写  2) 磁盘是否已满  3) 文件名是否合法")
+            self.tab_generation.log(f"✗ 保存项目失败:{e}", "error")
 
     def new_directory(self):
         name, ok = QInputDialog.getText(self, "新建目录", "目录名:")
