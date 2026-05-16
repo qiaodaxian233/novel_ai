@@ -8849,49 +8849,21 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    # 检测屏幕分辨率,4K 及以上自动放大默认字体
-    # ★ 修订:用物理像素(逻辑像素 × devicePixelRatio),否则开了
-    #   Windows 系统缩放后逻辑分辨率会被除小,4K + 150% 缩放看到的是 2560×1440
+    # 字体倍数:只读用户手动设置(QSettings.font_scale),不再做自动检测
+    # 原因:多屏 / 高分屏 Windows 缩放各种组合下自动检测不靠谱,
+    #      手动滑块(创作设置最底)最稳。默认 ×1.0,用户拖了再生效。
     try:
-        # 优先读用户手动设的字体倍数(QSettings)
         from PyQt5.QtCore import QSettings as _QSf
         _manual = _QSf("NovelAI", "CreationSettings").value(
             "font_scale", 0.0, type=float) or 0.0
-        screen = app.primaryScreen()
-        _scale = 1.0
-        _w = _h = 0
-        _w_phys = _h_phys = 0
-        _dpr = 1.0
-        if screen is not None:
-            sz = screen.size()
-            _w, _h = sz.width(), sz.height()
-            _dpr = screen.devicePixelRatio() or 1.0
-            # 物理像素 = 逻辑 × devicePixelRatio
-            _w_phys = int(_w * _dpr)
-            _h_phys = int(_h * _dpr)
-            if _manual > 0.5:
-                # 用户手动覆盖,优先
-                _scale = _manual
-            elif _w_phys >= 3000 or _h_phys >= 1900:
-                # 物理像素达 4K → 字体 ×1.5
-                _scale = 1.5
-            elif _w_phys >= 2400 or _h_phys >= 1500:
-                # 物理像素达 2.5K → 字体 ×1.25
-                _scale = 1.25
+        _scale = _manual if _manual >= 0.5 else 1.0
         if _scale > 1.0:
             from PyQt5.QtGui import QFont
             _font = app.font()
             _base = _font.pointSizeF() if _font.pointSizeF() > 0 else 9.0
             _font.setPointSizeF(_base * _scale)
             app.setFont(_font)
-        # 都记到 app 属性,不管 scale 是不是 1.0 — 启动日志统一打
         app.setProperty("_novelai_dpi_scale", _scale)
-        app.setProperty("_novelai_screen_w", _w)
-        app.setProperty("_novelai_screen_h", _h)
-        app.setProperty("_novelai_screen_w_phys", _w_phys)
-        app.setProperty("_novelai_screen_h_phys", _h_phys)
-        app.setProperty("_novelai_dpr", _dpr)
-        app.setProperty("_novelai_manual_scale", _manual)
     except Exception:
         pass
 
@@ -8904,26 +8876,13 @@ def main():
     try:
         win = MainWindow()
         win.show()
-        # HiDPI 启动日志(无论缩放多少都打,方便诊断)
+        # 字体倍数启动日志(只在 >1.0 时打,简洁)
         try:
-            _sc      = app.property("_novelai_dpi_scale") or 1.0
-            _w       = app.property("_novelai_screen_w") or 0
-            _h       = app.property("_novelai_screen_h") or 0
-            _wp      = app.property("_novelai_screen_w_phys") or 0
-            _hp      = app.property("_novelai_screen_h_phys") or 0
-            _dpr     = app.property("_novelai_dpr") or 1.0
-            _man     = app.property("_novelai_manual_scale") or 0.0
-            _origin  = "用户手动" if _man > 0.5 else ("自动检测" if _sc > 1.0 else "未启用")
-            win.tab_generation.log(
-                f"屏幕诊断:逻辑 {_w}×{_h} / 物理 {_wp}×{_hp} / "
-                f"DPR={_dpr:.2f} → 字体缩放 ×{_sc} ({_origin})",
-                "success" if _sc > 1.0 else "info")
-            if _sc <= 1.0 and (_wp >= 3000 or _hp >= 1900):
-                # 物理像素是 4K 但 scale=1,可能是用户已经关了
+            _sc = app.property("_novelai_dpi_scale") or 1.0
+            if _sc > 1.0:
                 win.tab_generation.log(
-                    "⚠️ 检测到 4K 物理分辨率但字体未放大 - "
-                    "去【创作设置】底部用'字体倍数'滑块手动调",
-                    "warn")
+                    f"字体倍数 ×{_sc:.2f} 已应用(创作设置 → 底部 🔍 界面字体大小)",
+                    "info")
         except Exception:
             pass
     except Exception as e:
