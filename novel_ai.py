@@ -3766,26 +3766,91 @@ class BrowserWorker(QObject):
         self.log_signal.emit(f"已访问:{url}", "info")
 
     def _inject_kbd_guard(self):
-        """注入键盘快捷键拦截脚本(BUG-013 兜底)。
-        DeepSeek 等网页有 Ctrl+K 打开搜索框,这里在 capture 阶段就拦掉,
-        避免代码或用户误触发(比如 Selenium Ctrl+V 路径 key_up 漏释放
-        导致 Ctrl 卡按下,后续 K 键变 Ctrl+K)。
-        用 window.__novelai_kbd_guard 做 flag,重复调用不会重复绑定。"""
+        """注入 DeepSeek 搜索 modal 三重防护(BUG-013 + 用户报告的搜索 modal 弹窗):
+        1. Ctrl+K / Cmd+K 键盘拦截(capture 阶段)
+        2. 直接隐藏顶部搜索按钮(用户不用 DeepSeek 自带搜索)
+        3. MutationObserver 兜底:搜索 modal 一出现就关掉,防止 Selenium 误点
+        用 window.__novelai_search_guard 做 flag,重复调用不会重复绑定。"""
         try:
-            self.driver.execute_script("""
-                if (!window.__novelai_kbd_guard) {
-                    const blocker = function(e) {
-                        // 拦 Ctrl+K / Cmd+K(打开搜索)
-                        if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
-                            e.preventDefault();
-                            e.stopImmediatePropagation();
-                            console.log('[novelai] Ctrl+K blocked');
-                            return false;
+            self.driver.execute_script(r"""
+                if (window.__novelai_search_guard) return 'already';
+                window.__novelai_search_guard = true;
+
+                // ─── 1. Ctrl+K / Cmd+K 拦截(capture 阶段) ───
+                window.addEventListener('keydown', function(e) {
+                    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                        console.log('[novelai] Ctrl+K blocked');
+                        return false;
+                    }
+                }, true);
+
+                // ─── 2. 隐藏顶部搜索按钮 ───
+                // 搜索按钮的 SVG 是放大镜:path d 以 "M11.894845 6.647401" 开头
+                function hideSearchButtons() {
+                    document.querySelectorAll('div[role="button"]').forEach(btn => {
+                        if (btn.dataset.naiHidden === '1') return;
+                        const path = btn.querySelector('svg path');
+                        if (path) {
+                            const d = path.getAttribute('d') || '';
+                            // 放大镜 svg 的 d 起始
+                            if (d.startsWith('M11.894845') || d.indexOf('M11.894845 6.647401') >= 0) {
+                                btn.style.display = 'none';
+                                btn.dataset.naiHidden = '1';
+                                console.log('[novelai] 搜索按钮已隐藏');
+                            }
                         }
-                    };
-                    window.addEventListener('keydown', blocker, true);  // capture 阶段
-                    window.__novelai_kbd_guard = true;
+                    });
                 }
+                hideSearchButtons();
+                // 周期性扫(SPA 切页面后按钮会重生)
+                setInterval(hideSearchButtons, 1500);
+
+                // ─── 3. 搜索 modal 兜底:出现就关闭 ───
+                function dismissSearchModal() {
+                    // 找含 "搜索对话内容" placeholder 的 input
+                    const inputs = document.querySelectorAll('input[placeholder]');
+                    for (const inp of inputs) {
+                        const ph = inp.getAttribute('placeholder') || '';
+                        if (ph.indexOf('搜索') >= 0 || ph.indexOf('search') >= 0) {
+                            // 找最近的 dialog/modal 父级
+                            const modal = inp.closest('[role="dialog"]') ||
+                                          inp.closest('.ds-modal-content') ||
+                                          inp.closest('[class*="modal"]');
+                            if (modal && modal.offsetParent !== null) {
+                                // 1) 优先点 X 关闭按钮(modal 内部 svg path 含 M14.1871)
+                                const closePaths = modal.querySelectorAll('svg path');
+                                let closeBtn = null;
+                                for (const p of closePaths) {
+                                    const d = p.getAttribute('d') || '';
+                                    if (d.indexOf('M14.1871') >= 0 || d.indexOf('14.187') >= 0) {
+                                        closeBtn = p.closest('[role="button"]');
+                                        if (closeBtn) break;
+                                    }
+                                }
+                                if (closeBtn) {
+                                    closeBtn.click();
+                                    console.log('[novelai] 搜索 modal 已点 X 关闭');
+                                    return;
+                                }
+                                // 2) 兜底:模拟 ESC 键到 modal
+                                modal.dispatchEvent(new KeyboardEvent('keydown',
+                                    {key:'Escape', keyCode:27, which:27, bubbles:true}));
+                                document.dispatchEvent(new KeyboardEvent('keydown',
+                                    {key:'Escape', keyCode:27, which:27, bubbles:true}));
+                                console.log('[novelai] 搜索 modal 发 ESC 兜底');
+                            }
+                        }
+                    }
+                }
+                // 立即扫一次 + MutationObserver 持续盯
+                dismissSearchModal();
+                const obs = new MutationObserver(function() {
+                    dismissSearchModal();
+                });
+                obs.observe(document.body, {childList: true, subtree: true});
+
                 return 'OK';
             """)
         except Exception:
@@ -3804,9 +3869,47 @@ class BrowserWorker(QObject):
         prof = _profile_for_url(self._current_url())
         self.log_signal.emit(f"使用档案:{prof['name']}", "info")
 
-        # BUG-013 兜底:注入键盘快捷键拦截脚本(Ctrl+K 弹搜索框问题)
+        # BUG-013 + 搜索 modal 兜底:注入三重防护(Ctrl+K 拦截 + 隐藏搜索按钮 + 自动关 modal)
         # 用 idempotent 的全局 flag 防重复绑定
         self._inject_kbd_guard()
+
+        # 发消息前再强制关一次搜索 modal(如果用户之前手动触发或 selenium 误触发还残留)
+        try:
+            closed = self.driver.execute_script(r"""
+                const inputs = document.querySelectorAll('input[placeholder]');
+                let n = 0;
+                for (const inp of inputs) {
+                    const ph = inp.getAttribute('placeholder') || '';
+                    if (ph.indexOf('搜索') >= 0 || ph.indexOf('search') >= 0) {
+                        const modal = inp.closest('[role="dialog"]') ||
+                                      inp.closest('.ds-modal-content') ||
+                                      inp.closest('[class*="modal"]');
+                        if (modal && modal.offsetParent !== null) {
+                            // 找 X 按钮(svg path d 含 14.187)
+                            const paths = modal.querySelectorAll('svg path');
+                            let close = null;
+                            for (const p of paths) {
+                                if ((p.getAttribute('d') || '').indexOf('14.187') >= 0) {
+                                    close = p.closest('[role="button"]');
+                                    if (close) break;
+                                }
+                            }
+                            if (close) { close.click(); n++; }
+                            else { 
+                                document.dispatchEvent(new KeyboardEvent('keydown',
+                                    {key:'Escape', keyCode:27, which:27, bubbles:true}));
+                                n++;
+                            }
+                        }
+                    }
+                }
+                return n;
+            """)
+            if closed and closed > 0:
+                self.log_signal.emit(f"发消息前关闭了 {closed} 个搜索 modal", "info")
+                time.sleep(0.3)  # 等 modal 真的关掉再继续
+        except Exception:
+            pass
 
         # 1) 等输入框出现(最长 15s)
         deadline = time.time() + 15
