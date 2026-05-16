@@ -4196,8 +4196,13 @@ class BrowserWorker(QObject):
         last_text = ""
         last_change = time.time()
         start = time.time()
-        fast_stable_wait = 1.5   # 短回复(JSON/摘要)用快稳定
-        normal_stable_wait = self.stable_wait  # 长章节继续用慢稳定
+        # 智能稳定阈值:根据内容长度分档
+        # 短回复(JSON/评分/摘要 <300 字)→ 0.9s 稳定即完成(超快)
+        # 中等回复(<1000 字)→ 1.5s
+        # 长章节(>=1000 字)→ 用 self.stable_wait(默认 4s)防 AI 卡顿误判
+        ultrafast_stable_wait = 0.9
+        fast_stable_wait = 1.5
+        normal_stable_wait = self.stable_wait
         no_change_streak = 0  # 连续无变化的轮数
         while time.time() - start < self.max_wait:
             if self._stop.is_set(): return
@@ -4243,12 +4248,20 @@ class BrowserWorker(QObject):
 
             if cur and cur == last_text:
                 no_change_streak += 1
-                # 短回复(<500 字)用快稳定:1.5s 无变化即可
-                # 长章节(>=500 字)用慢稳定:原来的 stable_wait(默认 4s)
-                wait_threshold = fast_stable_wait if len(cur) < 500 else normal_stable_wait
+                # 智能三档稳定阈值:
+                #   <300 字 (JSON/评分/摘要) → 0.9s 即可
+                #   <1000 字 → 1.5s
+                #   >=1000 字 (长章节) → self.stable_wait (默认 4s,防 AI 卡顿误判)
+                clen = len(cur)
+                if clen < 300:
+                    wait_threshold = ultrafast_stable_wait
+                elif clen < 1000:
+                    wait_threshold = fast_stable_wait
+                else:
+                    wait_threshold = normal_stable_wait
                 if time.time() - last_change >= wait_threshold:
                     self.log_signal.emit(
-                        f"✓ 内容稳定 {wait_threshold:.1f}s 无变化 → 完成 ({len(cur)} 字符)", "info")
+                        f"✓ 内容稳定 {wait_threshold:.1f}s → 完成 ({clen} 字符)", "info")
                     break
             else:
                 last_text = cur
@@ -5740,7 +5753,7 @@ class MainWindow(QMainWindow):
         a = QAction("关于", self); a.triggered.connect(self.show_about)
         sm.addAction(a)
 
-        # 工具菜单(诊断 / 现场拾取)
+        # 工具菜单(诊断 / 现场拾取 / 清理)
         tm = m.addMenu("工具(&T)")
         a_diag = QAction("🔬 诊断当前 AI 网页 DOM(看选择器命中)", self)
         a_diag.triggered.connect(self.show_dom_diagnostics)
@@ -5752,6 +5765,10 @@ class MainWindow(QMainWindow):
         a_override = QAction("📝 手动编辑当前站点选择器...", self)
         a_override.triggered.connect(self.edit_site_profile_override)
         tm.addAction(a_override)
+        tm.addSeparator()
+        a_clean_meta = QAction("🧹 扫描清理所有章节尾部元信息(本章完/钩子/选项)", self)
+        a_clean_meta.triggered.connect(self.batch_clean_chapter_meta)
+        tm.addAction(a_clean_meta)
 
     def _build_ui(self):
         central = QWidget(); self.setCentralWidget(central)
@@ -9851,6 +9868,103 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(btn_cancel)
         lay.addLayout(btn_row)
         dlg.exec_()
+
+    def batch_clean_chapter_meta(self):
+        """🧹 扫描所有章节,把残留的元信息(本章完/钩子/爽点/选项)剥到 dict 字段
+        用于清理'旧章节'(之前没有 strip 逻辑时生成的脏数据)"""
+        if not self.chapters:
+            QMessageBox.information(self, "提示", "当前没有章节可清理")
+            return
+        try:
+            from pangu_system import parse_chapter_meta as _pangu_parse
+        except ImportError:
+            QMessageBox.warning(self, "无法清理", "找不到 pangu_system 模块")
+            return
+
+        # 先扫一遍看有几章需要清
+        dirty_idxs = []
+        for i, ch in enumerate(self.chapters):
+            c = ch.get("content", "")
+            if not c:
+                continue
+            # 含元信息标记之一就算 dirty
+            if "本章完" in c or "【断章钩子】" in c or "【下一章选项】" in c \
+                    or "【本章爽点】" in c or "【伏笔状态】" in c:
+                dirty_idxs.append(i)
+
+        if not dirty_idxs:
+            QMessageBox.information(
+                self, "✓ 不用清理",
+                f"扫描 {len(self.chapters)} 章,**没有发现**残留元信息。\n"
+                f"如果你看到章节正文里还有'本章完'等,可能是:\n"
+                f"  · 拉的代码不是最新(git log 看 HEAD 是不是 cdcbfde 或更新)\n"
+                f"  · 章节内容是 AI 加了变体格式,可以把章节末尾发我加规则")
+            return
+
+        ret = QMessageBox.question(
+            self, "🧹 一键清理章节尾部元信息",
+            f"扫描 {len(self.chapters)} 章,**发现 {len(dirty_idxs)} 章**含残留元信息:\n"
+            f"  章节号:{[i+1 for i in dirty_idxs[:10]]}{'...' if len(dirty_idxs) > 10 else ''}\n\n"
+            f"清理后:\n"
+            f"  ✓ 章节正文剥离'本章完 / 【断章钩子】/ 【本章爽点】/ ...'\n"
+            f"  ✓ 元信息存进 chapter dict 的 hook/cool_points/next_options 字段\n"
+            f"  ✓ 自动保存项目(会触发 .backups 备份原版本)\n\n"
+            f"继续吗?",
+            QMessageBox.Yes | QMessageBox.No)
+        if ret != QMessageBox.Yes:
+            return
+
+        cleaned = 0
+        total_stripped = 0
+        for i in dirty_idxs:
+            ch = self.chapters[i]
+            orig = ch.get("content", "")
+            if not orig:
+                continue
+            try:
+                meta = _pangu_parse(orig)
+                new_body = meta.get("body") or orig
+                if len(new_body) == len(orig):
+                    continue  # 没真的剥到
+                stripped = len(orig) - len(new_body)
+                total_stripped += stripped
+                cleaned += 1
+                ch["content"] = new_body
+                # 存元信息到 dict 字段
+                if meta.get("hook"): ch["hook"] = meta["hook"]
+                if meta.get("cool_points"): ch["cool_points"] = meta["cool_points"]
+                if meta.get("next_options"): ch["next_options"] = meta["next_options"]
+                _sp = len(meta.get("seeds_planted", []))
+                _pd = len(meta.get("seeds_paid", []))
+                if _sp or _pd:
+                    parts = []
+                    if _sp: parts.append(f"埋雷 {_sp} 条")
+                    if _pd: parts.append(f"收雷 {_pd} 条")
+                    ch["_pangu_seeds_summary"] = " / ".join(parts)
+                self.tab_generation.log(
+                    f"  · 第 {i+1} 章 剥离 {stripped} 字 + 元信息入档",
+                    "info")
+            except Exception as e:
+                self.tab_generation.log(f"  ✗ 第 {i+1} 章 剥离失败:{e}", "warn")
+
+        # 刷新 UI
+        try:
+            cur_idx = self.tab_editor.current_index
+            if 0 <= cur_idx < len(self.chapters):
+                self.tab_editor.show_chapter(self.chapters[cur_idx], cur_idx)
+        except Exception:
+            pass
+        # 保存
+        try:
+            self.save_project()
+        except Exception:
+            self._autosave()
+
+        QMessageBox.information(
+            self, "✓ 清理完成",
+            f"清理 {cleaned} 章,共剥离 {total_stripped} 字元信息。\n\n"
+            f"已自动保存项目(原版本可通过菜单 → 🕓 恢复历史版本 找回)。\n"
+            f"切到章节编辑器看『📌 本章元信息』面板,钩子/爽点/选项已就位。")
 
     def show_about(self):
         QMessageBox.about(
