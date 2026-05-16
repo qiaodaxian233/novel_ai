@@ -2981,7 +2981,17 @@ SITE_PROFILES = {
         "input": 'textarea',
         # `:has(svg)` 在现代 Chrome 的 querySelector 里原生支持(2022 后)
         "send_btn": 'div[role="button"]:has(svg)',
-        "response": 'div.ds-markdown, [class*="markdown-body"]',
+        # 主选择器:精确抓 assistant 正式回复主体
+        # ── 必须用 ds-assistant-message-main-content,否则 div.ds-markdown
+        # 也会匹配到思考过程块 / 用户提问块,导致 `last` 抓错对象
+        # (BUG-012 修复:Canon 数组与 score JSON 都因为这个被抓断或抓错)
+        "response": 'div.ds-markdown.ds-assistant-message-main-content',
+        "_response_fallback": [
+            # 兜底:DeepSeek UI 改版时保留宽匹配,但放到 fallback 优先级靠后
+            'div.ds-markdown',
+            '[class*="ds-message-content"]',
+            '[class*="markdown-body"]',
+        ],
         # 标准 CSS 不支持 :has-text,改用 aria-label
         "stop_btn": 'div[role="button"][aria-label*="停止"]',
     },
@@ -3785,7 +3795,7 @@ class BrowserWorker(QObject):
                         if (box) {{ box.focus(); document.execCommand('selectAll'); document.execCommand('delete'); }}
                     """)
                     _t_inj.sleep(0.1)
-                    self.driver.execute_cdp_cmd('Input.insertText', {{'text': text}})
+                    self.driver.execute_cdp_cmd('Input.insertText', {'text': text})
                     _t_inj.sleep(0.3)
                     # 触发 React 事件
                     cdp_ok = self.driver.execute_script(f"""
