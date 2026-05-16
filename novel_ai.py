@@ -3808,48 +3808,42 @@ class BrowserWorker(QObject):
                 setInterval(hideSearchButtons, 1500);
 
                 // ─── 3. 搜索 modal 兜底:出现就关闭 ───
+                // 简化版:不依赖 input placeholder,直接按 X 按钮 SVG 特征找
+                // X 按钮 SVG path d 含 14.187(用户提供的稳定特征)
                 function dismissSearchModal() {
-                    // 找含 "搜索对话内容" placeholder 的 input
-                    const inputs = document.querySelectorAll('input[placeholder]');
-                    for (const inp of inputs) {
-                        const ph = inp.getAttribute('placeholder') || '';
-                        if (ph.indexOf('搜索') >= 0 || ph.indexOf('search') >= 0) {
-                            // 找最近的 dialog/modal 父级
-                            const modal = inp.closest('[role="dialog"]') ||
-                                          inp.closest('.ds-modal-content') ||
-                                          inp.closest('[class*="modal"]');
-                            if (modal && modal.offsetParent !== null) {
-                                // 1) 优先点 X 关闭按钮(modal 内部 svg path 含 M14.1871)
-                                const closePaths = modal.querySelectorAll('svg path');
-                                let closeBtn = null;
-                                for (const p of closePaths) {
-                                    const d = p.getAttribute('d') || '';
-                                    if (d.indexOf('M14.1871') >= 0 || d.indexOf('14.187') >= 0) {
-                                        closeBtn = p.closest('[role="button"]');
-                                        if (closeBtn) break;
-                                    }
-                                }
-                                if (closeBtn) {
-                                    closeBtn.click();
-                                    console.log('[novelai] 搜索 modal 已点 X 关闭');
-                                    return;
-                                }
-                                // 2) 兜底:模拟 ESC 键到 modal
-                                modal.dispatchEvent(new KeyboardEvent('keydown',
-                                    {key:'Escape', keyCode:27, which:27, bubbles:true}));
-                                document.dispatchEvent(new KeyboardEvent('keydown',
-                                    {key:'Escape', keyCode:27, which:27, bubbles:true}));
-                                console.log('[novelai] 搜索 modal 发 ESC 兜底');
-                            }
+                    // 找页面上所有可能的 X 按钮(svg path d 含 14.187)
+                    const paths = document.querySelectorAll('svg path');
+                    let closedCount = 0;
+                    for (const p of paths) {
+                        const d = p.getAttribute('d') || '';
+                        if (d.indexOf('14.187') < 0) continue;
+                        const btn = p.closest('[role="button"]');
+                        if (!btn || btn.dataset.naiClosed === '1') continue;
+                        // 检查 X 按钮是否在 modal/dialog 容器里(避免误关其他 X)
+                        const modal = btn.closest('[role="dialog"]') ||
+                                      btn.closest('.ds-modal-content') ||
+                                      btn.closest('[class*="modal"]');
+                        if (modal && modal.offsetParent !== null) {
+                            btn.dataset.naiClosed = '1';  // 防同帧重复点
+                            btn.click();
+                            closedCount++;
+                            console.log('[novelai] 搜索 modal X 按钮已点关闭');
+                            // 0.5 秒后清掉标记,允许下次新 modal 再关
+                            setTimeout(() => { delete btn.dataset.naiClosed; }, 500);
                         }
                     }
+                    return closedCount;
                 }
-                // 立即扫一次 + MutationObserver 持续盯
+                // 立即扫一次 + MutationObserver 持续盯 + 每 800ms 周期扫(双保险)
                 dismissSearchModal();
+                setInterval(dismissSearchModal, 800);
                 const obs = new MutationObserver(function() {
                     dismissSearchModal();
                 });
                 obs.observe(document.body, {childList: true, subtree: true});
+
+                // 暴露给外部供 Python 主动调用
+                window.__novelai_dismiss_modal = dismissSearchModal;
 
                 return 'OK';
             """)
@@ -3874,40 +3868,21 @@ class BrowserWorker(QObject):
         self._inject_kbd_guard()
 
         # 发消息前再强制关一次搜索 modal(如果用户之前手动触发或 selenium 误触发还残留)
+        # 反复关 3 次,每次间隔 200ms,防 modal 关闭动画期间又重生
         try:
-            closed = self.driver.execute_script(r"""
-                const inputs = document.querySelectorAll('input[placeholder]');
-                let n = 0;
-                for (const inp of inputs) {
-                    const ph = inp.getAttribute('placeholder') || '';
-                    if (ph.indexOf('搜索') >= 0 || ph.indexOf('search') >= 0) {
-                        const modal = inp.closest('[role="dialog"]') ||
-                                      inp.closest('.ds-modal-content') ||
-                                      inp.closest('[class*="modal"]');
-                        if (modal && modal.offsetParent !== null) {
-                            // 找 X 按钮(svg path d 含 14.187)
-                            const paths = modal.querySelectorAll('svg path');
-                            let close = null;
-                            for (const p of paths) {
-                                if ((p.getAttribute('d') || '').indexOf('14.187') >= 0) {
-                                    close = p.closest('[role="button"]');
-                                    if (close) break;
-                                }
-                            }
-                            if (close) { close.click(); n++; }
-                            else { 
-                                document.dispatchEvent(new KeyboardEvent('keydown',
-                                    {key:'Escape', keyCode:27, which:27, bubbles:true}));
-                                n++;
-                            }
-                        }
+            for _i in range(3):
+                closed = self.driver.execute_script(r"""
+                    if (typeof window.__novelai_dismiss_modal === 'function') {
+                        return window.__novelai_dismiss_modal();
                     }
-                }
-                return n;
-            """)
-            if closed and closed > 0:
-                self.log_signal.emit(f"发消息前关闭了 {closed} 个搜索 modal", "info")
-                time.sleep(0.3)  # 等 modal 真的关掉再继续
+                    return 0;
+                """) or 0
+                if closed > 0:
+                    self.log_signal.emit(
+                        f"发消息前关闭了 {closed} 个搜索 modal", "info")
+                    time.sleep(0.2)
+                else:
+                    break  # 没 modal 了,无需再扫
         except Exception:
             pass
 
