@@ -4165,69 +4165,100 @@ class BrowserWorker(QObject):
         self.log_signal.emit(
             f"提示词已发送 ({len(prompt)} 字符),等待 AI 回复...", "info")
 
-        # 4) 等新回复出现(对话条数 +1)
-        # 因 DeepSeek 计数策略升级,先等 3 秒让 DOM 稳定再开始计数对比
-        time.sleep(3)
-        deadline = time.time() + 30
+        # 4) 等新回复出现(对话条数 +1 OR 抓到内容)
+        # 因 DeepSeek 计数策略 prev/cur 在短回复时容易失灵,加内容兜底
+        # 提速:30s deadline → 15s,轮询 0.5s → 0.2s
+        time.sleep(1.5)  # 给 DOM 渲染新回复块的最短时间(原 3s)
+        deadline = time.time() + 15
         while time.time() < deadline:
             if self._stop.is_set(): return
             cur_cnt = self._count_responses(prof)
-            # 计数增加 OR 已经能抓到回复内容(> 50 字)就认为开始了
+            # 计数增加 OR 已经能抓到回复内容(> 30 字)就认为开始了
             if cur_cnt > prev_count:
                 break
             try:
                 early_text = self._grab_last_response(prof)
-                if early_text and len(early_text) > 50:
-                    # 可能 prev_count 算错了(DeepSeek p 数变化),但实际已有内容
+                if early_text and len(early_text) > 30:
+                    # 可能 prev_count 算错了,但实际已有内容
                     self.log_signal.emit(
-                        f"检测到回复内容(prev_count={prev_count}, 已抓 {len(early_text)} 字符),进入稳定等待",
+                        f"检测到回复内容(已抓 {len(early_text)} 字符),进入稳定等待",
                         "info")
                     break
             except Exception:
                 pass
-            time.sleep(0.5)
+            time.sleep(0.2)
         else:
             self.log_signal.emit(
                 "未检测到新回复条目,可能选择器需调整(到 SITE_PROFILES 微调)", "warn")
 
         # 5) 等内容稳定 N 秒 / stop 按钮消失 / 完成后按钮出现 任一条件
+        # 提速:轮询间隔 0.3s(原 1s), stable_wait 内部 1.5s(原 4s), stop 按钮检测加强
         last_text = ""
         last_change = time.time()
         start = time.time()
+        fast_stable_wait = 1.5   # 短回复(JSON/摘要)用快稳定
+        normal_stable_wait = self.stable_wait  # 长章节继续用慢稳定
+        no_change_streak = 0  # 连续无变化的轮数
         while time.time() - start < self.max_wait:
             if self._stop.is_set(): return
             cur = self._grab_last_response(prof)
 
-            # 新增完成信号 1:stop 按钮消失(AI 在写时显示停止按钮)
+            # 完成信号 1: stop 按钮消失(AI 在写时显示停止按钮)
+            # 加强检测:DeepSeek 的 stop 按钮可能在 textarea 附近,SVG path 形状特征
+            stopping = False
             try:
                 stopping = self.driver.execute_script(r"""
-                    // DeepSeek 停止按钮: 输入框附近含 SVG 的方形按钮(填充图标)
-                    // 或者通用 aria-label 含'停止'/'stop'
-                    let stopBtn = document.querySelector(
-                        'div[role="button"][aria-label*="停止"]') ||
-                        document.querySelector('button[aria-label*="停止"]') ||
-                        document.querySelector('button[aria-label*="Stop" i]') ||
-                        document.querySelector('button[data-testid*="stop"]');
-                    return stopBtn && stopBtn.offsetParent !== null;
+                    // 通用: aria-label / data-testid
+                    let s = document.querySelector('div[role="button"][aria-label*="停止"]') ||
+                            document.querySelector('button[aria-label*="停止"]') ||
+                            document.querySelector('button[aria-label*="Stop" i]') ||
+                            document.querySelector('button[data-testid*="stop"]');
+                    if (s && s.offsetParent !== null) return true;
+                    // DeepSeek 特征:输入框旁边有 SVG 含 rect 的方形按钮(停止图标是个填充方块)
+                    // AI 生成中时这个按钮会替换发送的纸飞机
+                    const ta = document.querySelector('textarea');
+                    if (ta) {
+                        let container = ta.parentElement;
+                        for (let i = 0; i < 5 && container; i++) {
+                            // 找 SVG path d 含 'M11 5L18.5'(方形 stop 图标) 的按钮
+                            const btns = container.querySelectorAll('div[role="button"]:has(svg rect)');
+                            if (btns.length > 0) {
+                                for (const b of btns) {
+                                    if (b.offsetParent !== null) return true;
+                                }
+                            }
+                            container = container.parentElement;
+                        }
+                    }
+                    return false;
                 """)
-                # stop 不可见 + 已抓到 >50 字 + 内容跟上次相同 → 完成
-                if not stopping and cur and len(cur) > 50 and cur == last_text:
-                    self.log_signal.emit("✓ 检测到 stop 按钮消失 + 内容稳定 → 完成", "info")
-                    break
             except Exception:
                 pass
 
+            # stop 不可见 + 抓到内容 + 连续 1 轮内容不变 → 立即完成(最快路径)
+            if not stopping and cur and len(cur) > 30 and cur == last_text:
+                self.log_signal.emit(
+                    f"✓ stop 按钮已消失 + 内容稳定 → 完成 ({len(cur)} 字符)", "info")
+                break
+
             if cur and cur == last_text:
-                if time.time() - last_change >= self.stable_wait:
+                no_change_streak += 1
+                # 短回复(<500 字)用快稳定:1.5s 无变化即可
+                # 长章节(>=500 字)用慢稳定:原来的 stable_wait(默认 4s)
+                wait_threshold = fast_stable_wait if len(cur) < 500 else normal_stable_wait
+                if time.time() - last_change >= wait_threshold:
+                    self.log_signal.emit(
+                        f"✓ 内容稳定 {wait_threshold:.1f}s 无变化 → 完成 ({len(cur)} 字符)", "info")
                     break
             else:
                 last_text = cur
                 last_change = time.time()
+                no_change_streak = 0
             elapsed = int(time.time() - start)
-            if elapsed and elapsed % 5 == 0:
+            if elapsed and elapsed % 5 == 0 and no_change_streak == 0:
                 self.log_signal.emit(
                     f"AI 生成中...已 {elapsed}s,当前 {len(cur or '')} 字符", "info")
-            time.sleep(1)
+            time.sleep(0.3)  # 提速:1s → 0.3s,响应快 3 倍
 
         if last_text:
             self.log_signal.emit(f"回复完成,共 {len(last_text)} 字符", "success")
