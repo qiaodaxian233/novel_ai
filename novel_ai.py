@@ -299,17 +299,24 @@ PROMPTS = {
     "canon_extract": (
         "你是小说设定提取员。从以下章节中提取出所有【应当被记入设定档】的事实,"
         "用于约束后续章节不要矛盾。\n\n"
-        "提取范围:\n"
-        "1. 角色稳定属性(名字、年龄、身份、能力、独有称号)→ 锁定项\n"
-        "2. 关键物品归属(玉佩在谁手上、剑藏哪里)→ 锁定项\n"
-        "3. 关键关系(谁是谁的兄弟、谁欠谁人情)→ 锁定项\n"
-        "4. 角色当前状态(等级、修为、健康、心境)→ 演化项\n"
-        "5. 已发生的关键事件、已暴露/未暴露的秘密 → 演化项\n\n"
+        "**key 必须使用分类前缀**(共 6 类),便于按类别筛选:\n"
+        "  · `角色.X.字段`   — X 的姓名、年龄、身份、外貌、能力、独有称号、当前状态\n"
+        "  · `关系.X-Y.内容` — X 与 Y 的关系(债务/血缘/师徒/敌对/欠人情/暗恋等)\n"
+        "  · `时间线.第N章.事件` — 已发生的关键事件、时间锚(几年前/几日后/N岁时)\n"
+        "  · `物品.名称.字段` — 法器/功法书/装备/信物,字段如 持有人/来源/状态/能力\n"
+        "  · `战力.体系名.字段` — 修为体系、技能/咒术、等级名、突破条件、任务进度\n"
+        "  · `伏笔.内容简称.状态` — 已埋下未收的悬念(注:【断章钩子】里的伏笔由程序自动入库,这里只补 AI 觉得重要但格式没覆盖的)\n\n"
+        "锁定 vs 演化:\n"
+        "  · `mode=locked`:不会随剧情改变(年龄、身世、关键关系)\n"
+        "  · `mode=evolving`:随剧情演化(修为、状态、好感度)\n\n"
         "现有设定档(避免重复提取):\n{existing}\n\n"
         "章节正文(章节号 {ch_num}):\n{content}\n\n"
-        "请直接输出严格 JSON 数组,不要任何前后缀、不要 markdown 代码块,格式:\n"
-        '[{{"key":"林晚晚.年龄","value":"25","mode":"locked","ch":1}},'
-        '{{"key":"顾砚深.修为","value":"金丹中期","mode":"evolving","ch":7}}]\n'
+        "请直接输出严格 JSON 数组,不要任何前后缀、不要 markdown 代码块,格式示例:\n"
+        '[{{"key":"角色.林远.身份","value":"无灵根凡人","mode":"locked","ch":1}},'
+        '{{"key":"关系.林远-王屠户.债务","value":"欠 3 两银子,有借条","mode":"locked","ch":1}},'
+        '{{"key":"时间线.第1章.父死","value":"父亲三年前死于妖兽袭击","mode":"locked","ch":1}},'
+        '{{"key":"物品.混元功.持有人","value":"林远(18岁开启)","mode":"locked","ch":1}},'
+        '{{"key":"战力.咒术系统.等级","value":"虚弱诅咒(力量减半1时辰,代价3天虚弱)","mode":"evolving","ch":1}}]\n'
         "如果本章没有可提取的新设定,直接输出 []。"
     ),
 
@@ -550,6 +557,9 @@ class ChapterEditor(QWidget):
     pangu_qcheck_requested = pyqtSignal(str)
     pangu_spiral_requested = pyqtSignal(str)
     pangu_preview_prompt_requested = pyqtSignal()    # 预览章节 prompt
+    # BUG-014:用户在元信息面板点了某条"下一章选项",把选项文本传给主程序,
+    # 主程序在下次生成下一章时把它作为开局指引注入 prompt
+    next_option_picked = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -611,6 +621,36 @@ class ChapterEditor(QWidget):
         self.word_count_label = QLabel("字数: 0")
         self.word_count_label.setAlignment(Qt.AlignRight)
         layout.addWidget(self.word_count_label)
+
+        # ── 盘古元信息面板 (BUG-014 配套 GUI:把剥离出来的钩子/爽点/伏笔/下章选项展示)
+        self.pangu_meta_box = QGroupBox("📌 盘古元信息 — 自动从 AI 输出剥离(只读)")
+        self.pangu_meta_box.setStyleSheet(
+            "QGroupBox { border: 1px solid #b4884e; margin-top: 8px; padding-top: 14px; }"
+            "QGroupBox::title { color: #b4884e; font-weight: bold; left: 10px; }")
+        pml = QVBoxLayout(self.pangu_meta_box)
+        pml.setContentsMargins(8, 4, 8, 6)
+        pml.setSpacing(4)
+        self.pangu_hook_label = QLabel("断章钩子: —")
+        self.pangu_hook_label.setWordWrap(True)
+        self.pangu_hook_label.setStyleSheet("color:#444; padding:2px 4px;")
+        pml.addWidget(self.pangu_hook_label)
+        self.pangu_cool_label = QLabel("本章爽点: —")
+        self.pangu_cool_label.setWordWrap(True)
+        self.pangu_cool_label.setStyleSheet("color:#444; padding:2px 4px;")
+        pml.addWidget(self.pangu_cool_label)
+        self.pangu_seeds_label = QLabel("伏笔: —")
+        self.pangu_seeds_label.setStyleSheet("color:#444; padding:2px 4px;")
+        pml.addWidget(self.pangu_seeds_label)
+        # 下一章选项区:3 个按钮,点哪个就用哪个开局生成下一章
+        nl = QLabel("下一章选项(点按钮用此选项作为下一章开局):")
+        nl.setStyleSheet("color:#666; padding:4px 4px 0; font-size:11px;")
+        pml.addWidget(nl)
+        self.pangu_next_opt_row = QHBoxLayout()
+        self.pangu_next_opt_row.setSpacing(4)
+        pml.addLayout(self.pangu_next_opt_row)
+        self.pangu_next_opt_btns = []
+        self.pangu_meta_box.setVisible(False)  # 章节没元信息时整块隐藏
+        layout.addWidget(self.pangu_meta_box)
 
         # 盘古禁用词实时高亮(Phase A 新增)
         try:
@@ -679,12 +719,74 @@ class ChapterEditor(QWidget):
     def load_chapter(self, title, content):
         self.title_input.setText(title)
         self.content_edit.setPlainText(content)
+        # 章节没有 meta(纯 load 走这里),清空面板
+        self._set_pangu_meta_display(None)
 
     def show_chapter(self, ch_dict, idx):
         """加载并跟踪当前章节索引(供风格检测和备选版本使用)"""
         self.current_index = idx
         self.title_input.setText(ch_dict.get("title", f"第{idx+1}章"))
         self.content_edit.setPlainText(ch_dict.get("content", ""))
+        # 显示元信息(BUG-014:从 chapter dict 读 hook/cool_points/next_options)
+        self._set_pangu_meta_display(ch_dict)
+
+    def _set_pangu_meta_display(self, ch_dict):
+        """根据章节 dict 更新盘古元信息面板。
+        ch_dict 为 None 或没元信息 → 整块隐藏。"""
+        # 清除旧的下一章选项按钮
+        while self.pangu_next_opt_row.count():
+            it = self.pangu_next_opt_row.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        self.pangu_next_opt_btns = []
+
+        has_any = False
+        if ch_dict:
+            hook = ch_dict.get("hook") or {}
+            cool = ch_dict.get("cool_points") or []
+            opts = ch_dict.get("next_options") or []
+            # 钩子
+            if hook and (hook.get("type") or hook.get("content")):
+                bits = []
+                if hook.get("type"):      bits.append(hook["type"])
+                if hook.get("intensity"): bits.append(hook["intensity"])
+                head = " / ".join(bits)
+                content = hook.get("content", "")
+                self.pangu_hook_label.setText(f"<b>断章钩子:</b> [{head}] {content}")
+                has_any = True
+            else:
+                self.pangu_hook_label.setText("断章钩子: —")
+            # 爽点
+            if cool:
+                self.pangu_cool_label.setText(
+                    "<b>本章爽点:</b> " + "  ".join(f"• {p}" for p in cool[:5]))
+                has_any = True
+            else:
+                self.pangu_cool_label.setText("本章爽点: —")
+            # 伏笔(从 chapter['hook']/['seeds_planted_count'] 拿,如有)
+            sp = ch_dict.get("_pangu_seeds_summary") or ""
+            if sp:
+                self.pangu_seeds_label.setText(f"<b>伏笔:</b> {sp} (已自动入伏笔追踪库)")
+                has_any = True
+            else:
+                self.pangu_seeds_label.setText("伏笔: — (没有埋雷/收雷)")
+            # 下一章选项
+            for i, opt in enumerate(opts[:5]):
+                btn = QPushButton(f"{i+1}. {opt[:60]}{'…' if len(opt) > 60 else ''}")
+                btn.setStyleSheet(
+                    "QPushButton { text-align:left; padding:4px 8px; "
+                    "background:#fff8ea; border:1px solid #e0c896; }"
+                    "QPushButton:hover { background:#ffe9b8; }")
+                btn.setToolTip(opt)
+                btn.clicked.connect(lambda _, x=opt: self.next_option_picked.emit(x))
+                self.pangu_next_opt_btns.append(btn)
+                self.pangu_next_opt_row.addWidget(btn)
+                has_any = True
+            self.pangu_next_opt_row.addStretch()
+
+        self.pangu_meta_box.setVisible(bool(has_any))
 
     current_index = -1  # 当前选中的章节索引(-1 表示无)
 
@@ -1829,6 +1931,19 @@ class CharacterLibrary(QWidget):
             " - 待回收的伏笔\n"
             "自动拼到提示词里,有效防止人设崩坏与前后矛盾。")
         btn_row.addWidget(self.chk_inject)
+
+        # BUG-014 配套:每章生成完后自动抽取 6 库(默认关,避免太多 AI 调用)
+        self.chk_auto_extract = QCheckBox("✨ 每章生成后自动抽取到 6 库")
+        self.chk_auto_extract.setChecked(False)
+        self.chk_auto_extract.setToolTip(
+            "勾选后,每生成完一章,自动调用 AI 提取:\n"
+            "  角色 / 关系 / 时间线 / 物品 / 战力 / 伏笔\n"
+            "并合并到这 6 个表里。\n"
+            "代价:每章多 1 次 AI 调用。如果你 AI 额度有限,可以关掉,\n"
+            "改成手动批量提取(下方「🔍 从已写章节提取角色」按钮)。")
+        self.chk_auto_extract.setStyleSheet("QCheckBox { color:#b4884e; font-weight:bold; }")
+        btn_row.addWidget(self.chk_auto_extract)
+
         btn_row.addStretch()
         
         self.btn_extract_from_chapters = QPushButton("🔍 从已写章节提取角色")
@@ -3376,6 +3491,32 @@ class BrowserWorker(QObject):
         self.driver.get(url)
         self.log_signal.emit(f"已访问:{url}", "info")
 
+    def _inject_kbd_guard(self):
+        """注入键盘快捷键拦截脚本(BUG-013 兜底)。
+        DeepSeek 等网页有 Ctrl+K 打开搜索框,这里在 capture 阶段就拦掉,
+        避免代码或用户误触发(比如 Selenium Ctrl+V 路径 key_up 漏释放
+        导致 Ctrl 卡按下,后续 K 键变 Ctrl+K)。
+        用 window.__novelai_kbd_guard 做 flag,重复调用不会重复绑定。"""
+        try:
+            self.driver.execute_script("""
+                if (!window.__novelai_kbd_guard) {
+                    const blocker = function(e) {
+                        // 拦 Ctrl+K / Cmd+K(打开搜索)
+                        if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                            console.log('[novelai] Ctrl+K blocked');
+                            return false;
+                        }
+                    };
+                    window.addEventListener('keydown', blocker, true);  // capture 阶段
+                    window.__novelai_kbd_guard = true;
+                }
+                return 'OK';
+            """)
+        except Exception:
+            pass  # 注入失败不影响正常发送
+
     # ============ 核心:发送提示词 + 等回复 ============
     def _send_prompt(self, task):
         prompt = task["prompt"]
@@ -3388,6 +3529,10 @@ class BrowserWorker(QObject):
 
         prof = _profile_for_url(self._current_url())
         self.log_signal.emit(f"使用档案:{prof['name']}", "info")
+
+        # BUG-013 兜底:注入键盘快捷键拦截脚本(Ctrl+K 弹搜索框问题)
+        # 用 idempotent 的全局 flag 防重复绑定
+        self._inject_kbd_guard()
 
         # 1) 等输入框出现(最长 15s)
         deadline = time.time() + 15
@@ -4988,6 +5133,9 @@ class MainWindow(QMainWindow):
         self.tab_editor.pangu_qcheck_requested.connect(self._on_pangu_qcheck)
         self.tab_editor.pangu_spiral_requested.connect(self._on_pangu_spiral)
         self.tab_editor.pangu_preview_prompt_requested.connect(self._on_pangu_preview_prompt)
+        # BUG-014:用户在元信息面板点了"下一章选项"按钮 → 记到 _user_picked_next_option,
+        # _send_next_chapter 会把它当作开局指引注入 prompt
+        self.tab_editor.next_option_picked.connect(self._on_pangu_next_option_picked)
         self.tab_settings.btn_pangu_wl_apply.clicked.connect(self._on_pangu_apply_whitelist)
         # CreationSettings 盘古快捷工具
         self.tab_settings.btn_pangu_style.clicked.connect(self._on_pangu_style_match)
@@ -5841,6 +5989,20 @@ class MainWindow(QMainWindow):
             self, "白名单已应用",
             f"已设置 {len(wl)} 个允许词。\n这些词不会再被高亮 / 计入词扫:\n{', '.join(wl) if wl else '(空)'}")
 
+    def _on_pangu_next_option_picked(self, option_text):
+        """用户在元信息面板点了某条【下一章选项】 → 记录,下次 _send_next_chapter 注入"""
+        self._user_picked_next_option = option_text
+        QMessageBox.information(
+            self, "✓ 已设定下章开局",
+            f"已记录你选的下一章开局走向:\n\n{option_text}\n\n"
+            f"下次生成下一章时,会自动把这条作为开局指引注入到 AI 提示词里。\n"
+            f"(单次有效,生成后自动清空)")
+        try:
+            self.tab_generation.log(
+                f"📌 用户指定下章开局:「{option_text[:40]}」", "info")
+        except Exception:
+            pass
+
     # ───── Phase B:30 项质检 JSON 解析 + 段落标注 ─────
     def _on_pangu_qcheck_response(self, content_response, original_chapter):
         # 解析 AI 返回的 JSON,把失败项映射到段落,然后让 highlighter 标黄
@@ -6291,7 +6453,12 @@ class MainWindow(QMainWindow):
         queue = getattr(self, "_charlib_batch_queue", None)
         if not queue:
             self.tab_generation.log("✅ 角色库批量提取完成", "success")
-            self.tabs.setCurrentWidget(self.tab_charlib)
+            # 如果是 _post_chapter_chain 触发的,推进链
+            if getattr(self, "_charlib_chain_post", False):
+                self._charlib_chain_post = False
+                QTimer.singleShot(500, self._run_next_post_chapter_step)
+            else:
+                self.tabs.setCurrentWidget(self.tab_charlib)
             return
         ch_num = queue.pop(0)
         ch = self.chapters[ch_num - 1]
@@ -6722,6 +6889,20 @@ class MainWindow(QMainWindow):
         ) + f"\n\n【完整设定参考】\n{full}"
         if _diff_block:
             prompt += f"\n\n{_diff_block}"
+
+        # BUG-014:如果用户在上一章元信息面板点了"下一章选项",
+        # 把它作为本章开局指引注入(prompt 末尾,优先级高)
+        picked_opt = getattr(self, "_user_picked_next_option", None)
+        if picked_opt:
+            prompt += (
+                f"\n\n【本章开局指引(用户从上一章【下一章选项】中指定)】\n"
+                f"本章必须从以下情境展开:{picked_opt}\n"
+                f"严格按这条线索写,不要换到其他选项。"
+            )
+            self.tab_generation.log(
+                f"已注入用户指定的下章开局:{picked_opt[:30]}...", "info")
+            # 用完即清,避免影响后续章节
+            self._user_picked_next_option = None
 
         # ★ 注入对话记忆(旧路径兜底:仅在 workflow 不可用时执行)
         if not self.workflow:
@@ -7221,6 +7402,14 @@ class MainWindow(QMainWindow):
                     chapter["cool_points"] = pangu_meta["cool_points"]
                 if pangu_meta.get("next_options"):
                     chapter["next_options"] = pangu_meta["next_options"]
+                # 伏笔摘要(给 GUI 用,方便看"埋 X 收 Y";真正入库走 _sync 函数)
+                _sp = len(pangu_meta.get("seeds_planted", []))
+                _pd = len(pangu_meta.get("seeds_paid", []))
+                if _sp or _pd:
+                    parts = []
+                    if _sp: parts.append(f"埋雷 {_sp} 条")
+                    if _pd: parts.append(f"收雷 {_pd} 条")
+                    chapter["_pangu_seeds_summary"] = " / ".join(parts)
 
             self.chapters.append(chapter)
 
@@ -7313,12 +7502,17 @@ class MainWindow(QMainWindow):
                 pass
 
     def _post_chapter_chain(self, ch_num):
-        """章节通过后的链式处理:Canon 抽取 → 章末技能 → 摘要 → 下一章"""
+        """章节通过后的链式处理:Canon 抽取 → 6库抽取 → 章末技能 → 摘要 → 下一章"""
         if ch_num <= 0:
             return
         pipeline = []
         if self.tab_canon.chk_extract.isChecked():
             pipeline.append(("canon_extract", ch_num))
+
+        # BUG-014:6 库自动抽取(角色/关系/时间线/物品/战力/伏笔)
+        if hasattr(self.tab_charlib, "chk_auto_extract") and \
+                self.tab_charlib.chk_auto_extract.isChecked():
+            pipeline.append(("charlib_extract", ch_num))
 
         # after_chapter_generation 技能(固定自动触发)
         for s in self.tab_skills.get_after_chapter_skills():
@@ -7354,6 +7548,18 @@ class MainWindow(QMainWindow):
             ch = self.chapters[step[1] - 1] if step[1] <= len(self.chapters) else None
             if ch and ch.get("content"):
                 self._run_canon_extract(ch["content"], step[1])
+            else:
+                QTimer.singleShot(100, self._run_next_post_chapter_step)
+        elif step[0] == "charlib_extract":
+            # BUG-014:批量抽取 6 库(角色/关系/时间线/物品/战力/伏笔)
+            ch_num = step[1]
+            ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
+            if ch and ch.get("content"):
+                # 复用 _charlib_extract_from_chapters 的单章逻辑
+                self._charlib_batch_queue = [ch_num]
+                # 设置 flag,让 _on_world_extract_received 完成后回 post_chapter 链
+                self._charlib_chain_post = True
+                self._run_next_charlib_extract()
             else:
                 QTimer.singleShot(100, self._run_next_post_chapter_step)
         elif step[0] == "skill_after":
