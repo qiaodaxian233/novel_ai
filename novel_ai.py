@@ -344,6 +344,52 @@ PROMPTS = {
         '{{"score":8,"reason":"林晚晚台词到位,但顾砚深这章过于温和,与高冷禁欲设定有偏差"}}'
     ),
 
+    "critique_laodao": (
+        "你是老刀,从业十五年的资深网文编辑兼扑街作者收割机。\n"
+        "- 你经手过多部百万订阅顶流爆款,也亲眼送走过三千多个扑街作者\n"
+        "- 你坚信'捧杀害死的新人比差评多十倍',但凡你说一句'还行',作者就该改行\n"
+        "- 你讨厌:注水开篇 / 立不住的人设 / 靠巧合推动的剧情\n"
+        "- 你说话尖酸刻薄但每刀必扎具体问题,不做空泛嘲讽,不做人身攻击\n\n"
+        "我会给你一段网文【正文】(可能是大纲或一章/多章),你需要:\n"
+        "1. 用最毒最狠的话挖出问题,让作者疼到睡不着\n"
+        "2. 每条批评必须精确定位到原文(引用原句 / 第X段)\n"
+        "3. 每条批评后跟一条具体可执行的修改建议(不准说'多读书'/'自己体会')\n"
+        "4. 最后给出综合诊断 + 三章弃书率预估\n\n"
+        "8 个维度全部覆盖(有缺陷展开,无缺陷一句话带过):\n"
+        "  1. 开篇钩子:前 300 字抓不抓得住,会不会 3 秒划走\n"
+        "  2. 人设立不立得住:动机扎不扎实,有没有纸片感\n"
+        "  3. 金手指:合理吗?白给还是有代价?\n"
+        "  4. 冲突设计:真冲突还是硬凹的?反派是智障还是威胁?\n"
+        "  5. 节奏与爽点:爽点密度,憋屈是否过久,铺垫爆发比例\n"
+        "  6. 毒点排查:圣母/绿帽/降智/工具人女主/强行误会\n"
+        "  7. 设定与世界观:硬伤 / 自相矛盾 / 缝合怪\n"
+        "  8. 文笔与信息密度:废话注水 / 全是'他说她说' / 盘古禁用词违规\n\n"
+        "【本次审查的网文正文】\n{content}\n\n"
+        "严格按以下结构输出(纯文本,不要 markdown 代码块包裹):\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "【开场毒评】(一句话总结,越狠越好)\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "【逐条开刀】(按严重程度排序,5-10 条,不凑数)\n\n"
+        "❌ 问题1:[辛辣的名字, 如'主角人设薄得像 A4 纸']\n"
+        "   📍 位置:[引用原文 / 第X段]\n"
+        "   🔪 批评:[最毒的话, 说清问题在哪, 会怎么劝退读者]\n"
+        "   🩹 改法:[具体到能直接落笔的修改方案]\n\n"
+        "❌ 问题2: ...\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "【综合诊断】\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "- 致命伤(不改必扑):\n"
+        "- 中等病(影响留存):\n"
+        "- 小毛病(能忍但难受):\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "【存活概率评估】\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "- 当前版本三章弃书率预估:__%\n"
+        "- 按我说的改完, 上架均订预估:____ 区间\n"
+        "- 最后一句忠告:[最狠最真诚的一句]\n\n"
+        "现在,老刀,开刀吧,别留情:"
+    ),
+
     "pangu_autofix": (
         "你是【盘古超级系统】驻场修复员。下面是一篇章节,以及盘古 30 项质检发现的问题。\n"
         "请按建议**直接修复原文**,不要解释、不要 JSON、不要 markdown 代码块。\n\n"
@@ -576,6 +622,7 @@ class ChapterEditor(QWidget):
     # 盘古超级系统:3 个新信号
     pangu_quicklint_requested = pyqtSignal(str)
     pangu_qcheck_requested = pyqtSignal(str)
+    laodao_critique_requested = pyqtSignal(str)
     pangu_spiral_requested = pyqtSignal(str)
     pangu_preview_prompt_requested = pyqtSignal()    # 预览章节 prompt
     # BUG-014:用户在元信息面板点了某条"下一章选项",把选项文本传给主程序,
@@ -605,6 +652,14 @@ class ChapterEditor(QWidget):
             "background:#e67e22;color:white;padding:4px 10px;border-radius:3px;")
         self.btn_pangu_qcheck.setToolTip("发给 AI 跑盘古 30 项深度质检,返回 JSON")
         self.btn_pangu_qcheck.clicked.connect(self._on_pangu_qcheck)
+        self.btn_laodao = QPushButton("🔪 老刀毒舌点评")
+        self.btn_laodao.setStyleSheet(
+            "background:#c0392b;color:white;padding:4px 10px;border-radius:3px;font-weight:bold;")
+        self.btn_laodao.setToolTip(
+            "请 AI 扮演十五年资深网文编辑老刀,毒舌点评当前章节。\n"
+            "8 维度 + 致命伤 / 三章弃书率预估。\n"
+            "如果点评不通过,会自动再跑一次。")
+        self.btn_laodao.clicked.connect(self._on_laodao_critique)
         self.btn_pangu_spiral = QPushButton("🌀 螺旋诊断")
         self.btn_pangu_spiral.setStyleSheet(
             "background:#34495e;color:white;padding:4px 10px;border-radius:3px;")
@@ -622,8 +677,8 @@ class ChapterEditor(QWidget):
         self.btn_regen_alt.setStyleSheet(
             "background:#16a085;color:white;padding:4px 10px;border-radius:3px;")
         for b in (self.btn_save, self.btn_optimize, self.btn_save_all,
-                  self.btn_pangu_lint, self.btn_pangu_qcheck, self.btn_pangu_spiral,
-                  self.btn_pangu_preview,
+                  self.btn_pangu_lint, self.btn_pangu_qcheck, self.btn_laodao,
+                  self.btn_pangu_spiral, self.btn_pangu_preview,
                   self.btn_style_check, self.btn_regen_alt):
             btn_row.addWidget(b)
         btn_row.addStretch()
@@ -740,6 +795,14 @@ class ChapterEditor(QWidget):
             QMessageBox.information(self, "提示", "章节为空")
             return
         self.pangu_qcheck_requested.emit(c)
+
+    def _on_laodao_critique(self):
+        # 发起老刀毒舌点评(调 AI)
+        c = self.content_edit.toPlainText()
+        if not c.strip():
+            QMessageBox.information(self, "提示", "章节为空")
+            return
+        self.laodao_critique_requested.emit(c)
 
     def _on_pangu_spiral(self):
         # 发起 P1-P7 螺旋诊断(调 AI)
@@ -5537,9 +5600,24 @@ class GenerationControl(QWidget):
 
         crow.addWidget(QLabel("字数死磕:"))
         self.retry_count = QSpinBox()
-        self.retry_count.setRange(1, 10); self.retry_count.setValue(3)
+        self.retry_count.setRange(1, 50); self.retry_count.setValue(10)  # 上限提到 50,默认 10
+        self.retry_count.setToolTip(
+            "死磕次数上限(防死循环用,不是必然次数)。\n"
+            "实际重写次数 = 直到达标或用尽次数。\n"
+            "如果质量阈值高、模型差,可能用满。建议留 10 次以上。")
         crow.addWidget(self.retry_count)
-        crow.addWidget(QLabel("次"))
+        crow.addWidget(QLabel("次上限"))
+
+        crow.addWidget(QLabel("|质量阈值≥"))
+        self.quality_threshold = QSpinBox()
+        self.quality_threshold.setRange(0, 100); self.quality_threshold.setValue(75)
+        self.quality_threshold.setSuffix(" 分")
+        self.quality_threshold.setToolTip(
+            "盘古质量评分阈值(0-100)。\n"
+            "评分低于此值 → 触发死磕重写(直到达标或用尽次数上限)。\n"
+            "设 0 = 关闭分数门(只看字数/钩子/禁用词)。\n"
+            "设 75 = 中等严苛(推荐),设 85 = 严苛,设 90+ = 强迫症")
+        crow.addWidget(self.quality_threshold)
 
         self.btn_start = QPushButton("▶ 开始连续生成")
         self.btn_pause = QPushButton("⏸ 暂停/停止")
@@ -6130,6 +6208,7 @@ class MainWindow(QMainWindow):
 
         # ChapterEditor 盘古超级系统按钮(本地词扫已在 ChapterEditor 内消化)
         self.tab_editor.pangu_qcheck_requested.connect(self._on_pangu_qcheck)
+        self.tab_editor.laodao_critique_requested.connect(self._on_laodao_critique)
         self.tab_editor.pangu_spiral_requested.connect(self._on_pangu_spiral)
         self.tab_editor.pangu_preview_prompt_requested.connect(self._on_pangu_preview_prompt)
         # BUG-014:用户在元信息面板点了"下一章选项"按钮 → 记到 _user_picked_next_option,
@@ -6404,6 +6483,12 @@ class MainWindow(QMainWindow):
                 ch_idx = meta.get("ch_idx", -1)
                 orig = meta.get("original_chapter", "")
                 self._on_pangu_autofix_response(content, ch_idx, orig)
+                self._pending_task_target = None
+                return
+            if tgt == "laodao_critique":
+                # 老刀毒舌点评返回 → 弹窗展示
+                meta = self._pending_task_target or {}
+                self._on_laodao_critique_response(content, meta)
                 self._pending_task_target = None
                 return
         except Exception:
@@ -6939,6 +7024,89 @@ class MainWindow(QMainWindow):
             return
         prompt = get_default_engine().build_quality_check_prompt(content)
         self._send_to_ai(prompt, "盘古30项质检", target="pangu_qcheck")
+
+    def _on_laodao_critique(self, content, retry_round=1):
+        """🔪 老刀毒舌点评:让 AI 扮老刀给当前章节开刀。
+        retry_round=N 表示第 N 轮(不通过会自动跑下一轮,最多 3 轮)"""
+        if not self.worker.is_ready():
+            QMessageBox.warning(self, "请先启动浏览器", "请先启动浏览器并完成登录")
+            return
+        # 安全截断:老刀 prompt 本身就 ~1.5k,加章节正文要控制总长
+        snippet = content[:6000] if len(content) > 6000 else content
+        prompt = PROMPTS["critique_laodao"].format(content=snippet)
+        self.tab_generation.log(
+            f"▶ 召唤老刀 (第 {retry_round} 轮),约 1 分钟回填...", "info")
+        self._send_to_ai(
+            prompt, f"老刀毒舌点评-第{retry_round}轮",
+            target="laodao_critique",
+            retry_round=retry_round,
+            original_content=content,
+        )
+
+    def _on_laodao_critique_response(self, content, meta):
+        """老刀点评返回 → 弹窗展示 + 如点评不通过 → 自动再跑一轮(最多 3 轮)"""
+        retry_round = meta.get("retry_round", 1)
+        original_content = meta.get("original_content", "")
+        # 简单的"成功"判定:老刀回复要包含【逐条开刀】或❌或【综合诊断】才算成功格式
+        success_markers = ("逐条开刀", "综合诊断", "❌", "🔪", "存活概率", "致命伤")
+        is_valid = any(m in content for m in success_markers)
+        # 内容太短(<200 字)也算失败
+        if len(content) < 200:
+            is_valid = False
+        if not is_valid:
+            if retry_round < 3:
+                self.tab_generation.log(
+                    f"✗ 老刀点评第 {retry_round} 轮返回格式不对 (字数 {len(content)}),自动重试...",
+                    "warn")
+                # 自动再跑(原章节再点评一次)
+                self._on_laodao_critique(original_content, retry_round=retry_round + 1)
+                return
+            else:
+                self.tab_generation.log(
+                    f"✗ 老刀点评 3 轮都不通过,放弃。最后一次返回:\n{content[:500]}",
+                    "warn")
+                QMessageBox.warning(
+                    self, "老刀点评失败",
+                    f"3 轮都没拿到合格点评。最后返回(前 500 字):\n\n{content[:500]}")
+                return
+        # 弹窗展示
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"🔪 老刀点评(第 {retry_round} 轮)")
+        dlg.resize(900, 700)
+        lay = QVBoxLayout(dlg)
+        top = QLabel(
+            f"<h3 style='color:#c0392b'>🔪 老刀的开刀报告</h3>"
+            f"<p>第 {retry_round} 轮 · {len(content)} 字 · "
+            f"基于 {len(original_content)} 字的章节正文</p>")
+        top.setTextFormat(Qt.RichText)
+        lay.addWidget(top)
+        txt = QPlainTextEdit()
+        txt.setPlainText(content)
+        txt.setReadOnly(True)
+        txt.setStyleSheet(
+            "font-family: 'Microsoft YaHei', sans-serif; font-size: 13px; "
+            "line-height: 1.6; background: #fff9f9; padding: 10px;")
+        lay.addWidget(txt, 1)
+        # 按钮区
+        btn_row = QHBoxLayout()
+        btn_recheck = QPushButton("🔁 再来一刀(让老刀再点评一次)")
+        btn_recheck.setStyleSheet(
+            "background:#c0392b;color:white;padding:6px 14px;border-radius:3px;")
+        btn_recheck.clicked.connect(
+            lambda: (dlg.accept(), self._on_laodao_critique(original_content, 1)))
+        btn_copy = QPushButton("📋 复制全部")
+        btn_copy.clicked.connect(
+            lambda: QApplication.clipboard().setText(content))
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dlg.accept)
+        btn_row.addWidget(btn_recheck)
+        btn_row.addWidget(btn_copy)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
+        self.tab_generation.log(
+            f"✓ 老刀第 {retry_round} 轮点评完成,{len(content)} 字", "success")
+        dlg.exec_()
 
     def _on_pangu_spiral(self, content):
         # 让 AI 诊断当前章节处于 P1-P7 哪个螺旋阶段
@@ -8697,6 +8865,29 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # 4. 盘古综合评分门(分数低于阈值 → 死磕)
+        try:
+            threshold = self.tab_generation.quality_threshold.value()
+            if threshold > 0:
+                from pangu_system import get_default_engine
+                eng = get_default_engine()
+                lint = eng.quick_chapter_lint(content)
+                score = lint.get("score", 0)
+                # 存到 meta 供日志输出 — 通过 issues 末尾的特殊标记携带
+                if score < threshold:
+                    score_issues = lint.get("issues", [])
+                    issues.append(
+                        f"评分不达标:盘古综合评分 {score}/100 < 阈值 {threshold}。"
+                        f"主要问题: {'; '.join(score_issues[:3]) if score_issues else '段落/句式/禁用词复合问题'}。"
+                        f"分数到 {threshold} 才放行"
+                    )
+                else:
+                    # 达标也打个肯定日志(让用户看到)
+                    self.tab_generation.log(
+                        f"  · 盘古评分 {score}/100 ≥ 阈值 {threshold} ✓", "info")
+        except Exception as _se:
+            self.tab_generation.log(f"评分门跑失败(忽略):{_se}", "warn")
+
         return issues, (cfg.get("canon") or cfg.get("rhythm") or cfg.get("character"))
 
     def _retry_chapter_with_reasons(self, meta, reasons):
@@ -8738,7 +8929,9 @@ class MainWindow(QMainWindow):
                     + "\n\n请重写本章,严格规避以上所有问题。")
         self._pending_task_target = new_meta
         self.tab_generation.log(
-            f"⚠ 章节校验未通过 ({len(reasons)} 个问题),死磕重写...剩余 {retry-1} 次", "warn")
+            f"⚠ 章节质量未达标 ({len(reasons)} 个问题),死磕重写中... "
+            f"(本次第 {meta.get('retry_count_used', 0) + 1} 轮,上限 {meta.get('retry_left', retry)} 次)",
+            "warn")
         for r in reasons:
             self.tab_generation.log(f"  · {r}", "warn")
         # 重试时也走附件模式(镜像站审核严,文本会被拒绝)
