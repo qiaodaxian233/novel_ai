@@ -4431,6 +4431,35 @@ class BrowserWorker(QObject):
         sel = json.dumps(input_selector)
         text_js = json.dumps(text)
 
+        # ── 0. textarea 专属注入(DeepSeek 等用 textarea, 不是 contenteditable)
+        # React 把 value 控制锁住, 直接 .value=... 不触发 setState
+        # 必须用 React 的内部 setter 才能让 state 更新
+        try:
+            result = self.driver.execute_script(f"""
+                const ta = document.querySelector('textarea');
+                if (!ta) return 'NO_TA';
+                ta.focus();
+                // 用 React 内部 setter 设 value (绕过 React 的 controlled lock)
+                const proto = Object.getOwnPropertyDescriptor(
+                    window.HTMLTextAreaElement.prototype, 'value');
+                if (proto && proto.set) {{
+                    proto.set.call(ta, {text_js});
+                }} else {{
+                    ta.value = {text_js};
+                }}
+                // 触发 React 合成事件
+                ta.dispatchEvent(new Event('input',  {{bubbles:true}}));
+                ta.dispatchEvent(new Event('change', {{bubbles:true}}));
+                return (ta.value && ta.value.length > 10) ? 'OK_TA' : 'EMPTY_TA';
+            """)
+            self.log_signal.emit(f"textarea 注入: {result}", "info")
+            if result == 'OK_TA':
+                _t_inj.sleep(0.3)
+                # 等发送按钮 enabled
+                return True
+        except Exception as _e:
+            self.log_signal.emit(f"textarea 注入异常(降级):{_e}", "warn")
+
         # ── 快速路径: ProseMirror / #prompt-textarea
         # 实测最有效: focus → selectAll → delete → execCommand insertText → 触发 React 事件
         # 优先用 #prompt-textarea，不依赖可能含特殊字符的多选择器字符串
@@ -4675,6 +4704,14 @@ class BrowserWorker(QObject):
           2. 等待发送按钮变可点(最多 10s),点它
           3. 兜底:无明显上传指示就强制 click(对付 React state 卡住)
         """
+        # 用通用的回复数计数(DeepSeek/豆包/Gemini 各种都覆盖到)
+        _count_js = """
+            return (
+                document.querySelectorAll('div.ds-markdown.ds-assistant-message-main-content').length ||
+                Math.floor(document.querySelectorAll('p.ds-markdown-paragraph').length / 1) ||
+                document.querySelectorAll('div.markdown,[data-message-author-role="assistant"]').length
+            );
+        """
         # 1) Enter —— ProseMirror编辑器跳过(会换行),其他走Enter
         try:
             is_pm = self.driver.execute_script("""
@@ -4695,18 +4732,17 @@ class BrowserWorker(QObject):
         # 1.5) 镜像站/ChatGPT 专用: 多策略发送
         _before_cnt = 0
         try:
-            _before_cnt = self.driver.execute_script(
-                "return document.querySelectorAll('div.markdown,[data-message-author-role=\"assistant\"]').length;"
-            ) or 0
+            _before_cnt = self.driver.execute_script(_count_js) or 0
         except Exception:
             pass
 
-        # 策略A: focus 输入框 + Enter (实测最稳定的方式)
+        # 策略A: focus 输入框 + Enter (实测最稳定的方式,DeepSeek 也支持)
         try:
             from selenium.webdriver.common.action_chains import ActionChains as _AC
             from selenium.webdriver.common.keys import Keys as _K
             self.driver.execute_script("""
-                const box = document.querySelector('#prompt-textarea')
+                const box = document.querySelector('textarea')
+                         || document.querySelector('#prompt-textarea')
                          || document.querySelector('div[contenteditable="true"]');
                 if (box) box.focus();
             """)
@@ -4714,9 +4750,7 @@ class BrowserWorker(QObject):
             _AC(self.driver).send_keys(_K.RETURN).perform()
             self.log_signal.emit("已按 Enter 发送，等待响应...", "info")
             time.sleep(1.5)
-            _after_cnt = self.driver.execute_script(
-                "return document.querySelectorAll('div.markdown,[data-message-author-role=\"assistant\"]').length;"
-            ) or 0
+            _after_cnt = self.driver.execute_script(_count_js) or 0
             if _after_cnt > _before_cnt:
                 self.log_signal.emit(f"✓ 发送成功(消息数 {_before_cnt}→{_after_cnt})", "info")
                 return True
@@ -4724,28 +4758,63 @@ class BrowserWorker(QObject):
         except Exception as e:
             self.log_signal.emit(f"Enter发送异常: {e}", "warn")
 
-        # 策略B: 强制点击按钮(即使 disabled)
+        # 策略B: 强制点击按钮(DeepSeek + ChatGPT 通用,加 textarea 邻近按钮策略)
         try:
-            self.driver.execute_script("""
-                const btn = document.querySelector('button.composer-submit-btn')
-                         || document.querySelector('[data-testid="send-button"]')
-                         || document.querySelector('button[aria-label*="发送"]')
-                         || document.querySelector('button[aria-label*="Send" i]');
+            clicked = self.driver.execute_script(r"""
+                // 1) 通用按钮选择器(ChatGPT/Claude 镜像站)
+                let btn = document.querySelector('button.composer-submit-btn')
+                       || document.querySelector('[data-testid="send-button"]')
+                       || document.querySelector('button[aria-label*="发送"]')
+                       || document.querySelector('button[aria-label*="Send" i]');
                 if (btn) {
                     btn.removeAttribute('disabled');
                     btn.removeAttribute('aria-disabled');
                     btn.click();
+                    return 'compat-btn';
                 }
+                // 2) DeepSeek: textarea 旁边的最右下角带 svg 的 [role=button]
+                //    (textarea 的祖父级 form/div 里, 选 m 尺寸或 sizing-container)
+                const ta = document.querySelector('textarea');
+                if (ta) {
+                    // 找 textarea 共同祖先(往上找 form/div 容器)
+                    let container = ta.parentElement;
+                    for (let i = 0; i < 5 && container; i++) {
+                        const candidates = container.querySelectorAll(
+                            'div[role="button"]:has(svg)');
+                        // 候选里选可见 + 右下位置的(taX > textarea.x 且 visible)
+                        const taRect = ta.getBoundingClientRect();
+                        let best = null;
+                        let bestX = -Infinity;
+                        for (const c of candidates) {
+                            if (c.offsetParent === null) continue;
+                            const r = c.getBoundingClientRect();
+                            // 选 textarea 右下方的, 优先最靠右
+                            if (r.top >= taRect.top - 10 && r.left >= taRect.left
+                                    && r.right > bestX) {
+                                best = c;
+                                bestX = r.right;
+                            }
+                        }
+                        if (best) {
+                            best.click();
+                            return 'deepseek-nearby-btn:' + (best.className || '').slice(0, 50);
+                        }
+                        container = container.parentElement;
+                    }
+                }
+                return 'no-btn';
             """)
+            self.log_signal.emit(f"点击发送按钮策略B: {clicked}", "info")
             time.sleep(1.5)
-            _after_cnt2 = self.driver.execute_script(
-                "return document.querySelectorAll('div.markdown,[data-message-author-role=\"assistant\"]').length;"
-            ) or 0
+            _after_cnt2 = self.driver.execute_script(_count_js) or 0
             if _after_cnt2 > _before_cnt:
-                self.log_signal.emit(f"✓ 按钮发送成功(消息数 {_before_cnt}→{_after_cnt2})", "info")
+                self.log_signal.emit(f"✓ 按钮点击成功(消息数 {_before_cnt}→{_after_cnt2})", "info")
                 return True
         except Exception as e:
             self.log_signal.emit(f"按钮发送异常: {e}", "warn")
+
+        # 策略C: 走原来的旧逻辑(fallback)
+        self.log_signal.emit("策略 A/B 都未确认发送, 退到旧 selector 兜底", "warn")
 
         # 2) 等按钮可点(每 0.25s 轮询,最多 10s)
         sel = json.dumps(send_btn_selector)
