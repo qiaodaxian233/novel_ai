@@ -4676,27 +4676,51 @@ class BrowserWorker(QObject):
             #    出现就自动点击 + 继续等(防止章节被截断 / 出现"继续生成"卡顿)
             if not stopping and cur and len(cur) > 30 and cur == last_text:
                 # 检查"继续生成"按钮(DeepSeek 特征)
+                # 用户给的真实 HTML: <button class="ds-basic-button..."><span>继续生成</span>...</button>
+                # 严格 === 可能因 innerText 周围空白匹配失败,改成 contains + 长度限制
                 continue_clicked = False
                 try:
                     continue_clicked = self.driver.execute_script(r"""
-                        // 找所有按钮看内文是不是"继续生成"
-                        const btns = document.querySelectorAll(
-                            'div[role="button"], button, span[role="button"]');
-                        for (const b of btns) {
+                        // 1) 优先用最精确的特征 button 含 span 子节点文本 '继续生成'
+                        const allBtns = document.querySelectorAll(
+                            'button, div[role="button"], span[role="button"]');
+                        for (const b of allBtns) {
                             if (b.offsetParent === null) continue;
+                            // 看自己 + 直接 span 子节点的文字(过滤其他嵌套)
                             const t = (b.innerText || b.textContent || '').trim();
-                            if (t === '继续生成' || t === '继续') {
+                            // 严格 == 失败时,容错 includes
+                            if (t === '继续生成' || t === '继续' ||
+                                (t.length <= 8 && t.includes('继续生成'))) {
                                 b.click();
-                                return true;
+                                return 'CLICKED_CONTINUE:' + t.slice(0, 20);
                             }
                         }
-                        return false;
-                    """) or False
+                        // 2) 退路:扫所有 span 含 "继续生成" 文字,往上找最近的 button/role=button 点击
+                        const spans = document.querySelectorAll('span');
+                        for (const s of spans) {
+                            if (s.offsetParent === null) continue;
+                            const txt = (s.textContent || '').trim();
+                            if (txt === '继续生成') {
+                                // 往上找最近的可点击祖先
+                                let el = s.parentElement;
+                                for (let i = 0; i < 5 && el; i++) {
+                                    if (el.tagName === 'BUTTON' ||
+                                        el.getAttribute('role') === 'button') {
+                                        el.click();
+                                        return 'CLICKED_VIA_SPAN';
+                                    }
+                                    el = el.parentElement;
+                                }
+                            }
+                        }
+                        return '';
+                    """)
                 except Exception:
                     pass
                 if continue_clicked:
                     self.log_signal.emit(
-                        f"⚙ 检测到「继续生成」按钮 → 已自动点击,继续等待...", "info")
+                        f"⚙ 检测到「继续生成」按钮 → 已自动点击 ({continue_clicked}),继续等待...",
+                        "info")
                     # 重置稳定时间,让循环继续等 AI 接着写
                     last_change = time.time()
                     last_text = ""  # 强制重新匹配,因为接下来会有新内容
