@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.30"
+APP_VERSION = "v1.31"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -12300,9 +12300,26 @@ class MainWindow(QMainWindow):
                 "gen_url": self.tab_generation.url_input.text(),
                 "gen_site": self.tab_generation.site_combo.currentText(),
             }
-            Path(save_path).write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+            # v1.31 BUG-043:autosave 也走 project_io 文件夹格式
+            # 之前只改了 save_project 没改这个,导致文件夹路径被当文件写,Permission denied
+            target = Path(save_path)
+            if PROJECT_IO_AVAILABLE and (
+                    not target.suffix or target.is_dir() or
+                    (not target.exists() and not save_path.endswith(".json"))):
+                # 走文件夹格式
+                project_io.save_project_folder(target, d)
+                # autosave 不打 status bar(太频繁),只在 console
+                print(f"[autosave] 已写文件夹: {target}", flush=True)
+            else:
+                # 旧 .json 路径
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(
+                    json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+                print(f"[autosave] 已写 .json: {target}", flush=True)
         except Exception as e:
+            import traceback
             self.statusBar().showMessage(f"自动保存失败:{e}", 5000)
+            print(f"[autosave] 失败: {e}\n{traceback.format_exc()}", flush=True)
 
     def _autoload(self):
         """启动时自动加载上次的项目"""
