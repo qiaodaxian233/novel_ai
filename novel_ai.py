@@ -3795,6 +3795,17 @@ class BrowserWorker(QObject):
     @staticmethod
     def _diagnose(msg):
         m = (msg or "").lower()
+        if "unable to obtain driver" in m or "selenium manager" in m or "could not start" in m:
+            return ("【诊断】Selenium 自动下载 chromedriver 失败!常见原因:\n"
+                    "  1. 网络/防火墙拦截了 Selenium Manager(无法访问 googleapis.com)\n"
+                    "  2. 公司机器禁止下载可执行文件\n"
+                    "  3. Chrome 版本太新,driver 还没匹配\n"
+                    "✅ 解决方案(任选一):\n"
+                    "  方案 A: pip install webdriver-manager,程序会自动用它兜底下载(推荐)\n"
+                    "  方案 B: 手动下载 chromedriver → "
+                    "https://googlechromelabs.github.io/chrome-for-testing/ "
+                    "→ 解压到 PATH 路径(如 C:\\Windows\\)\n"
+                    "  方案 C: 切换内核到「系统 Edge」(Windows 10+ 内置不用下 driver)")
         if "session not created" in m and "chrome" in m:
             return ("【诊断】Chrome 启动后立刻退出。常见原因:\n"
                     "  1. 同 profile 已有 Chrome 运行 → 关掉所有 Chrome 重试\n"
@@ -3804,10 +3815,57 @@ class BrowserWorker(QObject):
         if "chrome not reachable" in m:
             return "【诊断】无法连接 Chrome(端口不对或浏览器已关)"
         if "chromedriver" in m and ("version" in m or "mismatch" in m):
-            return "【诊断】ChromeDriver 版本不匹配。执行:pip install -U selenium"
+            return ("【诊断】ChromeDriver 版本不匹配。\n"
+                    "  方案 A: pip install -U selenium\n"
+                    "  方案 B: pip install -U webdriver-manager(自动管理版本)")
         if "no such file" in m or "not found" in m or "cannot find" in m:
             return "【诊断】找不到浏览器可执行文件,请确认 Chrome / Edge 已安装"
-        return "【诊断】未知错误。建议:关闭所有 Chrome 窗口后重试,或换 attach 模式"
+        return ("【诊断】未知错误。\n"
+                "  · 先试:关闭所有 Chrome 窗口后重试\n"
+                "  · 再试:切换内核到「系统 Edge」(最稳兜底)\n"
+                "  · 最后:pip install -U selenium webdriver-manager")
+
+    @staticmethod
+    def _resolve_chrome_driver_service():
+        """三层兜底获取 chromedriver Service:
+        1) None (用 Selenium Manager 自动下载,Selenium 4.6+ 默认)
+        2) webdriver-manager 兜底(pip install webdriver-manager)
+        3) PATH 里的 chromedriver(用户手动放的)
+        返回 Service 对象或 None"""
+        try:
+            from selenium.webdriver.chrome.service import Service as _CS
+            # 尝试 webdriver-manager 兜底
+            try:
+                from webdriver_manager.chrome import ChromeDriverManager as _CDM
+                return _CS(_CDM().install())
+            except ImportError:
+                pass  # 没装 webdriver-manager 就走 None 路径
+            # 尝试 PATH 里的 chromedriver
+            import shutil as _shu
+            cd_path = _shu.which("chromedriver") or _shu.which("chromedriver.exe")
+            if cd_path:
+                return _CS(cd_path)
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _resolve_edge_driver_service():
+        """同上,Edge 版本兜底"""
+        try:
+            from selenium.webdriver.edge.service import Service as _ES
+            try:
+                from webdriver_manager.microsoft import EdgeChromiumDriverManager as _EDM
+                return _ES(_EDM().install())
+            except ImportError:
+                pass
+            import shutil as _shu
+            ed_path = _shu.which("msedgedriver") or _shu.which("msedgedriver.exe")
+            if ed_path:
+                return _ES(ed_path)
+        except Exception:
+            pass
+        return None
 
     # ============ Worker 后台主循环 ============
     def _run(self):
@@ -3854,9 +3912,19 @@ class BrowserWorker(QObject):
             opts.add_experimental_option("useAutomationExtension", False)
             self.log_signal.emit("→ Edge standalone 模式", "info")
             try:
+                # 第一次:Selenium Manager 默认路径
                 self.driver = webdriver.Edge(options=opts)
             except Exception as e:
-                raise RuntimeError(f"{e}\n\n{self._diagnose(str(e))}")
+                # 兜底 1:webdriver-manager / PATH chromedriver
+                svc = self._resolve_edge_driver_service()
+                if svc:
+                    self.log_signal.emit("Selenium Manager 失败,改用 webdriver-manager 兜底", "warn")
+                    try:
+                        self.driver = webdriver.Edge(options=opts, service=svc)
+                    except Exception as e2:
+                        raise RuntimeError(f"{e2}\n\n{self._diagnose(str(e2))}")
+                else:
+                    raise RuntimeError(f"{e}\n\n{self._diagnose(str(e))}")
 
         elif ch == "chrome":
             # attach 模式 + 自动起调试 Chrome
@@ -3867,7 +3935,15 @@ class BrowserWorker(QObject):
             try:
                 self.driver = webdriver.Chrome(options=opts)
             except Exception as e:
-                raise RuntimeError(f"{e}\n\n{self._diagnose(str(e))}")
+                svc = self._resolve_chrome_driver_service()
+                if svc:
+                    self.log_signal.emit("Selenium Manager 失败,改用 webdriver-manager 兜底", "warn")
+                    try:
+                        self.driver = webdriver.Chrome(options=opts, service=svc)
+                    except Exception as e2:
+                        raise RuntimeError(f"{e2}\n\n{self._diagnose(str(e2))}")
+                else:
+                    raise RuntimeError(f"{e}\n\n{self._diagnose(str(e))}")
 
         else:
             # standalone Chromium
@@ -3890,7 +3966,15 @@ class BrowserWorker(QObject):
             try:
                 self.driver = webdriver.Chrome(options=opts)
             except Exception as e:
-                raise RuntimeError(f"{e}\n\n{self._diagnose(str(e))}")
+                svc = self._resolve_chrome_driver_service()
+                if svc:
+                    self.log_signal.emit("Selenium Manager 失败,改用 webdriver-manager 兜底", "warn")
+                    try:
+                        self.driver = webdriver.Chrome(options=opts, service=svc)
+                    except Exception as e2:
+                        raise RuntimeError(f"{e2}\n\n{self._diagnose(str(e2))}")
+                else:
+                    raise RuntimeError(f"{e}\n\n{self._diagnose(str(e))}")
 
         # 反爬:抹掉 navigator.webdriver
         try:

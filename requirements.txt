@@ -1,3 +1,6 @@
 PyQt5>=5.15.0
 selenium>=4.6.0
 requests>=2.31.0
+# 可选兜底:Selenium Manager 自动下载 chromedriver 失败时(公司机器/防火墙)用它替代
+# 没装的话程序自动跳过,有装会自动用
+webdriver-manager>=4.0.0
