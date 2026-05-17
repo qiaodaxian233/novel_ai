@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.21"
+APP_VERSION = "v1.22"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -155,6 +155,7 @@ PROMPTS = {
         "【题材】{genre}\n"
         "【整体世界观/结构】\n{outline}\n\n"
         "【本章大纲】\n{chapter_outline}\n\n"
+        "{prev_context}"
         "【输出格式-严格遵守】\n"
         "第一行: 第 {chapter_num} 章 章节名(章节名不超过15字,要有吸引力,概括本章核心冲突)\n"
         "第二行: 空行\n"
@@ -1710,6 +1711,39 @@ class CreationSettings(QWidget):
         for btn in self.words_preset_group.buttons():
             btn.toggled.connect(self._sync_words_preset)
         layout.addWidget(wp_box)
+
+        # v1.22:上一章末尾注入字数(一致性关键 — 默认 2500)
+        ctx_box = QGroupBox("📖 一致性上下文(注入到下章 prompt)")
+        ctx_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        ctx_lay = QVBoxLayout(ctx_box)
+        ctx_r1 = QHBoxLayout()
+        ctx_r1.addWidget(QLabel("上一章正文末尾注入字数:"))
+        self.prev_tail_chars = QSpinBox()
+        self.prev_tail_chars.setRange(500, 8000)
+        self.prev_tail_chars.setSingleStep(500)
+        from PyQt5.QtCore import QSettings as _QS_ctx
+        _saved = _QS_ctx("NovelAI", "CreationSettings").value(
+            "prev_chapter_tail_chars", 2500, type=int)
+        self.prev_tail_chars.setValue(max(500, min(8000, _saved)))
+        self.prev_tail_chars.setToolTip(
+            "生成下一章时,把上一章正文的末尾这么多字注入到 prompt 里,\n"
+            "让 AI 看到人物语气 / 动作惯性 / 情节细节,保持一致性。\n\n"
+            "推荐值:2500 字(主流大模型 context 够用,内容也够)\n"
+            "字数越大 → 一致性越好 / token 消耗越多")
+        self.prev_tail_chars.valueChanged.connect(
+            lambda v: _QS_ctx("NovelAI", "CreationSettings").setValue(
+                "prev_chapter_tail_chars", v))
+        ctx_r1.addWidget(self.prev_tail_chars)
+        ctx_r1.addWidget(QLabel("字"))
+        ctx_r1.addStretch()
+        ctx_lay.addLayout(ctx_r1)
+        _hint = QLabel(
+            "ℹ 默认 2500 字。如果发现下章跟上章衔接不上 / 人物语气变了 → 加大此值。\n"
+            "  如果发现 AI 经常 token 溢出 / 章节质量下降 → 减小此值。")
+        _hint.setStyleSheet("color: #888; font-size: 11px;")
+        _hint.setWordWrap(True)
+        ctx_lay.addWidget(_hint)
+        layout.addWidget(ctx_box)
 
         # 大纲详细度
         od_box = QGroupBox("大纲详细度")
@@ -8324,12 +8358,15 @@ class MainWindow(QMainWindow):
         target_with_offset = max(500, target + offset)
         min_words = max(300, int(target_with_offset * 0.85))
         full = self.tab_settings.get_full_settings_block()
+        # v1.22:备选版本也用 prev_context 保持一致性
+        prev_context = self._build_prev_context(ch_num)
         prompt = PROMPTS["chapter"].format(
             chapter_num=ch_num,
             title=self.tab_settings.get_title(),
             genre="/".join(self.tab_settings.get_selected_genres() or ["言情"]),
             outline=outline,
             chapter_outline=co[:2500],
+            prev_context=prev_context,
             min_words=min_words, target_words=target_with_offset,
         )
         prompt += (
@@ -8664,12 +8701,18 @@ class MainWindow(QMainWindow):
         except Exception:
             _ch_outline = "(无章节大纲)"
         try:
+            # v1.22:预览也要传 prev_context,避免 KeyError
+            try:
+                _prev_ctx = self._build_prev_context(cur_idx + 2)
+            except Exception:
+                _prev_ctx = ""
             preview_prompt = PROMPTS["chapter"].format(
                 title=s.get_title(),
                 chapter_num=cur_idx + 2,
                 genre="/".join(s.get_selected_genres()) or "通用",
                 outline=_outline_real[:1500],
                 chapter_outline=_ch_outline[:2500],
+                prev_context=_prev_ctx,
                 min_words=int(s.get_words_per_chapter() * 0.9),
                 target_words=s.get_words_per_chapter(),
             )
@@ -9824,6 +9867,68 @@ class MainWindow(QMainWindow):
             self._batch_remaining = 0
             self.tab_generation.log("用户取消,批量生成已停止", "warn")
 
+    def _build_prev_context(self, ch_num):
+        """v1.22 BUG-040:构造【前情提要】块,注入到 chapter prompt
+
+        组成:
+          1. 早期章节摘要(第 1 章到第 ch_num-2 章,如有 summary 字段)
+          2. 上一章正文末尾 N 字(N 默认 2500,可在创作设置里调)
+
+        若没有上一章 / 第 1 章 → 返回空字符串(prompt 模板 {prev_context} 不显示)
+        """
+        if not self.chapters or ch_num <= 1:
+            return ""
+
+        sections = []
+
+        # 1. 早期章节摘要(第 1 章 ~ 第 ch_num-2 章)
+        early_summaries = []
+        if ch_num >= 3:
+            for i, c in enumerate(self.chapters[:-1]):
+                s = (c.get("summary") or "").strip()
+                if s:
+                    early_summaries.append(f"  · 第 {i+1} 章:{s[:200]}")
+        if early_summaries:
+            sections.append(
+                "▼ 早期章节摘要(主线脉络)\n" + "\n".join(early_summaries))
+
+        # 2. 上一章正文末尾(默认 2500 字,QSettings 可调)
+        prev_ch = self.chapters[-1]
+        prev_content = (prev_ch.get("content") or "").strip()
+        if prev_content:
+            try:
+                from PyQt5.QtCore import QSettings
+                tail_n = QSettings("NovelAI", "CreationSettings").value(
+                    "prev_chapter_tail_chars", 2500, type=int)
+            except Exception:
+                tail_n = 2500
+            tail_n = max(500, min(8000, tail_n))   # 安全边界
+            tail = (prev_content[-tail_n:]
+                    if len(prev_content) > tail_n
+                    else prev_content)
+            prev_title = (prev_ch.get("title") or "").strip()
+            header = "▼ 上一章正文末尾(直接承接,语气/动作/情节请连续)"
+            if prev_title:
+                header += f"\n  上一章标题:《{prev_title}》"
+            sections.append(f"{header}\n\n{tail}")
+            # 诊断 log
+            try:
+                self.tab_generation.log(
+                    f"📖 已注入上一章末尾 {len(tail)} 字" +
+                    (f" + {len(early_summaries)} 章摘要" if early_summaries else ""),
+                    "info")
+            except Exception:
+                pass
+
+        if not sections:
+            return ""
+
+        return (
+            "【前情提要 — 保持一致性的关键】\n"
+            + "\n\n".join(sections)
+            + "\n\n"
+        )
+
     def _send_next_chapter(self):
         """批量生成里发下一章(自动注入对话记忆+伏笔提醒)"""
         if self._batch_paused or self._batch_remaining <= 0:
@@ -9858,12 +9963,14 @@ class MainWindow(QMainWindow):
             pass
         min_words = max(300, int(target_with_offset * 0.85))
         full = self.tab_settings.get_full_settings_block()
+        prev_context = self._build_prev_context(ch_num)
         prompt = PROMPTS["chapter"].format(
             chapter_num=ch_num,
             title=self.tab_settings.get_title(),
             genre="/".join(self.tab_settings.get_selected_genres() or ["言情"]),
             outline=outline,
             chapter_outline=co[:2500],
+            prev_context=prev_context,
             min_words=min_words, target_words=target_with_offset,
         ) + f"\n\n【完整设定参考】\n{full}"
         if _diff_block:
