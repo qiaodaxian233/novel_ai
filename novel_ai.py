@@ -5698,9 +5698,17 @@ class GenerationControl(QWidget):
             "background:#27ae60;color:white;padding:6px 14px;font-weight:bold;border-radius:3px;")
         self.btn_gen_three = QPushButton("生成黄金三章")
         self.btn_regen_three = QPushButton("不想要,重生成黄金三章")
+        self.btn_gen_next = QPushButton("▶ 写下一章")
+        self.btn_gen_next.setStyleSheet(
+            "background:#3498db;color:white;padding:6px 14px;font-weight:bold;border-radius:3px;")
+        self.btn_gen_next.setToolTip(
+            "单独生成下一章(不进入批量连续生成模式)。\n"
+            "当前已有 N 章 → 点这个写第 N+1 章。\n"
+            "适用于:想一章一章手动确认 / 黄金三章后慢慢往下写。")
         crow.addWidget(self.btn_gen_one)
         crow.addWidget(self.btn_gen_three)
         crow.addWidget(self.btn_regen_three)
+        crow.addWidget(self.btn_gen_next)
 
         crow.addWidget(QLabel("连续生成:"))
         self.batch_count = QSpinBox()
@@ -6286,6 +6294,7 @@ class MainWindow(QMainWindow):
         self.tab_generation.btn_gen_one.clicked.connect(self.gen_first_chapter)
         self.tab_generation.btn_gen_three.clicked.connect(self.gen_golden_three)
         self.tab_generation.btn_regen_three.clicked.connect(self.gen_golden_three)
+        self.tab_generation.btn_gen_next.clicked.connect(self.gen_next_chapter_single)
 
         # 章节编辑
         self.tab_editor.save_requested.connect(self.save_current_chapter)
@@ -10028,6 +10037,39 @@ class MainWindow(QMainWindow):
             self.tab_generation.log(
                 f"已注入角色与世界状态({len(charlib_block)} 字符)到黄金三章", "info")
         self._send_to_ai(prompt, "黄金三章", target="golden_three")
+
+    def gen_next_chapter_single(self):
+        """▶ 写下一章(单章生成,不进入批量模式)
+        跟批量生成共享 _send_next_chapter,但 _batch_remaining=1 + _batch_silent=False
+        (单章模式下伏笔到期提醒会弹出来,让用户主动处理)"""
+        if not self.worker.is_ready():
+            QMessageBox.information(
+                self, "请先启动浏览器",
+                "请先在『生成控制』页点『🚀 启动浏览器』并完成 AI 网站登录。")
+            return
+        co = self.tab_outline.chapter_outline_edit.toPlainText()
+        if not co.strip():
+            QMessageBox.warning(self, "提示", "请先生成或填写章节大纲"); return
+        if not self.chapters:
+            QMessageBox.warning(
+                self, "提示",
+                "目前没有任何章节。\n"
+                "首次生成请点【📖 生成第一章】或【生成黄金三章】。\n"
+                "「写下一章」是在已有章节基础上续写。")
+            return
+        next_ch_num = len(self.chapters) + 1
+        # 启动单章模式
+        self._batch_remaining = 1
+        self._batch_paused = False
+        self._batch_silent = False  # 单章模式 → 伏笔到期弹提醒
+        target = self.tab_settings.get_words_per_chapter()
+        offset = self.tab_settings.get_prompt_offset()
+        target_with_offset = max(500, target + offset)
+        self.tab_generation.log(
+            f"▶ 单章模式:写第 {next_ch_num} 章,目标 {target_with_offset} 字"
+            f"(基础 {target} {offset:+d}),死磕 {self.tab_generation.retry_count.value()} 次上限",
+            "info")
+        self._send_next_chapter()
 
     def start_generation(self):
         """开始批量自动生成 - 真自动:发送→等回复→抓取→存章节→发下一章"""
