@@ -8215,6 +8215,19 @@ class MainWindow(QMainWindow):
                     self, "诊断处理失败",
                     f"AI 返回处理失败:{_e}\n\n原始返回前 500 字:\n{content[:500]}")
             return
+        elif target == "dialogue_critic_autofix":
+            # v1.34: 13 法重写返回
+            try:
+                ch_idx = meta.get("ch_idx", -1)
+                orig = meta.get("original_chapter", "")
+                self._on_dialogue_critic_autofix_response(content, ch_idx, orig)
+            except Exception as _e:
+                import traceback
+                print(f"[dc_autofix] 处理失败: {_e}\n{traceback.format_exc()}", flush=True)
+                QMessageBox.warning(
+                    self, "重写处理失败",
+                    f"AI 返回处理失败:{_e}\n\n原始返回前 500 字:\n{content[:500]}")
+            return
         elif target == "chapter_summary":
             # 章节摘要回填到记忆系统
             ch_num = meta.get("ch_num")
@@ -8749,32 +8762,156 @@ class MainWindow(QMainWindow):
             "🔬 13 法对话诊断已发送 AI(深度评分 + 改写建议)", "info")
 
     def _on_dialogue_critic_received(self, content, meta):
-        """AI 返回诊断结果"""
+        """AI 返回诊断结果 + 提供按建议重写"""
         ai_data = dialogue_critic.parse_ai_response(content)
         static = getattr(self, "_dialogue_critic_static", None)
         if static is None:
             QMessageBox.warning(self, "诊断错误", "找不到静态扫描缓存")
             return
         report = dialogue_critic.format_report(static, ai_data)
-        # 用大对话框显示
-        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QDialogButtonBox
+        # 用大对话框显示 + 加"按建议重写"按钮
+        from PyQt5.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QPlainTextEdit, QPushButton)
         dlg = QDialog(self)
         dlg.setWindowTitle("🔬 13 法对话诊断 - AI 深度结果")
-        dlg.resize(800, 600)
+        dlg.resize(800, 650)
         lay = QVBoxLayout(dlg)
         te = QPlainTextEdit(report)
         te.setReadOnly(True)
-        # 等宽字体让进度条对齐
         from PyQt5.QtGui import QFont
         f = QFont("Consolas", 10)
         te.setFont(f)
         lay.addWidget(te)
-        bb = QDialogButtonBox(QDialogButtonBox.Close)
-        bb.rejected.connect(dlg.reject)
-        bb.accepted.connect(dlg.accept)
-        lay.addWidget(bb)
+
+        # v1.34: 按钮区 — 一键 AI 按建议重写
+        btn_row = QHBoxLayout()
+        btn_autofix = QPushButton("🔧 按 13 法建议重写本章")
+        btn_autofix.setStyleSheet(
+            "QPushButton { background:#8e44ad; color:white; padding:8px 16px; "
+            "border-radius:3px; font-weight:bold; font-size:14px; }"
+            "QPushButton:hover { background:#6c3483; }")
+        btn_autofix.setToolTip(
+            "把章节正文 + 13 法各项弱点 + 改写建议发给 AI,让它按 13 法重写本章。\n"
+            "完成后修复版本会自动覆盖当前章节(原版本通过项目备份找回)。")
+        btn_close = QPushButton("先关掉(我手动改)")
+        btn_close.setStyleSheet("QPushButton { background:#888; padding:8px 16px; }")
+
+        # 整体分数不太差(>=85)或没拿到 AI 数据 → 不强推
+        overall = (ai_data or {}).get("overall_score", 0)
+        try:
+            overall_int = int(overall) if overall else 0
+        except (ValueError, TypeError):
+            overall_int = 0
+        if not ai_data:
+            btn_autofix.setEnabled(False)
+            btn_autofix.setText("⚠ AI 评分未解析,无法重写")
+        elif overall_int >= 90:
+            btn_autofix.setText("✓ 整体已达 90+,无需重写(仍可点)")
+            btn_autofix.setStyleSheet(
+                "QPushButton { background:#27ae60; color:white; padding:8px 16px; "
+                "border-radius:3px; font-weight:bold; }")
+
+        def _on_dc_autofix():
+            dlg.accept()
+            self._on_dialogue_critic_autofix_request(ai_data)
+
+        btn_autofix.clicked.connect(_on_dc_autofix)
+        btn_close.clicked.connect(dlg.reject)
+        btn_row.addWidget(btn_autofix, 2)
+        btn_row.addWidget(btn_close, 1)
+        lay.addLayout(btn_row)
+
         dlg.exec_()
         self.tab_generation.log("🔬 13 法对话诊断完成", "success")
+
+    def _on_dialogue_critic_autofix_request(self, ai_data):
+        """v1.34: 让 AI 按 13 法 advice 重写本章"""
+        if not self.worker.is_ready():
+            QMessageBox.warning(
+                self, "请先启动浏览器",
+                "请先在『生成控制』点『🚀 启动浏览器』并完成 AI 网站登录")
+            return
+        original_chapter = self.tab_editor.content_edit.toPlainText().strip()
+        if not original_chapter:
+            QMessageBox.warning(self, "提示", "原章节内容为空,无法重写")
+            return
+        ch_idx = getattr(self.tab_editor, "current_index", -1)
+        if ch_idx < 0 or ch_idx >= len(self.chapters):
+            QMessageBox.warning(
+                self, "提示",
+                "请先在左侧章节列表里选中要重写的章节")
+            return
+
+        # 构造 prompt — 从 ai_data 抽出 13 法弱点和建议
+        LAW_NAMES = {
+            "L1": "动作卡位", "L2": "神态神韵", "L3": "情境穿插",
+            "L4": "语感辨识", "L5": "语义衔接", "L6": "标点替代",
+            "L7": "内心独白回切", "L8": "群体反应衬托",
+            "L9": "重复词锚定", "L10": "空格断句", "L11": "通感法",
+            "L12": "信息差技巧", "L13": "节奏开关",
+        }
+        weak_laws = []
+        worst_3 = ai_data.get("worst_3", [])
+        for key in ("L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8",
+                    "L9", "L10", "L11", "L12", "L13"):
+            item = ai_data.get(key)
+            if not isinstance(item, dict):
+                continue
+            score = item.get("score", 10)
+            try:
+                score_int = int(score)
+            except (ValueError, TypeError):
+                score_int = 10
+            advice = item.get("advice", "").strip()
+            # 弱点定义: 分数 <= 5 或在 worst_3 里
+            if score_int <= 5 or key in worst_3:
+                weak_laws.append(
+                    f"  · {key} {LAW_NAMES.get(key, key)} ({score_int}/10): {advice}")
+
+        weak_section = "\n".join(weak_laws) if weak_laws else "  · (AI 未指出具体弱点)"
+        verdict = ai_data.get("verdict", "(无)")
+        overall = ai_data.get("overall_score", "?")
+
+        prompt = (
+            "你是网文对话风格修复师。下面是一篇章节,以及 13 法对话铁律的诊断结果。\n"
+            "请按诊断指出的弱点,重写这一章,**只改对话写法,情节/人设/世界观完全不动**。\n\n"
+            f"【整体评分】{overall}/100\n"
+            f"【AI 评价】{verdict}\n\n"
+            "【主要弱点(必须改)】\n"
+            f"{weak_section}\n\n"
+            "【13 法对话铁律(强制遵守)】\n"
+            "  L1 动作卡位: 用动作替代「X 说」\n"
+            "  L2 神态神韵: 专属微动作前置\n"
+            "  L3 情境穿插: 对话间插环境/物\n"
+            "  L4 语感辨识: 角色专属语气/口头禅\n"
+            "  L5 语义衔接: 对话直接回应前句\n"
+            "  L6 标点替代: 短促交锋换行+标点\n"
+            "  L7 内心独白回切: 对话后接主角预判\n"
+            "  L8 群体反应衬托: 用反应反推说话人\n"
+            "  L9 重复词锚定: 角色刻意重复词\n"
+            "  L10 空格断句: 对话顶格+空行\n"
+            "  L11 通感法: 一种感官写另一种\n"
+            "  L12 信息差: 读者/角色不对称张力\n"
+            "  L13 节奏开关: 急慢脉冲\n\n"
+            "**红线**: 「说/道」次数 ≤ 章节字数/600 (约每 600 字一次)。\n"
+            "禁套词: 怒吼道/喃喃道/喝道/低声道/淡淡道/缓缓道。\n"
+            "禁修饰: 生气地说/担心地问 等。\n\n"
+            "【输出】**只输出重写后的完整章节正文**,不要解释、不要 markdown、"
+            "不要前言后语。直接从章节第一句开始写到最后一句。\n\n"
+            "【章节原文】\n"
+            f"{original_chapter[:8000]}\n"
+        )
+
+        self.tab_generation.log(
+            f"▶ 让 AI 按 13 法重写第 {ch_idx+1} 章(弱点 {len(weak_laws)} 项)...",
+            "info")
+        self._send_to_ai(
+            prompt,
+            f"13法重写-第{ch_idx+1}章",
+            target="dialogue_critic_autofix",
+            ch_idx=ch_idx,
+            original_chapter=original_chapter,
+        )
 
     def _on_pangu_qcheck(self, content):
         # 让 AI 按盘古 30 项质检规范深度审稿
@@ -9296,6 +9433,77 @@ class MainWindow(QMainWindow):
             ch_idx=ch_idx,
             original_chapter=original_chapter,
         )
+
+    def _on_dialogue_critic_autofix_response(self, content, ch_idx, original_chapter):
+        """v1.34: 13 法重写返回 → 回填章节(同 pangu_autofix 范式)"""
+        if not content or not content.strip():
+            QMessageBox.warning(
+                self, "13 法重写失败", "AI 没返回任何内容,请重试或先检查浏览器/网络。")
+            return
+        fixed = content.strip()
+        # 去除可能的元信息块
+        try:
+            from pangu_system import strip_chapter_meta
+            fixed = strip_chapter_meta(fixed)
+        except Exception:
+            pass
+        # 比较长度,异常时给提示
+        orig_len = len(original_chapter)
+        new_len = len(fixed)
+        ratio = new_len / orig_len if orig_len > 0 else 1.0
+        if ratio < 0.5 or ratio > 1.8:
+            ret = QMessageBox.question(
+                self, "⚠️ 重写结果异常",
+                f"AI 返回内容长度跟原章节差太多:\n"
+                f"  原长度: {orig_len} 字\n"
+                f"  新长度: {new_len} 字 ({ratio*100:.0f}%)\n\n"
+                f"是否仍然回填?\n"
+                f"  是 → 用 AI 返回的内容覆盖章节\n"
+                f"  否 → 丢弃 AI 返回",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                self.tab_generation.log(
+                    "✗ 13 法重写结果被用户拒绝(长度异常)", "warn")
+                # 给用户看看 AI 返回的内容
+                from PyQt5.QtWidgets import (
+                    QDialog, QVBoxLayout, QPlainTextEdit, QDialogButtonBox)
+                d = QDialog(self)
+                d.setWindowTitle("⚠️ 已丢弃的 AI 返回内容(供查看)")
+                d.resize(700, 500)
+                la = QVBoxLayout(d)
+                te = QPlainTextEdit(fixed)
+                te.setReadOnly(True)
+                la.addWidget(te)
+                bb = QDialogButtonBox(QDialogButtonBox.Close)
+                bb.rejected.connect(d.reject)
+                la.addWidget(bb)
+                d.exec_()
+                return
+        # 安全检查通过 → 回填章节
+        if 0 <= ch_idx < len(self.chapters):
+            self.chapters[ch_idx]["content"] = fixed
+            # 如果当前显示的是这一章,更新 UI
+            if self.tab_editor.current_index == ch_idx:
+                self.tab_editor.content_edit.setPlainText(fixed)
+            self.tab_generation.log(
+                f"✓ 第 {ch_idx+1} 章 13 法重写完成 ({orig_len} → {new_len} 字)",
+                "success")
+            # 触发 autosave 保险
+            try:
+                self.save_project()
+            except Exception as _e:
+                self.tab_generation.log(f"⚠ 自动保存失败:{_e}", "warn")
+            # 弹完成提示
+            QMessageBox.information(
+                self, "✅ 13 法重写完成",
+                f"第 {ch_idx+1} 章已用 AI 重写版本覆盖。\n"
+                f"原长 {orig_len} 字 → 新长 {new_len} 字\n\n"
+                f"原版本通过项目备份找回:\n"
+                f"  菜单 → 文件 → 🕓 恢复历史版本")
+        else:
+            QMessageBox.warning(
+                self, "回填失败", f"章节索引 {ch_idx} 无效")
 
     def _on_pangu_autofix_response(self, content, ch_idx, original_chapter):
         """AI 修复返回 → 回填当前章节(原内容已通过 save_project 的 .backups 备份)"""
