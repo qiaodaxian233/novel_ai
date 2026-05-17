@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.31"
+APP_VERSION = "v1.32"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -32,6 +32,11 @@ try:
     PROJECT_IO_AVAILABLE = True
 except ImportError:
     PROJECT_IO_AVAILABLE = False
+try:
+    import dialogue_critic
+    DIALOGUE_CRITIC_AVAILABLE = True
+except ImportError:
+    DIALOGUE_CRITIC_AVAILABLE = False
 import time
 import random
 import socket
@@ -889,7 +894,8 @@ class ChapterEditor(QWidget):
     tts_play_requested  = pyqtSignal()   # 开始朗读本章
     tts_pause_requested = pyqtSignal()   # 暂停/继续
     tts_stop_requested  = pyqtSignal()   # 停止 + 清队列
-    tts_speed_changed   = pyqtSignal(float)  # 速度滑块变化    # 预览章节 prompt
+    tts_speed_changed   = pyqtSignal(float)  # 速度滑块变化
+    dialogue_critic_requested = pyqtSignal()  # v1.32:13 法对话诊断    # 预览章节 prompt
     # BUG-014:用户在元信息面板点了某条"下一章选项",把选项文本传给主程序,
     # 主程序在下次生成下一章时把它作为开局指引注入 prompt
     next_option_picked = pyqtSignal(str)
@@ -1002,6 +1008,19 @@ class ChapterEditor(QWidget):
         btn_row.addWidget(self.btn_editor_fg)
         btn_row.addWidget(self.btn_editor_bg)
         btn_row.addWidget(self.btn_editor_reset)
+        # v1.32:🔬 13 法对话诊断按钮
+        self.btn_dialogue_critic = QPushButton("🔬 13法诊断")
+        self.btn_dialogue_critic.setToolTip(
+            "用 13 法对话铁律诊断本章:\n"
+            "  · 静态扫描:统计「说/道」密度、套词、连续 X 说\n"
+            "  · AI 深度评分:13 法逐条评分 + 改写建议(发 AI,要 token)\n"
+            "快捷键: F9")
+        self.btn_dialogue_critic.setStyleSheet(
+            "background:#8e44ad;color:white;padding:4px 10px;border-radius:3px;"
+            "font-weight:bold;")
+        self.btn_dialogue_critic.setShortcut("F9")
+        self.btn_dialogue_critic.clicked.connect(self.dialogue_critic_requested.emit)
+        btn_row.addWidget(self.btn_dialogue_critic)
         layout.addLayout(btn_row)
 
         layout.addWidget(QLabel("章节标题:"))
@@ -1158,6 +1177,92 @@ class ChapterEditor(QWidget):
                 msg += f"  {k}: {v}\n"
         QMessageBox.information(self, "盘古本地词扫结果", msg)
         self.pangu_quicklint_requested.emit(c)
+
+    def _on_dialogue_critic(self):
+        """v1.32:13 法对话诊断 — 静态扫描 + 可选 AI 深度评分"""
+        if not DIALOGUE_CRITIC_AVAILABLE:
+            QMessageBox.warning(
+                self, "诊断器不可用",
+                "dialogue_critic.py 没找到。\n请确认文件存在于程序目录。")
+            return
+
+        content = self.tab_editor.content_edit.toPlainText().strip()
+        if not content:
+            QMessageBox.information(self, "对话诊断", "本章为空,无内容可诊断")
+            return
+
+        critic = dialogue_critic.DialogueCritic(content)
+
+        # Step 1: 静态扫描(本地,瞬出)
+        static = critic.static_scan()
+        static_msg = static.summary()
+
+        # 询问是否跑 AI 深度评分
+        ret = QMessageBox.question(
+            self, "🔬 对话诊断 - 静态扫描完成",
+            f"{static_msg}\n\n──────────\n"
+            f"是否继续 AI 深度评分?\n"
+            f"  ✓ 是 → 发 AI,13 法逐条评分 + 改写建议(消耗 token)\n"
+            f"  ✗ 否 → 只看静态扫描结果",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ret != QMessageBox.Yes:
+            # 把静态结果显示到对话框
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QDialogButtonBox
+            dlg = QDialog(self)
+            dlg.setWindowTitle("🔬 13 法对话诊断 (静态)")
+            dlg.resize(700, 500)
+            lay = QVBoxLayout(dlg)
+            te = QPlainTextEdit(static_msg)
+            te.setReadOnly(True)
+            lay.addWidget(te)
+            bb = QDialogButtonBox(QDialogButtonBox.Close)
+            bb.rejected.connect(dlg.reject)
+            bb.accepted.connect(dlg.accept)
+            lay.addWidget(bb)
+            dlg.exec_()
+            return
+
+        # Step 2: 发 AI(用现有 _send_to_ai 通道)
+        # 读老刀开关
+        from PyQt5.QtCore import QSettings
+        laodao = QSettings("NovelAI", "DialogueCritic").value(
+            "laodao_style", False, type=bool)
+        prompt = critic.build_ai_prompt(deep=True, laodao=laodao)
+        self._dialogue_critic_static = static    # 暂存静态结果供 received 用
+        self._send_to_ai(
+            prompt,
+            f"13 法对话诊断{'(老刀风格)' if laodao else ''}",
+            target="dialogue_critic")
+        self.tab_generation.log(
+            "🔬 13 法对话诊断已发送 AI(深度评分 + 改写建议)", "info")
+
+    def _on_dialogue_critic_received(self, content, meta):
+        """AI 返回诊断结果"""
+        ai_data = dialogue_critic.parse_ai_response(content)
+        static = getattr(self, "_dialogue_critic_static", None)
+        if static is None:
+            QMessageBox.warning(self, "诊断错误", "找不到静态扫描缓存")
+            return
+        report = dialogue_critic.format_report(static, ai_data)
+        # 用大对话框显示
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🔬 13 法对话诊断 - AI 深度结果")
+        dlg.resize(800, 600)
+        lay = QVBoxLayout(dlg)
+        te = QPlainTextEdit(report)
+        te.setReadOnly(True)
+        # 等宽字体让进度条对齐
+        from PyQt5.QtGui import QFont
+        f = QFont("Consolas", 10)
+        te.setFont(f)
+        lay.addWidget(te)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        bb.accepted.connect(dlg.accept)
+        lay.addWidget(bb)
+        dlg.exec_()
+        self.tab_generation.log("🔬 13 法对话诊断完成", "success")
 
     def _on_pangu_qcheck(self):
         # 发起 30 项质检(调 AI)
@@ -1505,6 +1610,44 @@ class CreationSettings(QWidget):
         tts_r5.addStretch()
         tts_lay.addLayout(tts_r5)
         layout.addWidget(tts_box)
+
+        # ---- v1.32:🔬 13 法对话诊断 ----
+        dc_box = QGroupBox("🔬 13 法对话诊断")
+        dc_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        dc_lay = QVBoxLayout(dc_box)
+        # 老刀风格开关
+        from PyQt5.QtCore import QSettings as _QS_dc
+        _dcs = _QS_dc("NovelAI", "DialogueCritic")
+        self.chk_dc_laodao = QCheckBox("🔪 启用老刀风格毒舌点评(AI 深度诊断时)")
+        self.chk_dc_laodao.setChecked(_dcs.value("laodao_style", False, type=bool))
+        self.chk_dc_laodao.setToolTip(
+            "勾选后,AI 诊断 verdict 字段用老刀语气:\n"
+            "直接、毒舌、不绕弯,看到稚嫩处直接说『删了重写』,\n"
+            "看到精彩处也大方夸『这处一击毙命,顶级笔法』。\n"
+            "不勾 = 中性专业评价。")
+        self.chk_dc_laodao.stateChanged.connect(
+            lambda s: _QS_dc("NovelAI", "DialogueCritic").setValue(
+                "laodao_style", bool(s)))
+        dc_lay.addWidget(self.chk_dc_laodao)
+        # 自动诊断开关(每章生成后自动跑静态扫描)
+        self.chk_dc_auto = QCheckBox("✨ 每章生成后自动跑静态扫描(发现红线自动提示)")
+        self.chk_dc_auto.setChecked(_dcs.value("auto_static", False, type=bool))
+        self.chk_dc_auto.setToolTip(
+            "勾选后,AI 写完一章自动跑 13 法本地静态扫描(不发 AI 不耗 token)。\n"
+            "如果发现红线违反(说/道超标 / 套词 / 连续 X 说),弹提示。\n"
+            "深度 AI 评分仍需手动点 🔬 13法诊断 按钮触发。")
+        self.chk_dc_auto.stateChanged.connect(
+            lambda s: _QS_dc("NovelAI", "DialogueCritic").setValue(
+                "auto_static", bool(s)))
+        dc_lay.addWidget(self.chk_dc_auto)
+        # 提示
+        _hint_dc = QLabel(
+            "ℹ 章节编辑器顶部 🔬 13法诊断 按钮(或 F9)触发深度 AI 评分。\n"
+            "  自动扫描是本地的,不发 AI 不耗 token,只看『说/道』密度和套词。")
+        _hint_dc.setStyleSheet("color: #888; font-size: 11px;")
+        _hint_dc.setWordWrap(True)
+        dc_lay.addWidget(_hint_dc)
+        layout.addWidget(dc_box)
 
         # ---- 盘古快捷工具 ----
         pangu_tools_box = QGroupBox("🛕 盘古快捷工具")
@@ -7556,6 +7699,8 @@ class MainWindow(QMainWindow):
         self.tab_editor.tts_pause_requested.connect(self._on_tts_pause)
         self.tab_editor.tts_stop_requested.connect(self._on_tts_stop)
         self.tab_editor.tts_speed_changed.connect(self._on_tts_speed_changed)
+        # v1.32:13 法对话诊断
+        self.tab_editor.dialogue_critic_requested.connect(self._on_dialogue_critic)
         self._init_tts()
         # v1.21:加 视图 菜单 + Ctrl+Shift+D 快捷键(corner widget click bug 的兜底入口)
         try:
@@ -7971,6 +8116,17 @@ class MainWindow(QMainWindow):
         elif target == "optimize":
             self.tab_editor.content_edit.setPlainText(content)
             self.tabs.setCurrentWidget(self.tab_editor)
+        elif target == "dialogue_critic":
+            # v1.32:13 法对话诊断 AI 返回
+            try:
+                self._on_dialogue_critic_received(content, meta)
+            except Exception as _e:
+                import traceback
+                print(f"[dialogue_critic] 处理失败: {_e}\n{traceback.format_exc()}", flush=True)
+                QMessageBox.warning(
+                    self, "诊断处理失败",
+                    f"AI 返回处理失败:{_e}\n\n原始返回前 500 字:\n{content[:500]}")
+            return
         elif target == "chapter_summary":
             # 章节摘要回填到记忆系统
             ch_num = meta.get("ch_num")
@@ -10919,6 +11075,30 @@ class MainWindow(QMainWindow):
             last_ch_num = ch_num
 
         self._batch_remaining -= 1
+
+        # v1.32:✨ 自动 13 法静态扫描(如果开了开关)
+        try:
+            if DIALOGUE_CRITIC_AVAILABLE:
+                from PyQt5.QtCore import QSettings
+                auto_dc = QSettings("NovelAI", "DialogueCritic").value(
+                    "auto_static", False, type=bool)
+                if auto_dc and content:
+                    critic = dialogue_critic.DialogueCritic(content)
+                    static = critic.static_scan()
+                    reds = [i for i in static.issues if i.severity == "red"]
+                    if reds:
+                        self.tab_generation.log(
+                            f"🔬 13法静态扫描: 发现 {len(reds)} 处红线违反(说/道 "
+                            f"{static.say_count}/{static.say_allowed})— "
+                            f"点 🔬 13法诊断 看详情",
+                            "warn")
+                    else:
+                        self.tab_generation.log(
+                            f"🔬 13法静态扫描: ✓ 通过(说/道 {static.say_count}/"
+                            f"{static.say_allowed})",
+                            "success")
+        except Exception as _e:
+            print(f"[auto dc] 失败: {_e}", flush=True)
 
         # 后置链:Canon 抽取 → 摘要 → after_chapter 技能 → 下一章
         # (用 QTimer 错开,避免一窝蜂砸到 worker)
