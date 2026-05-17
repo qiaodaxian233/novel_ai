@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.12"
+APP_VERSION = "v1.13"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1827,22 +1827,54 @@ class CreationSettings(QWidget):
         if not ok:
             QMessageBox.warning(self, "TTS 测试失败", msg)
             return
-        # 播放
-        try:
-            from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-            from PyQt5.QtCore import QUrl
-            if not hasattr(self, "_test_player"):
-                self._test_player = QMediaPlayer(self)
-            self._test_player.setMedia(QMediaContent(QUrl.fromLocalFile(out)))
-            self._test_player.play()
+        # 播放 — v1.13 BUG-035:winsound 优先(Windows + WAV,标准库零依赖)
+        played_by = None
+        play_err = None
+        import sys, os
+        ext = os.path.splitext(out)[1].lower()
+        # 路径 1:Windows + WAV → winsound(标准库,几乎不会失败)
+        if sys.platform == "win32" and ext == ".wav":
+            try:
+                import winsound
+                winsound.PlaySound(out, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                played_by = "winsound(标准库)"
+            except Exception as e:
+                play_err = f"winsound 失败:{e}"
+        # 路径 2:QMediaPlayer 兜底(WAV 在 win 用 winsound 已经成功,这里主要给 MP3 用)
+        if played_by is None:
+            try:
+                from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+                from PyQt5.QtCore import QUrl
+                if not hasattr(self, "_test_player"):
+                    self._test_player = QMediaPlayer(self)
+                    # 监听错误信号,失败时把具体原因暴露
+                    self._test_player.error.connect(
+                        lambda e: print(
+                            f"[TTS 测试 QMediaPlayer error] code={e} / "
+                            f"msg={self._test_player.errorString()}", flush=True))
+                self._test_player.setMedia(QMediaContent(QUrl.fromLocalFile(out)))
+                self._test_player.play()
+                played_by = "QMediaPlayer"
+            except Exception as e:
+                play_err = (play_err or "") + f" / QMediaPlayer:{e}"
+        # 路径 3:os.startfile 终极兜底(让系统默认播放器开)
+        if played_by is None:
+            try:
+                os.startfile(out)
+                played_by = "系统默认播放器(已用文件管理器打开)"
+            except Exception as e:
+                play_err = (play_err or "") + f" / startfile:{e}"
+        if played_by:
             QMessageBox.information(self, "TTS 测试成功",
-                f"已合成 + 播放测试音频。\n文件:{out}\n"
-                f"如果没声音:检查系统音量 / 默认音频设备 / "
-                f"PyQt5 Multimedia 模块。")
-        except Exception as e:
-            QMessageBox.information(self, "TTS 测试成功(无法播放)",
-                f"音频已合成到:{out}\n但播放失败:{e}\n"
-                f"可以手动用文件管理器打开听。")
+                f"已合成 + 播放测试音频。\n"
+                f"播放方式:{played_by}\n"
+                f"文件:{out}\n\n"
+                f"如果没声音:检查系统音量 / 默认输出设备")
+        else:
+            QMessageBox.information(self, "TTS 测试成功(三种播放方式都失败)",
+                f"音频已合成到:\n{out}\n\n"
+                f"但 3 条播放路径都失败:\n{play_err}\n\n"
+                f"建议:文件管理器手动打开听一听,确认合成本身没问题。")
 
     def save_settings(self):
         from PyQt5.QtCore import QSettings
@@ -10872,18 +10904,71 @@ class MainWindow(QMainWindow):
         self.tab_generation.log("🔊 TTS 全部段落合成完成,继续播放剩余队列", "info")
 
     def _play_next_chunk(self):
+        """v1.13:winsound 优先(Windows + WAV)→ QMediaPlayer 兜底。
+        winsound 没有'播完信号',用 wave 模块算 duration → QTimer 调度下一段。"""
         if not self._tts_queue:
             return
         path = self._tts_queue.pop(0)
+        import sys, os
+        ext = os.path.splitext(path)[1].lower()
+        # 路径 1:Windows + WAV → winsound
+        if sys.platform == "win32" and ext == ".wav":
+            try:
+                import winsound
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                self._tts_currently_winsound = True
+                # 算 duration → 安排下一段
+                duration_ms = self._get_wav_duration_ms(path)
+                # 不要紧贴着调度,留 80ms 让 SND_ASYNC 真启动 + 收尾衔接
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(
+                    max(200, duration_ms + 80),
+                    self._on_winsound_chunk_done)
+                return
+            except Exception as e:
+                self.tab_generation.log(
+                    f"⚠ winsound 播放失败({e}),退回 QMediaPlayer", "warn")
+        # 路径 2:QMediaPlayer
         try:
             from PyQt5.QtCore import QUrl
             from PyQt5.QtMultimedia import QMediaContent
             if self._tts_player is None:
                 return
+            self._tts_currently_winsound = False
             self._tts_player.setMedia(QMediaContent(QUrl.fromLocalFile(path)))
             self._tts_player.play()
         except Exception as e:
             self.tab_generation.log(f"⚠ TTS 播放失败:{e}", "warn")
+
+    def _get_wav_duration_ms(self, path):
+        """读 WAV header 算时长(毫秒)。失败时给个保守默认 5 秒。"""
+        try:
+            import wave
+            with wave.open(path, "rb") as w:
+                frames = w.getnframes()
+                rate = w.getframerate()
+                if rate > 0:
+                    return int(frames * 1000 / rate)
+        except Exception:
+            pass
+        return 5000
+
+    def _on_winsound_chunk_done(self):
+        """winsound 一段播完(由 QTimer 触发)— 接下一段或者收尾"""
+        # 如果队列还有,继续播
+        if self._tts_queue:
+            self._play_next_chunk()
+            return
+        # 队列空了 → 检查合成线程是否还在跑(还在跑的话继续等)
+        if self._tts_worker is not None and self._tts_worker.isRunning():
+            # 1 秒后再检查
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(1000, self._on_winsound_chunk_done)
+            return
+        # 全完了
+        self.tab_editor.btn_tts_play.setText("🔊 朗读本章")
+        self.tab_editor.btn_tts_stop.setEnabled(False)
+        self.tab_editor.lbl_tts_status.setText("✓ 播放完成")
 
     def _on_tts_player_status(self, status):
         """QMediaPlayer 状态变化 — 一段播完了自动播下一段"""
@@ -10901,7 +10986,14 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_tts_pause(self):
-        """暂停 / 继续"""
+        """暂停 / 继续
+        winsound 没有真暂停,只能停 → 重新点 🔊 接着播。
+        QMediaPlayer 走标准 pause/play。
+        """
+        if getattr(self, "_tts_currently_winsound", False):
+            self.tab_generation.log(
+                "ℹ winsound 不支持真暂停,只能停。要继续请重点 🔊 朗读本章", "info")
+            return
         try:
             from PyQt5.QtMultimedia import QMediaPlayer
             if self._tts_player is None:
@@ -10918,6 +11010,14 @@ class MainWindow(QMainWindow):
 
     def _on_tts_stop(self):
         """停止播放 + 清队列 + 终止合成"""
+        # 停 winsound(如果正在用)
+        try:
+            import sys
+            if sys.platform == "win32":
+                import winsound
+                winsound.PlaySound(None, winsound.SND_PURGE)
+        except Exception:
+            pass
         try:
             if self._tts_player is not None:
                 self._tts_player.stop()
