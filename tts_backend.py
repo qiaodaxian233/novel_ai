@@ -122,12 +122,25 @@ class EdgeTTSBackend(TTSBackend):
 class IndexTTSBackend(TTSBackend):
     """Index-TTS 本地 Gradio 服务 — 默认 http://127.0.0.1:7862
     需要用户提供参考音频(WAV/MP3)做声音克隆。
+
+    V2.6 实测 endpoint = /gen_single,6 参数:
+        (情感控制方式, 音色参考音频, 文本, 上传情感参考音频, 情感权重, 主情感"喜")
     """
     name = "index_tts"
     display = "Index-TTS(本地·声音克隆)"
 
-    # 常见的 endpoint 名字候选 — Index-TTS V2.x 系列界面常用这些
-    ENDPOINT_CANDIDATES = ["/gen_single", "/infer", "/tts", "/generate", "/predict"]
+    # V2.6 /gen_single 的"情感控制方式"dropdown 候选值 — 按可能性排序试
+    EMO_METHOD_CANDIDATES = [
+        "与音色参考相同",
+        "使用情感参考音频",
+        "使用情感向量控制",
+        "使用文本描述",
+        "默认",
+        None,  # gradio 通常会给默认值
+    ]
+
+    # 老版 / 其他 fork 的 endpoint 候选(都是 2 参数 audio+text)
+    LEGACY_ENDPOINT_CANDIDATES = ["/infer", "/tts", "/generate", "/predict"]
 
     def __init__(self, url="http://127.0.0.1:7862/", ref_audio=None,
                  api_name=None):
@@ -191,39 +204,68 @@ class IndexTTSBackend(TTSBackend):
         except Exception as e:
             return False, f"无法连接 Index-TTS({self.url}):{e}"
 
-        # 尝试调合成 — 先按用户指定的 api_name,失败则轮 candidates,再 fn_index=0
-        attempts = []
-        if self.api_name:
-            attempts.append(("api_name", self.api_name))
-        for c in self.ENDPOINT_CANDIDATES:
-            if c != self.api_name:
-                attempts.append(("api_name", c))
-        attempts.append(("fn_index", 0))
-
-        last_err = None
         result = None
-        for kind, val in attempts:
-            try:
-                kwargs = {kind: val}
-                # Index-TTS V2.x 最常见的两个 input 顺序:
-                #   (audio_prompt, text)  或  (text, audio_prompt)
-                # 先试 (audio_prompt, text)
+        errors = []   # 记录所有失败的尝试,最后一起告诉用户
+
+        # ═══ 路径 1:V2.6 /gen_single 6 参数(实测真签名)═══
+        target_ep = self.api_name or "/gen_single"
+        if target_ep == "/gen_single" or not self.api_name:
+            for method in self.EMO_METHOD_CANDIDATES:
                 try:
-                    result = client.predict(_gr_file(ref_audio), text, **kwargs)
-                except Exception as e_order1:
+                    result = client.predict(
+                        method,                  # 情感控制方式(dropdown)
+                        _gr_file(ref_audio),     # 音色参考音频
+                        text,                    # 文本
+                        None,                    # 上传情感参考音频(留空)
+                        1.0,                     # 情感权重
+                        0,                       # 主情感"喜"(数值,0=无强调)
+                        api_name="/gen_single",
+                    )
+                    if result is not None:
+                        break
+                except Exception as e:
+                    errors.append(f"/gen_single method={method!r}: {type(e).__name__}: {str(e)[:120]}")
+                    result = None
+                    continue
+
+        # ═══ 路径 2:用户显式指定了非 /gen_single 的 api_name → 直接 2 参数 ═══
+        if result is None and self.api_name and self.api_name != "/gen_single":
+            for args in ((_gr_file(ref_audio), text), (text, _gr_file(ref_audio))):
+                try:
+                    result = client.predict(*args, api_name=self.api_name)
+                    break
+                except Exception as e:
+                    errors.append(f"{self.api_name} 顺序{args[0].__class__.__name__}先: {str(e)[:120]}")
+                    result = None
+
+        # ═══ 路径 3:老版/其他 fork — 2 参数 + 多 endpoint 候选 ═══
+        if result is None and not self.api_name:
+            for ep in self.LEGACY_ENDPOINT_CANDIDATES:
+                for args in ((_gr_file(ref_audio), text), (text, _gr_file(ref_audio))):
                     try:
-                        result = client.predict(text, _gr_file(ref_audio), **kwargs)
-                    except Exception as e_order2:
-                        last_err = f"{kind}={val!r} 两种参数顺序都失败:{e_order1} / {e_order2}"
-                        continue
-                break
-            except Exception as e:
-                last_err = f"{kind}={val!r}:{e}"
-                continue
+                        result = client.predict(*args, api_name=ep)
+                        break
+                    except Exception as e:
+                        errors.append(f"{ep}: {str(e)[:80]}")
+                        result = None
+                if result is not None:
+                    break
+
+        # ═══ 路径 4:fn_index=0 最后兜底 ═══
+        if result is None:
+            for args in ((_gr_file(ref_audio), text), (text, _gr_file(ref_audio))):
+                try:
+                    result = client.predict(*args, fn_index=0)
+                    break
+                except Exception as e:
+                    errors.append(f"fn_index=0: {str(e)[:80]}")
+                    result = None
 
         if result is None:
+            err_summary = "\n  - " + "\n  - ".join(errors[-8:])  # 最多显示后 8 条
             return False, (
-                f"Index-TTS 调用失败,试过 {len(attempts)} 种入口,最后错误:{last_err}\n\n"
+                f"Index-TTS 全部调用方式失败({len(errors)} 次尝试):"
+                f"{err_summary}\n\n"
                 f"--- 服务的 API schema(贴给 Claude 看)---\n"
                 f"{self.get_api_schema()}"
             )
