@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.02"
+APP_VERSION = "v1.10"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -45,7 +45,7 @@ from PyQt5.QtWidgets import (
     QSpinBox, QFrame, QScrollArea, QGridLayout, QAction, QStatusBar,
     QSlider, QComboBox,
 )
-from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QObject
+from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QObject, QThread
 from PyQt5.QtGui import QFont, QIcon, QColor, QSyntaxHighlighter, QTextCharFormat, QTextCursor
 
 # Selenium(可选,装了就启用真浏览器自动化)
@@ -644,6 +644,41 @@ class _PanguForbiddenHighlighter(QSyntaxHighlighter):
             while i >= 0:
                 self.setFormat(i, len(w), self.fmt_forbidden)
                 i = text.find(w, i + 1)
+class _TTSSynthThread(QThread):
+    """v1.10:TTS 合成后台线程 — 逐段合成,边出边发信号,不阻塞 UI"""
+    chunk_ready  = pyqtSignal(int, int, str)   # (idx, total, audio_path)
+    chunk_failed = pyqtSignal(int, int, str)   # (idx, total, err_msg)
+    finished_all = pyqtSignal()
+
+    def __init__(self, backend, chunks, voice, speed, temp_dir, parent=None):
+        super().__init__(parent)
+        self.backend = backend
+        self.chunks = chunks
+        self.voice = voice
+        self.speed = speed
+        self.temp_dir = temp_dir
+
+    def run(self):
+        import os
+        total = len(self.chunks)
+        for i, text in enumerate(self.chunks):
+            if self.isInterruptionRequested():
+                return
+            # 文件名:序号 + 后端名(EdgeTTS 用 mp3,Index-TTS 一般 wav)
+            ext = "mp3" if self.backend.name == "edge_tts" else "wav"
+            out_path = os.path.join(self.temp_dir, f"chunk_{i:04d}.{ext}")
+            try:
+                ok, msg = self.backend.synthesize(
+                    text, out_path, voice=self.voice, speed=self.speed)
+            except Exception as e:
+                ok, msg = False, f"未捕获异常:{type(e).__name__}: {e}"
+            if ok and os.path.exists(out_path):
+                self.chunk_ready.emit(i, total, out_path)
+            else:
+                self.chunk_failed.emit(i, total, msg)
+        self.finished_all.emit()
+
+
 class ChapterEditor(QWidget):
     save_requested = pyqtSignal(str, str)
     optimize_requested = pyqtSignal(str)
@@ -653,7 +688,12 @@ class ChapterEditor(QWidget):
     pangu_qcheck_requested = pyqtSignal(str)
     laodao_critique_requested = pyqtSignal(str)
     pangu_spiral_requested = pyqtSignal(str)
-    pangu_preview_prompt_requested = pyqtSignal()    # 预览章节 prompt
+    pangu_preview_prompt_requested = pyqtSignal()
+    # v1.10:TTS 朗读
+    tts_play_requested  = pyqtSignal()   # 开始朗读本章
+    tts_pause_requested = pyqtSignal()   # 暂停/继续
+    tts_stop_requested  = pyqtSignal()   # 停止 + 清队列
+    tts_speed_changed   = pyqtSignal(float)  # 速度滑块变化    # 预览章节 prompt
     # BUG-014:用户在元信息面板点了某条"下一章选项",把选项文本传给主程序,
     # 主程序在下次生成下一章时把它作为开局指引注入 prompt
     next_option_picked = pyqtSignal(str)
@@ -711,6 +751,42 @@ class ChapterEditor(QWidget):
                   self.btn_style_check, self.btn_regen_alt):
             btn_row.addWidget(b)
         btn_row.addStretch()
+        # v1.10:TTS 朗读控件 — 单独一组,右侧对齐
+        self.btn_tts_play = QPushButton("🔊 朗读本章")
+        self.btn_tts_play.setStyleSheet(
+            "background:#27ae60;color:white;padding:4px 10px;border-radius:3px;"
+            "font-weight:bold;")
+        self.btn_tts_play.setToolTip(
+            "用 TTS 朗读当前章节(后端在 创作设置 → TTS 朗读 里配置)\n"
+            "默认 EdgeTTS(免费在线),可切到 Index-TTS(本地声音克隆)")
+        self.btn_tts_play.clicked.connect(self.tts_play_requested.emit)
+        self.btn_tts_stop = QPushButton("⏹")
+        self.btn_tts_stop.setStyleSheet(
+            "background:#c0392b;color:white;padding:4px 8px;border-radius:3px;")
+        self.btn_tts_stop.setToolTip("停止朗读 + 清空合成队列")
+        self.btn_tts_stop.clicked.connect(self.tts_stop_requested.emit)
+        self.btn_tts_stop.setEnabled(False)  # 没在朗读时禁用
+        # 速度滑块
+        self.lbl_tts_speed = QLabel("速度 1.0x")
+        self.lbl_tts_speed.setStyleSheet("color:#666;font-size:11px;")
+        self.slider_tts_speed = QSlider(Qt.Horizontal)
+        self.slider_tts_speed.setRange(50, 200)  # 0.5x ~ 2.0x
+        self.slider_tts_speed.setValue(100)       # 默认 1.0x
+        self.slider_tts_speed.setFixedWidth(80)
+        self.slider_tts_speed.setToolTip("朗读速度 0.5x ~ 2.0x")
+        self.slider_tts_speed.valueChanged.connect(
+            lambda v: (
+                self.lbl_tts_speed.setText(f"速度 {v/100:.1f}x"),
+                self.tts_speed_changed.emit(v / 100.0),
+            ))
+        # TTS 状态 label(显示"合成中 3/10"之类)
+        self.lbl_tts_status = QLabel("")
+        self.lbl_tts_status.setStyleSheet("color:#27ae60;font-size:11px;")
+        btn_row.addWidget(self.btn_tts_play)
+        btn_row.addWidget(self.btn_tts_stop)
+        btn_row.addWidget(self.lbl_tts_speed)
+        btn_row.addWidget(self.slider_tts_speed)
+        btn_row.addWidget(self.lbl_tts_status)
         layout.addLayout(btn_row)
 
         layout.addWidget(QLabel("章节标题:"))
@@ -1083,6 +1159,86 @@ class CreationSettings(QWidget):
         wl_btn_row.addStretch()
         wl_lay.addLayout(wl_btn_row)
         layout.addWidget(wl_box)
+
+        # ---- v1.10:🔊 TTS 朗读配置 ----
+        tts_box = QGroupBox("🔊 TTS 朗读(章节编辑器右上角 🔊 朗读本章 按钮)")
+        tts_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        tts_lay = QVBoxLayout(tts_box)
+        # 后端下拉
+        tts_r1 = QHBoxLayout()
+        tts_r1.addWidget(QLabel("后端:"))
+        self.cb_tts_backend = QComboBox()
+        try:
+            from tts_backend import list_backends as _list_bk
+            for bn, disp in _list_bk():
+                self.cb_tts_backend.addItem(disp, bn)
+        except Exception:
+            self.cb_tts_backend.addItem("(tts_backend.py 加载失败)", "disabled")
+        # 持久化
+        from PyQt5.QtCore import QSettings as _QS_tts
+        _ts = _QS_tts("NovelAI", "TTS")
+        _saved_backend = _ts.value("backend", "edge_tts", type=str)
+        _idx = max(0, self.cb_tts_backend.findData(_saved_backend))
+        self.cb_tts_backend.setCurrentIndex(_idx)
+        self.cb_tts_backend.currentIndexChanged.connect(
+            lambda i: _QS_tts("NovelAI", "TTS").setValue(
+                "backend", self.cb_tts_backend.itemData(i)))
+        tts_r1.addWidget(self.cb_tts_backend, 1)
+        tts_lay.addLayout(tts_r1)
+        # EdgeTTS 音色下拉
+        tts_r2 = QHBoxLayout()
+        tts_r2.addWidget(QLabel("EdgeTTS 音色:"))
+        self.cb_edge_voice = QComboBox()
+        try:
+            from tts_backend import EdgeTTSBackend as _ETB
+            for vid, vname in _ETB.VOICES.items():
+                self.cb_edge_voice.addItem(vname, vid)
+        except Exception:
+            self.cb_edge_voice.addItem("(加载失败)", "zh-CN-XiaoxiaoNeural")
+        _saved_voice = _ts.value("edge_voice", "zh-CN-XiaoxiaoNeural", type=str)
+        _vidx = max(0, self.cb_edge_voice.findData(_saved_voice))
+        self.cb_edge_voice.setCurrentIndex(_vidx)
+        self.cb_edge_voice.currentIndexChanged.connect(
+            lambda i: _QS_tts("NovelAI", "TTS").setValue(
+                "edge_voice", self.cb_edge_voice.itemData(i)))
+        tts_r2.addWidget(self.cb_edge_voice, 1)
+        tts_lay.addLayout(tts_r2)
+        # Index-TTS URL
+        tts_r3 = QHBoxLayout()
+        tts_r3.addWidget(QLabel("Index-TTS URL:"))
+        self.ed_index_url = QLineEdit(
+            _ts.value("index_url", "http://127.0.0.1:7862/", type=str))
+        self.ed_index_url.setToolTip(
+            "本地 Index-TTS Gradio 服务地址。默认 7862,看你启动时显示的端口。")
+        self.ed_index_url.textChanged.connect(
+            lambda t: _QS_tts("NovelAI", "TTS").setValue("index_url", t))
+        tts_r3.addWidget(self.ed_index_url, 1)
+        tts_lay.addLayout(tts_r3)
+        # Index-TTS 参考音频
+        tts_r4 = QHBoxLayout()
+        tts_r4.addWidget(QLabel("Index-TTS 参考音频:"))
+        self.ed_index_ref = QLineEdit(_ts.value("index_ref_audio", "", type=str))
+        self.ed_index_ref.setToolTip(
+            "声音克隆的参考音频(WAV/MP3,10-30 秒清晰人声),Index-TTS 必填。\n"
+            "可以是 Index-TTS 自带的示例,也可以是你提供的人声样本。")
+        self.ed_index_ref.textChanged.connect(
+            lambda t: _QS_tts("NovelAI", "TTS").setValue("index_ref_audio", t))
+        self.btn_pick_ref = QPushButton("📁 选择...")
+        self.btn_pick_ref.clicked.connect(self._on_pick_index_ref_audio)
+        tts_r4.addWidget(self.ed_index_ref, 1)
+        tts_r4.addWidget(self.btn_pick_ref)
+        tts_lay.addLayout(tts_r4)
+        # 测试按钮
+        tts_r5 = QHBoxLayout()
+        self.btn_tts_test = QPushButton("🎵 测试 TTS")
+        self.btn_tts_test.setStyleSheet(
+            "background:#27ae60;color:white;padding:6px 14px;border-radius:3px;")
+        self.btn_tts_test.setToolTip("合成一段测试音频,看看后端是否工作 + 音色是否合心意")
+        self.btn_tts_test.clicked.connect(self._on_tts_test)
+        tts_r5.addWidget(self.btn_tts_test)
+        tts_r5.addStretch()
+        tts_lay.addLayout(tts_r5)
+        layout.addWidget(tts_box)
 
         # ---- 盘古快捷工具 ----
         pangu_tools_box = QGroupBox("🛕 盘古快捷工具")
@@ -1618,6 +1774,75 @@ class CreationSettings(QWidget):
             f"大纲详细度:{self.get_outline_detail()}\n"
         )
 
+
+    def _on_pick_index_ref_audio(self):
+        from PyQt5.QtWidgets import QFileDialog
+        fn, _ = QFileDialog.getOpenFileName(
+            self, "选择 Index-TTS 参考音频",
+            "", "音频 (*.wav *.mp3 *.m4a *.flac *.ogg);;所有 (*)")
+        if fn:
+            self.ed_index_ref.setText(fn)
+
+    def _on_tts_test(self):
+        """合成一段固定测试文本,弹窗告知结果。不放后台线程,因为是测试,允许短暂卡 UI。"""
+        try:
+            import tts_backend as _tb
+        except ImportError as e:
+            QMessageBox.warning(self, "TTS 测试",
+                f"tts_backend.py 加载失败:{e}")
+            return
+        backend_name = self.cb_tts_backend.currentData()
+        if backend_name == "disabled":
+            QMessageBox.information(self, "TTS 测试", "请先选一个后端(EdgeTTS 或 Index-TTS)")
+            return
+        kwargs = {}
+        voice = None
+        if backend_name == "edge_tts":
+            voice = self.cb_edge_voice.currentData()
+        elif backend_name == "index_tts":
+            kwargs = {
+                "url": self.ed_index_url.text().strip() or "http://127.0.0.1:7862/",
+                "ref_audio": self.ed_index_ref.text().strip(),
+            }
+            voice = kwargs["ref_audio"]
+            if not voice:
+                QMessageBox.warning(self, "TTS 测试", "Index-TTS 需要先选参考音频")
+                return
+        backend = _tb.get_backend(backend_name, **kwargs)
+        if not backend.is_available():
+            tip = ("pip install edge-tts" if backend_name == "edge_tts"
+                   else "pip install gradio_client")
+            QMessageBox.warning(self, "TTS 测试",
+                f"后端 {backend.display} 不可用。\n命令行运行:{tip}")
+            return
+        import tempfile, os
+        test_text = "你好,这是盘古超级写作助手的 TTS 测试,如果你听到这句话,说明配置成功。"
+        ext = "mp3" if backend_name == "edge_tts" else "wav"
+        out = os.path.join(tempfile.gettempdir(),
+                           f"novelai_tts_test.{ext}")
+        try:
+            ok, msg = backend.synthesize(test_text, out, voice=voice, speed=1.0)
+        except Exception as e:
+            ok, msg = False, f"未捕获异常:{type(e).__name__}: {e}"
+        if not ok:
+            QMessageBox.warning(self, "TTS 测试失败", msg)
+            return
+        # 播放
+        try:
+            from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+            from PyQt5.QtCore import QUrl
+            if not hasattr(self, "_test_player"):
+                self._test_player = QMediaPlayer(self)
+            self._test_player.setMedia(QMediaContent(QUrl.fromLocalFile(out)))
+            self._test_player.play()
+            QMessageBox.information(self, "TTS 测试成功",
+                f"已合成 + 播放测试音频。\n文件:{out}\n"
+                f"如果没声音:检查系统音量 / 默认音频设备 / "
+                f"PyQt5 Multimedia 模块。")
+        except Exception as e:
+            QMessageBox.information(self, "TTS 测试成功(无法播放)",
+                f"音频已合成到:{out}\n但播放失败:{e}\n"
+                f"可以手动用文件管理器打开听。")
 
     def save_settings(self):
         from PyQt5.QtCore import QSettings
@@ -6934,6 +7159,12 @@ class MainWindow(QMainWindow):
         # BUG-014:用户在元信息面板点了"下一章选项"按钮 → 记到 _user_picked_next_option,
         # _send_next_chapter 会把它当作开局指引注入 prompt
         self.tab_editor.next_option_picked.connect(self._on_pangu_next_option_picked)
+        # v1.10:TTS 朗读
+        self.tab_editor.tts_play_requested.connect(self._on_tts_play)
+        self.tab_editor.tts_pause_requested.connect(self._on_tts_pause)
+        self.tab_editor.tts_stop_requested.connect(self._on_tts_stop)
+        self.tab_editor.tts_speed_changed.connect(self._on_tts_speed_changed)
+        self._init_tts()
         self.tab_settings.btn_pangu_wl_apply.clicked.connect(self._on_pangu_apply_whitelist)
         # CreationSettings 盘古快捷工具
         self.tab_settings.btn_pangu_style.clicked.connect(self._on_pangu_style_match)
@@ -10520,6 +10751,192 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(content)
         self.tab_generation.log(
             f"✓ 已抓取 {len(content)} 字符,内容已复制到剪贴板", "success")
+
+    # ════════════════════════════════════════════════
+    # v1.10 TTS 朗读 — Index-TTS / EdgeTTS 后端
+    # ════════════════════════════════════════════════
+    def _init_tts(self):
+        """启动时初始化 TTS:QMediaPlayer + 状态"""
+        try:
+            from PyQt5.QtMultimedia import QMediaPlayer
+            self._tts_player = QMediaPlayer(self)
+            self._tts_player.mediaStatusChanged.connect(self._on_tts_player_status)
+        except Exception as e:
+            print(f"[TTS] QMediaPlayer 初始化失败: {e}", flush=True)
+            self._tts_player = None
+        self._tts_queue = []         # 待播放音频文件路径
+        self._tts_chunks_total = 0
+        self._tts_chunks_done = 0
+        self._tts_worker = None
+        self._tts_speed = 1.0
+        self._tts_temp_dir = None
+
+    def _tts_backend_config(self):
+        """读取当前 TTS 配置 → (backend_name, kwargs, voice_or_ref)"""
+        from PyQt5.QtCore import QSettings
+        s = QSettings("NovelAI", "TTS")
+        backend = s.value("backend", "edge_tts", type=str)
+        if backend == "index_tts":
+            url = s.value("index_url", "http://127.0.0.1:7862/", type=str)
+            ref = s.value("index_ref_audio", "", type=str)
+            api_name = s.value("index_api_name", "", type=str) or None
+            return "index_tts", {"url": url, "ref_audio": ref, "api_name": api_name}, ref
+        if backend == "edge_tts":
+            voice = s.value("edge_voice", "zh-CN-XiaoxiaoNeural", type=str)
+            return "edge_tts", {}, voice
+        return "disabled", {}, None
+
+    def _on_tts_play(self):
+        """开始朗读当前章节"""
+        # 取当前章节文本
+        text = ""
+        try:
+            text = self.tab_editor.content_edit.toPlainText().strip()
+        except Exception:
+            pass
+        if not text:
+            QMessageBox.information(self, "TTS", "当前章节为空,无东西可读")
+            return
+        # 已在播放 → 暂停/继续
+        if self._tts_worker is not None and self._tts_worker.isRunning():
+            self._on_tts_pause()
+            return
+        # 配置
+        backend_name, kwargs, voice = self._tts_backend_config()
+        if backend_name == "disabled":
+            QMessageBox.information(
+                self, "TTS",
+                "TTS 已关闭。\n请在 创作设置 → 🔊 TTS 朗读 里选一个后端(EdgeTTS 或 Index-TTS)。")
+            return
+        try:
+            import tts_backend as _tb
+        except ImportError as e:
+            QMessageBox.warning(self, "TTS",
+                f"tts_backend.py 加载失败:{e}")
+            return
+        backend = _tb.get_backend(backend_name, **kwargs)
+        if not backend.is_available():
+            tip_install = (
+                "pip install edge-tts" if backend_name == "edge_tts"
+                else "pip install gradio_client")
+            QMessageBox.warning(
+                self, f"TTS({backend.display})不可用",
+                f"后端 {backend.name} 当前不可用。\n\n"
+                f"修复办法:在命令行运行  {tip_install}\n"
+                f"然后重启程序。")
+            return
+        # 切段
+        chunks = _tb.split_text_for_tts(text, max_chars=300)
+        if not chunks:
+            return
+        # 准备 temp 目录
+        import tempfile
+        if self._tts_temp_dir is None or not Path(self._tts_temp_dir).exists():
+            self._tts_temp_dir = tempfile.mkdtemp(prefix="novelai_tts_")
+        # 启动后台 worker
+        self._tts_queue.clear()
+        self._tts_chunks_total = len(chunks)
+        self._tts_chunks_done = 0
+        self.tab_editor.btn_tts_play.setText("⏸ 暂停")
+        self.tab_editor.btn_tts_stop.setEnabled(True)
+        self.tab_editor.lbl_tts_status.setText(f"合成中 0/{len(chunks)}")
+        self.tab_generation.log(
+            f"🔊 TTS 启动:{backend.display},章节 {len(text)} 字 → {len(chunks)} 段",
+            "info")
+        self._tts_worker = _TTSSynthThread(
+            backend=backend, chunks=chunks, voice=voice,
+            speed=self._tts_speed, temp_dir=self._tts_temp_dir, parent=self)
+        self._tts_worker.chunk_ready.connect(self._on_tts_chunk_ready)
+        self._tts_worker.chunk_failed.connect(self._on_tts_chunk_failed)
+        self._tts_worker.finished_all.connect(self._on_tts_synth_done)
+        self._tts_worker.start()
+
+    def _on_tts_chunk_ready(self, idx, total, audio_path):
+        """一段合成好了 → 进队列"""
+        self._tts_chunks_done = max(self._tts_chunks_done, idx + 1)
+        self.tab_editor.lbl_tts_status.setText(f"合成中 {self._tts_chunks_done}/{total}")
+        self._tts_queue.append(audio_path)
+        # 如果播放器空闲,启动播放
+        try:
+            from PyQt5.QtMultimedia import QMediaPlayer
+            if self._tts_player is not None and self._tts_player.state() != QMediaPlayer.PlayingState:
+                self._play_next_chunk()
+        except Exception:
+            pass
+
+    def _on_tts_chunk_failed(self, idx, total, err):
+        self.tab_generation.log(
+            f"⚠ TTS 第 {idx+1}/{total} 段合成失败:{err}", "warn")
+
+    def _on_tts_synth_done(self):
+        self.tab_generation.log("🔊 TTS 全部段落合成完成,继续播放剩余队列", "info")
+
+    def _play_next_chunk(self):
+        if not self._tts_queue:
+            return
+        path = self._tts_queue.pop(0)
+        try:
+            from PyQt5.QtCore import QUrl
+            from PyQt5.QtMultimedia import QMediaContent
+            if self._tts_player is None:
+                return
+            self._tts_player.setMedia(QMediaContent(QUrl.fromLocalFile(path)))
+            self._tts_player.play()
+        except Exception as e:
+            self.tab_generation.log(f"⚠ TTS 播放失败:{e}", "warn")
+
+    def _on_tts_player_status(self, status):
+        """QMediaPlayer 状态变化 — 一段播完了自动播下一段"""
+        try:
+            from PyQt5.QtMultimedia import QMediaPlayer
+            if status == QMediaPlayer.EndOfMedia:
+                if self._tts_queue:
+                    self._play_next_chunk()
+                elif (self._tts_worker is None or not self._tts_worker.isRunning()):
+                    # 全部播完
+                    self.tab_editor.btn_tts_play.setText("🔊 朗读本章")
+                    self.tab_editor.btn_tts_stop.setEnabled(False)
+                    self.tab_editor.lbl_tts_status.setText("✓ 播放完成")
+        except Exception:
+            pass
+
+    def _on_tts_pause(self):
+        """暂停 / 继续"""
+        try:
+            from PyQt5.QtMultimedia import QMediaPlayer
+            if self._tts_player is None:
+                return
+            st = self._tts_player.state()
+            if st == QMediaPlayer.PlayingState:
+                self._tts_player.pause()
+                self.tab_editor.btn_tts_play.setText("▶ 继续")
+            else:
+                self._tts_player.play()
+                self.tab_editor.btn_tts_play.setText("⏸ 暂停")
+        except Exception:
+            pass
+
+    def _on_tts_stop(self):
+        """停止播放 + 清队列 + 终止合成"""
+        try:
+            if self._tts_player is not None:
+                self._tts_player.stop()
+        except Exception:
+            pass
+        self._tts_queue.clear()
+        if self._tts_worker is not None:
+            try:
+                self._tts_worker.requestInterruption()
+            except Exception:
+                pass
+        self.tab_editor.btn_tts_play.setText("🔊 朗读本章")
+        self.tab_editor.btn_tts_stop.setEnabled(False)
+        self.tab_editor.lbl_tts_status.setText("已停止")
+        self.tab_generation.log("🔊 TTS 已停止", "info")
+
+    def _on_tts_speed_changed(self, speed):
+        """速度滑块调整 — 只影响下一次合成,当前已合成的段保持原速"""
+        self._tts_speed = float(speed)
 
     def gen_inspiration(self):
         genres = self.tab_settings.get_selected_genres()

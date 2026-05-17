@@ -4,3 +4,7 @@ requests>=2.31.0
 # 可选兜底:Selenium Manager 自动下载 chromedriver 失败时(公司机器/防火墙)用它替代
 # 没装的话程序自动跳过,有装会自动用
 webdriver-manager>=4.0.0
+
+# v1.10 TTS 朗读
+edge-tts>=6.1  # v1.10: TTS 默认后端 — 免费/在线/中文音质好
+gradio_client>=0.10  # v1.10: 接本地 Index-TTS Gradio 服务(可选,只在用 Index-TTS 时需要)
