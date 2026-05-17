@@ -129,14 +129,13 @@ class IndexTTSBackend(TTSBackend):
     name = "index_tts"
     display = "Index-TTS(本地·声音克隆)"
 
-    # V2.6 /gen_single 的"情感控制方式"dropdown 候选值 — 按可能性排序试
+    # V2.6 /gen_single 的"情感控制方式" — 从官方 API 文档锁定为这 3 个 Literal 值
+    # 之前 v1.11 我猜错了"与音色参考相同"(少'音频'两字),依靠 fallback None 才命中
     EMO_METHOD_CANDIDATES = [
-        "与音色参考相同",
+        "与音色参考音频相同",     # ← V2.6 官方默认值(从 API.txt 1447 行锁定)
         "使用情感参考音频",
         "使用情感向量控制",
-        "使用文本描述",
-        "默认",
-        None,  # gradio 通常会给默认值
+        None,                    # gradio 给默认值兜底,以防 V2.5/V2.7 字面值微变
     ]
 
     # 老版 / 其他 fork 的 endpoint 候选(都是 2 参数 audio+text)
@@ -207,18 +206,32 @@ class IndexTTSBackend(TTSBackend):
         result = None
         errors = []   # 记录所有失败的尝试,最后一起告诉用户
 
-        # ═══ 路径 1:V2.6 /gen_single 6 参数(实测真签名)═══
+        # ═══ 路径 1:V2.6 /gen_single 严格按官方 API 文档 24 keyword 参数 ═══
         target_ep = self.api_name or "/gen_single"
         if target_ep == "/gen_single" or not self.api_name:
+            # 情感参考音频:用户没单独提供则复用音色参考音频(emo_ref_path 是 Required)
+            emo_ref = _gr_file(ref_audio)
             for method in self.EMO_METHOD_CANDIDATES:
                 try:
                     result = client.predict(
-                        method,                  # 情感控制方式(dropdown)
-                        _gr_file(ref_audio),     # 音色参考音频
-                        text,                    # 文本
-                        None,                    # 上传情感参考音频(留空)
-                        1.0,                     # 情感权重
-                        0,                       # 主情感"喜"(数值,0=无强调)
+                        emo_control_method=method,             # Literal,3 个值
+                        prompt=_gr_file(ref_audio),            # filepath 音色参考音频
+                        text=text,                             # str 要合成的文本
+                        emo_ref_path=emo_ref,                  # filepath 情感参考(复用音色)
+                        emo_weight=0.65,                       # 情感权重(官方默认)
+                        vec1=0, vec2=0, vec3=0, vec4=0,        # 喜怒哀惧
+                        vec5=0, vec6=0, vec7=0, vec8=0,        # 厌低惊平
+                        emo_text="",                           # 情感描述文本
+                        emo_random=False,                      # 情感随机采样
+                        max_text_tokens_per_segment=120,       # 分句最大 Token
+                        param_16=True,                         # do_sample
+                        param_17=0.8,                          # top_p
+                        param_18=30,                           # top_k
+                        param_19=0.8,                          # temperature
+                        param_20=0,                            # length_penalty
+                        param_21=3,                            # num_beams
+                        param_22=10,                           # repetition_penalty
+                        param_23=1500,                         # max_mel_tokens
                         api_name="/gen_single",
                     )
                     if result is not None:
