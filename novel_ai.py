@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.01"
+APP_VERSION = "v1.02"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -2403,11 +2403,13 @@ class CharacterLibrary(QWidget):
         self.chk_auto_extract.setChecked(
             _settings.value("auto_extract_6lib", True, type=bool))
         self.chk_auto_extract.setToolTip(
-            "勾选后,每生成完一章,自动调用 AI 提取:\n"
+            "勾选后,每生成【未来章节】时自动调用 AI 提取:\n"
             "  角色 / 关系 / 时间线 / 物品 / 战力 / 伏笔\n"
-            "并合并到这 6 个表里。\n"
+            "并合并到这 6 个表里。\n\n"
+            "⚠️ 注意:此勾选【只对勾选之后生成的章节】生效。\n"
+            "  已有章节请点旁边的「🔄 立即从所有章节提取 6 库」按钮补抽。\n\n"
             "代价:每章多 1 次 AI 调用。如果你 AI 额度有限,可以关掉,\n"
-            "改成手动批量提取(下方「🔍 从已写章节提取角色」按钮)。")
+            "改成手动批量提取(旁边那个按钮)。")
         self.chk_auto_extract.setStyleSheet("QCheckBox { color:#b4884e; font-weight:bold; }")
         # 状态变化时持久化保存
         self.chk_auto_extract.stateChanged.connect(
@@ -2417,7 +2419,7 @@ class CharacterLibrary(QWidget):
 
         btn_row.addStretch()
         
-        self.btn_extract_from_chapters = QPushButton("🔍 从已写章节提取角色")
+        self.btn_extract_from_chapters = QPushButton("🔄 立即从所有章节提取 6 库")
         self.btn_extract_from_chapters.setStyleSheet(
             "background:#3498db;color:white;padding:6px 12px;border-radius:3px;")
         btn_row.addWidget(self.btn_extract_from_chapters)
@@ -6916,6 +6918,9 @@ class MainWindow(QMainWindow):
 
         # 角色与世界 Tab
         self.tab_charlib.btn_extract_from_chapters.clicked.connect(self._charlib_extract_from_chapters)
+        # v1.02:✨ 勾上时,如果检测到"已有章节但 6 库还空" → 主动询问要不要立刻补抽
+        self.tab_charlib.chk_auto_extract.stateChanged.connect(
+            self._on_chk_auto_extract_toggled)
 
         # 章节编辑器: 风格检测 + 备选版本
         self.tab_editor.btn_style_check.clicked.connect(self._on_style_check)
@@ -8701,6 +8706,44 @@ class MainWindow(QMainWindow):
         dlg.exec_()
 
 
+    def _on_chk_auto_extract_toggled(self, state):
+        """v1.02 BUG-032:✨ 勾选时如果已有章节但 6 库空 → 问要不要立刻补抽
+        防止用户勾上以为生效,实际 6 库永远是空的(只对未来章节起效)"""
+        from PyQt5.QtCore import Qt
+        if state != Qt.Checked:
+            return  # 取消勾选不打扰
+        # 检测:有章节内容吗?
+        if not getattr(self, "chapters", None):
+            return
+        n_chapters = sum(1 for c in self.chapters if (c.get("content") or "").strip())
+        if n_chapters == 0:
+            return
+        # 检测:6 库是不是全空?
+        cl = self.tab_charlib
+        total_rows = (
+            cl.tbl_chars.rowCount() + cl.tbl_relations.rowCount()
+            + cl.tbl_timeline.rowCount() + cl.tbl_items.rowCount()
+            + cl.tbl_fore.rowCount())
+        if total_rows > 0:
+            return  # 已有数据,不打扰
+        # 弹问 — 用 QTimer 延后避免 stateChanged 信号正在处理时打开 modal
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(100, lambda: self._ask_backfill_charlib(n_chapters))
+
+    def _ask_backfill_charlib(self, n_chapters):
+        """实际的弹问 + 触发补抽"""
+        ret = QMessageBox.question(
+            self, "💡 6 库还是空的",
+            f"你已经写了 {n_chapters} 章,但 6 库(角色/关系/时间线/物品/战力/伏笔)还是空的。\n\n"
+            f"勾选「✨ 每章生成后自动抽取」只对【未来章节】生效。\n"
+            f"要立刻给已有的 {n_chapters} 章一次性抽一遍吗?\n\n"
+            f"  ✓ 是 → 现在就抽(每章约 30 秒,共需约 {n_chapters * 30 // 60 + 1} 分钟)\n"
+            f"  ✗ 否 → 不抽,你可以稍后点「🔄 立即从所有章节提取 6 库」按钮",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes)
+        if ret == QMessageBox.Yes:
+            self._charlib_extract_from_chapters()
+
     def _charlib_extract_from_chapters(self):
         """从已写章节用 AI 一键提取角色/关系/物品/事件/伏笔"""
         if not self.chapters:
@@ -8776,6 +8819,10 @@ class MainWindow(QMainWindow):
             existing=existing_brief,
             content=content[:5000],
         )
+        # v1.02:让用户看到 6 库抽取真的发出去了
+        self.tab_generation.log(
+            f"🎭 第 {ch_num} 章 6 库抽取启动 → 发送 world_extract({len(prompt)} 字)",
+            "info")
         self._send_to_ai(
             prompt,
             f"提取角色库-第{ch_num}章",
@@ -8804,15 +8851,53 @@ class MainWindow(QMainWindow):
         try:
             data = json.loads(text)
         except Exception as e:
-            self.tab_generation.log(f"第{ch_num}章 JSON 解析失败: {e}", "warn")
-            self.tab_generation.log(f"  原始内容前 200字: {content[:200]}", "warn")
+            # v1.02 BUG-032:JSON 解析失败 → 重试 1 次(BUG-027 风格防抓取串)
+            retry_n = getattr(self, "_world_extract_retry", {}).get(ch_num, 0)
+            if retry_n < 1:
+                self._world_extract_retry = getattr(self, "_world_extract_retry", {})
+                self._world_extract_retry[ch_num] = retry_n + 1
+                self.tab_generation.log(
+                    f"⚠ 第{ch_num}章 6 库 JSON 解析失败({e}),"
+                    f"疑似抓取串了,等 2s 后重试(第 {retry_n + 1}/1 次)",
+                    "warn")
+                self.tab_generation.log(f"  原始前 200 字: {content[:200]}", "warn")
+                # 重新塞回队列
+                if not hasattr(self, "_charlib_batch_queue"):
+                    self._charlib_batch_queue = []
+                self._charlib_batch_queue.insert(0, ch_num)
+                QTimer.singleShot(2000, self._run_next_charlib_extract)
+                return
+            self.tab_generation.log(
+                f"⚠ 第{ch_num}章 6 库 JSON 解析最终失败({e}),跳过此章",
+                "error")
+            self.tab_generation.log(f"  原始前 300 字: {content[:300]}", "warn")
             QTimer.singleShot(500, self._run_next_charlib_extract)
             return
 
+        # v1.02:检测"AI 返回了合法 JSON 但 5 个数组全空" — 也算抓取串/AI 没识别
+        all_empty = not any(
+            (data.get(k) or []) for k in
+            ("characters", "relations", "items", "events", "foreshadows")
+        )
+        if all_empty:
+            retry_n = getattr(self, "_world_extract_retry", {}).get(ch_num, 0)
+            if retry_n < 1:
+                self._world_extract_retry = getattr(self, "_world_extract_retry", {})
+                self._world_extract_retry[ch_num] = retry_n + 1
+                self.tab_generation.log(
+                    f"⚠ 第{ch_num}章 6 库 AI 返回 5 类全空,疑似抓取串/AI 误解,"
+                    f"等 2s 后重试(第 {retry_n + 1}/1 次)",
+                    "warn")
+                if not hasattr(self, "_charlib_batch_queue"):
+                    self._charlib_batch_queue = []
+                self._charlib_batch_queue.insert(0, ch_num)
+                QTimer.singleShot(2000, self._run_next_charlib_extract)
+                return
+
         added = self._merge_into_charlib(data)
         self.tab_generation.log(
-            f"✓ 第{ch_num}章提取完成: 角色+{added['ch']} 关系+{added['rel']} "
-            f"物品+{added['it']} 事件+{added['ev']} 伏笔+{added['fo']}",
+            f"✓ 第{ch_num}章 6 库提取完成: 角色+{added['ch']} 关系+{added['rel']} "
+            f"物品+{added['it']} 时间线+{added['ev']} 伏笔+{added['fo']}",
             "success")
         # 触发下一章
         QTimer.singleShot(800, self._run_next_charlib_extract)
@@ -10209,6 +10294,11 @@ class MainWindow(QMainWindow):
             else:
                 pipeline.append(("end_batch",))
 
+        # v1.02:让用户能看到 pipeline 真的启动了
+        if pipeline:
+            _step_names = [s[0] for s in pipeline]
+            self.tab_generation.log(
+                f"🔗 第 {ch_num} 章后置链启动: {' → '.join(_step_names)}", "info")
         self._post_chapter_pipeline = pipeline
         QTimer.singleShot(800, self._run_next_post_chapter_step)
 
