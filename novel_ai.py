@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.23"
+APP_VERSION = "v1.30"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -27,6 +27,11 @@ import sys
 import os
 import re
 import json
+try:
+    import project_io
+    PROJECT_IO_AVAILABLE = True
+except ImportError:
+    PROJECT_IO_AVAILABLE = False
 import time
 import random
 import socket
@@ -12240,7 +12245,8 @@ class MainWindow(QMainWindow):
             if 0 <= self.current_chapter_index < len(self.chapters):
                 self.chapters[self.current_chapter_index]["title"] = self.tab_editor.title_input.text()
                 self.chapters[self.current_chapter_index]["content"] = self.tab_editor.content_edit.toPlainText()
-            save_path = self.current_project_file or str(self.project_dir / "autosave.json")
+            # v1.30:autosave 默认也走文件夹格式(autosave/ 子文件夹)
+            save_path = self.current_project_file or str(self.project_dir / "autosave")
             s = self.tab_settings
             d = {
                 "title": s.get_title(),
@@ -12376,61 +12382,147 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("新项目已创建", 3000)
 
     def open_project(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "打开", str(self.project_dir), "项目 (*.json)")
-        if not path: return
+        """v1.30:支持文件夹格式 + 旧 .json 自动升级"""
+        # 让用户选 — 优先文件夹,但也接受 .json
+        # 用 QFileDialog.Directory 模式;不够灵活,所以两步:
+        # 1. 弹一个文件对话框,过滤器 = "项目文件夹/(选其目录)" 或 ".json 文件"
+        choice = QMessageBox.question(
+            self, "打开项目",
+            "选择项目类型:\n\n"
+            "• 是 → 打开【项目文件夹】(v1.30 新格式,推荐)\n"
+            "• 否 → 打开【旧 .json 文件】(v1.29 及以前,会自动升级到新格式)",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Yes)
+        if choice == QMessageBox.Cancel:
+            return
+        if choice == QMessageBox.Yes:
+            # 选文件夹
+            path = QFileDialog.getExistingDirectory(
+                self, "选择项目文件夹", str(self.project_dir))
+        else:
+            # 选 .json
+            path, _ = QFileDialog.getOpenFileName(
+                self, "打开旧 .json 项目", str(self.project_dir), "项目 (*.json)")
+        if not path:
+            return
+
+        # 用 project_io 加载(优先,兼容文件夹格式)
+        if PROJECT_IO_AVAILABLE:
+            try:
+                fmt = project_io.detect_format(path)
+                if fmt == "folder":
+                    d = project_io.load_project_folder(path)
+                    self.current_project_file = str(Path(path).resolve())
+                    self.tab_generation.log(
+                        f"📂 已打开项目文件夹: {path}", "success")
+                elif fmt == "legacy_json":
+                    # 旧 .json → 询问升级
+                    ret = QMessageBox.question(
+                        self, "检测到旧版项目",
+                        f"这是旧版单 .json 项目文件:\n  {path}\n\n"
+                        f"v1.30 改用文件夹格式存档(章节/大纲/设置分开),\n"
+                        f"现在升级吗?\n\n"
+                        f"  ✓ 是 → 自动转成文件夹结构(原 .json 备份保留)\n"
+                        f"  ✗ 否 → 直接读旧格式(以后保存还会写文件夹)",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                    if ret == QMessageBox.Yes:
+                        # 升级到新文件夹
+                        json_p = Path(path)
+                        target = json_p.parent / json_p.stem
+                        # 如果同名文件夹已存在,追加 _migrated
+                        if target.exists() and target.is_dir():
+                            target = json_p.parent / (json_p.stem + "_migrated")
+                        project_io.migrate_legacy_json(json_p, target)
+                        d = project_io.load_project_folder(target)
+                        self.current_project_file = str(target.resolve())
+                        self.tab_generation.log(
+                            f"📂 旧 .json 已升级为文件夹: {target}", "success")
+                        QMessageBox.information(
+                            self, "升级完成",
+                            f"已升级到文件夹结构:\n  {target}\n\n"
+                            f"原 .json 保留在:\n  {target/'.legacy-original.json'}")
+                    else:
+                        # 不升级,直接读
+                        d = json.loads(Path(path).read_text(encoding="utf-8"))
+                        self.current_project_file = path
+                else:
+                    QMessageBox.warning(
+                        self, "格式无法识别",
+                        f"路径不是项目文件夹也不是 .json:\n{path}")
+                    return
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "打开失败",
+                    f"加载项目失败:{e}\n\n路径: {path}")
+                return
+            self._load_payload_into_ui(d)
+            return
+
+        # 兜底:project_io 不可用(理论上不会),走老路径
         try:
             d = json.loads(Path(path).read_text(encoding="utf-8"))
-            self.chapters = d.get("chapters", [])
-            self.tab_settings.title_input.setText(d.get("title", ""))
-            self.tab_settings.inspiration_edit.setPlainText(d.get("inspiration", ""))
-            self.tab_outline.seed_edit.setPlainText(d.get("seed", ""))
-            self.tab_outline.worldview_edit.setPlainText(d.get("worldview", ""))
-            self.tab_outline.lo_edit.setPlainText(d.get("lo", ""))
-            self.tab_outline.structure_edit.setPlainText(d.get("structure", ""))
-            self.tab_outline.chapter_outline_edit.setPlainText(d.get("chapter_outline", ""))
-            self.tab_outline.intro_edit.setPlainText(d.get("intro", ""))
-            # 还原高级设定
-            adv = d.get("advanced", {})
-            if adv:
-                self._apply_advanced(adv)
-            # 还原对话记忆
-            mem = d.get("memory", {})
-            if mem:
-                self.tab_memory.chars_edit.setPlainText(mem.get("characters", ""))
-                self.tab_memory.summaries_edit.setPlainText(mem.get("summaries", ""))
-                self.tab_memory.long_term_edit.setPlainText(mem.get("long_term", ""))
-                self.tab_memory.auto_summarize.setChecked(mem.get("auto_summarize", True))
-                self.tab_memory.auto_inject.setChecked(mem.get("auto_inject", True))
-                self.tab_memory.recent_n.setValue(int(mem.get("recent_n", 3)))
-                self.tab_memory.summary_len.setValue(int(mem.get("summary_len", 80)))
-            # 还原 Canon 设定档(B 模块)
-            if d.get("canon"):
-                self.tab_canon.load_from_dict(d["canon"])
-            # 还原技能库(D 模块)
-            if d.get("skills"):
-                self.tab_skills.load_from_dict(d["skills"])
-            # 还原章节质量校验配置(C 模块)
-            crit = d.get("critique", {})
-            if crit:
-                self.tab_generation.chk_crit_words.setChecked(crit.get("word_count", True))
-                self.tab_generation.chk_crit_hook.setChecked(crit.get("hook", True))
-                self.tab_generation.chk_crit_canon.setChecked(crit.get("canon", True))
-                self.tab_generation.chk_crit_rhythm.setChecked(crit.get("rhythm", False))
-                self.tab_generation.chk_crit_char.setChecked(crit.get("character", False))
-            # 还原对话槽(E 模块)
-            if d.get("conv_slots"):
-                self.tab_generation.conv_switcher.load_from_dict(d["conv_slots"])
-            # 寿元/伏笔(可选模块)
-            if (LIFESPAN_LOOPS_AVAILABLE and self.tab_lifespan is not None
-                    and d.get("lifespan_loops")):
-                self.tab_lifespan.load_from_dict(d["lifespan_loops"])
             self.current_project_file = path
-            self.current_chapter_index = -1
-            self._refresh_chapter_list()
-            self.statusBar().showMessage(f"已打开:{path}", 3000)
+            self._load_payload_into_ui(d)
         except Exception as e:
             QMessageBox.critical(self, "错误", f"打开失败:{e}")
+
+    def _load_payload_into_ui(self, d: dict):
+        """v1.30:从 payload(可能来自文件夹或旧 .json)还原所有 UI 状态
+        抽出来作为统一接口,文件夹路径和老路径都能复用"""
+        self.chapters = d.get("chapters", [])
+        self.tab_settings.title_input.setText(d.get("title", ""))
+        self.tab_settings.inspiration_edit.setPlainText(d.get("inspiration", ""))
+        self.tab_outline.seed_edit.setPlainText(d.get("seed", ""))
+        self.tab_outline.worldview_edit.setPlainText(d.get("worldview", ""))
+        self.tab_outline.lo_edit.setPlainText(d.get("lo", ""))
+        self.tab_outline.structure_edit.setPlainText(d.get("structure", ""))
+        self.tab_outline.chapter_outline_edit.setPlainText(d.get("chapter_outline", ""))
+        self.tab_outline.intro_edit.setPlainText(d.get("intro", ""))
+        # 还原高级设定
+        adv = d.get("advanced", {})
+        if adv:
+            self._apply_advanced(adv)
+        # 还原对话记忆
+        mem = d.get("memory", {})
+        if mem:
+            self.tab_memory.chars_edit.setPlainText(mem.get("characters", ""))
+            self.tab_memory.summaries_edit.setPlainText(mem.get("summaries", ""))
+            self.tab_memory.long_term_edit.setPlainText(mem.get("long_term", ""))
+            self.tab_memory.auto_summarize.setChecked(mem.get("auto_summarize", True))
+            self.tab_memory.auto_inject.setChecked(mem.get("auto_inject", True))
+            self.tab_memory.recent_n.setValue(int(mem.get("recent_n", 3)))
+            self.tab_memory.summary_len.setValue(int(mem.get("summary_len", 80)))
+        # 还原 Canon
+        if d.get("canon"):
+            self.tab_canon.load_from_dict(d["canon"])
+        # 还原 6 库(charlib)
+        if d.get("charlib") and hasattr(self, "tab_charlib"):
+            try:
+                self.tab_charlib.load(d["charlib"])
+            except Exception as _e:
+                print(f"[加载] charlib 还原失败: {_e}", flush=True)
+        # 还原技能库
+        if d.get("skills"):
+            self.tab_skills.load_from_dict(d["skills"])
+        # 还原章节质量校验配置
+        crit = d.get("critique", {})
+        if crit:
+            self.tab_generation.chk_crit_words.setChecked(crit.get("word_count", True))
+            self.tab_generation.chk_crit_hook.setChecked(crit.get("hook", True))
+            self.tab_generation.chk_crit_canon.setChecked(crit.get("canon", True))
+            self.tab_generation.chk_crit_rhythm.setChecked(crit.get("rhythm", False))
+            self.tab_generation.chk_crit_char.setChecked(crit.get("character", False))
+        # 还原对话槽
+        if d.get("conv_slots"):
+            self.tab_generation.conv_switcher.load_from_dict(d["conv_slots"])
+        # 寿元/伏笔
+        if (LIFESPAN_LOOPS_AVAILABLE and self.tab_lifespan is not None
+                and d.get("lifespan_loops")):
+            self.tab_lifespan.load_from_dict(d["lifespan_loops"])
+        self.current_chapter_index = -1
+        self._refresh_chapter_list()
+        self.statusBar().showMessage(
+            f"已打开:{self.current_project_file}", 3000)
 
     def _apply_advanced(self, adv):
         """根据存档还原创作设置中的高级选项"""
@@ -12470,15 +12562,31 @@ class MainWindow(QMainWindow):
 
 
     def save_project(self):
+        """v1.30 新存档:保存到文件夹结构(by project_io)
+        如果当前是旧 .json 路径 → 保存时升级到文件夹
+        """
         if 0 <= self.current_chapter_index < len(self.chapters):
             self.chapters[self.current_chapter_index]["title"] = self.tab_editor.title_input.text()
             self.chapters[self.current_chapter_index]["content"] = self.tab_editor.content_edit.toPlainText()
         if not self.current_project_file:
-            path, _ = QFileDialog.getSaveFileName(
-                self, "保存项目",
-                str(self.project_dir / f"{self.tab_settings.get_title()}.json"),
-                "项目 (*.json)")
-            if not path: return
+            # 用户没指定路径 → 默认 <project_dir>/<书名>/(文件夹)
+            title = self.tab_settings.get_title() or "未命名项目"
+            import re as _re
+            safe = _re.sub(r'[\\/:*?"<>|]', '_', title).strip() or "untitled"
+            default_folder = self.project_dir / safe
+            # 询问用户:用默认还是自己选
+            path = QFileDialog.getExistingDirectory(
+                self, "选择保存位置(选项目文件夹,不存在会自动创建)",
+                str(default_folder))
+            if not path:
+                # 用户取消 → fallback 默认位置
+                if QMessageBox.question(
+                    self, "保存到默认位置?",
+                    f"未选择路径,要保存到默认位置吗?\n\n{default_folder}",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes) != QMessageBox.Yes:
+                    return
+                path = str(default_folder)
             self.current_project_file = path
         s = self.tab_settings
         d = {
@@ -12541,17 +12649,37 @@ class MainWindow(QMainWindow):
             "saved_at": datetime.now().isoformat(),
         }
         try:
-            # 第 2 项:写入前先备份当前文件,保留最近 10 次
-            self._rotate_project_backups(self.current_project_file)
-            Path(self.current_project_file).write_text(
-                json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-            self.statusBar().showMessage(f"已保存:{self.current_project_file}", 3000)
+            target = Path(self.current_project_file)
+            # 路径判断:文件夹 vs .json
+            if PROJECT_IO_AVAILABLE and (
+                    not target.suffix or target.is_dir() or not target.exists()):
+                # 走新文件夹格式
+                # 先做整体 zip 备份(如果文件夹已存在)
+                if target.is_dir():
+                    try:
+                        project_io.make_backup_zip(target, keep=10)
+                    except Exception as _be:
+                        print(f"[backup] zip 失败: {_be}", flush=True)
+                project_io.save_project_folder(target, d)
+                self.statusBar().showMessage(
+                    f"已保存(文件夹):{target}", 3000)
+                self.tab_generation.log(
+                    f"💾 项目已保存到文件夹: {target}", "success")
+            else:
+                # 旧路径:单 .json 文件
+                self._rotate_project_backups(self.current_project_file)
+                Path(self.current_project_file).write_text(
+                    json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+                self.statusBar().showMessage(
+                    f"已保存(.json):{self.current_project_file}", 3000)
         except Exception as e:
+            import traceback
             QMessageBox.critical(
                 self, "保存失败",
-                f"无法写入项目文件:\n{self.current_project_file}\n\n错误:{e}\n\n"
+                f"无法写入项目:\n{self.current_project_file}\n\n错误:{e}\n\n"
                 "请检查:1) 路径是否可写  2) 磁盘是否已满  3) 文件名是否合法")
-            self.tab_generation.log(f"✗ 保存项目失败:{e}", "error")
+            self.tab_generation.log(
+                f"✗ 保存项目失败:{e}\n{traceback.format_exc()}", "error")
 
     def _rotate_project_backups(self, project_path: str, keep: int = 10):
         """第 2 项:在 .backups/ 子目录里保留最近 N 次保存的快照。
