@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.16"
+APP_VERSION = "v1.20"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -644,6 +644,196 @@ class _PanguForbiddenHighlighter(QSyntaxHighlighter):
             while i >= 0:
                 self.setFormat(i, len(w), self.fmt_forbidden)
                 i = text.find(w, i + 1)
+class ThemeManager:
+    """v1.20 全局主题管理器
+    - light:默认浅色主题(保持原貌)
+    - dark:深炭灰主题(VSCode Dark 同款色板,保留 ✨ 金色强调)
+    - apply(app, name):一键切换,持久化到 QSettings('NovelAI','UI').theme
+    """
+    LIGHT_QSS = ""   # 空字符串 = 用 Qt 默认浅色主题
+
+    DARK_QSS = """
+    /* ─── 主背景 + 文字 ─── */
+    QMainWindow, QWidget, QDialog, QFrame {
+        background-color: #1e1e1e;
+        color: #d4d4d4;
+    }
+
+    /* ─── 文本输入 ─── */
+    QPlainTextEdit, QTextEdit, QLineEdit {
+        background-color: #1a1a1a;
+        color: #d4d4d4;
+        border: 1px solid #3c3c3c;
+        selection-background-color: #094771;
+    }
+
+    /* ─── GroupBox 框 ─── */
+    QGroupBox {
+        border: 1px solid #3c3c3c;
+        margin-top: 12px;
+        padding-top: 6px;
+        color: #d4d4d4;
+    }
+    QGroupBox::title {
+        subcontrol-origin: margin;
+        left: 8px;
+        color: #d4d4d4;
+    }
+
+    /* ─── Tab ─── */
+    QTabWidget::pane {
+        background-color: #1e1e1e;
+        border: 1px solid #3c3c3c;
+    }
+    QTabBar::tab {
+        background-color: #2d2d30;
+        color: #d4d4d4;
+        padding: 6px 14px;
+        border: 1px solid #3c3c3c;
+        border-bottom: 0;
+    }
+    QTabBar::tab:selected {
+        background-color: #094771;
+        color: #ffffff;
+    }
+    QTabBar::tab:hover {
+        background-color: #3c3c3c;
+    }
+
+    /* ─── 表格 / 树 / 列表 ─── */
+    QTableWidget, QTreeWidget, QListWidget, QTableView, QTreeView, QListView {
+        background-color: #1a1a1a;
+        color: #d4d4d4;
+        gridline-color: #3c3c3c;
+        alternate-background-color: #252526;
+        selection-background-color: #094771;
+        selection-color: #ffffff;
+    }
+    QHeaderView::section {
+        background-color: #2d2d30;
+        color: #d4d4d4;
+        border: 1px solid #3c3c3c;
+        padding: 4px;
+    }
+
+    /* ─── 下拉 / 微调 ─── */
+    QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit, QTimeEdit {
+        background-color: #3c3c3c;
+        color: #d4d4d4;
+        border: 1px solid #555;
+        padding: 3px 6px;
+    }
+    QComboBox QAbstractItemView {
+        background-color: #2d2d30;
+        color: #d4d4d4;
+        selection-background-color: #094771;
+    }
+
+    /* ─── Checkbox / Radio(保留特殊 color 如金色,只换通用)─── */
+    QCheckBox, QRadioButton {
+        color: #d4d4d4;
+        spacing: 6px;
+    }
+
+    /* ─── 菜单 ─── */
+    QMenuBar {
+        background-color: #2d2d30;
+        color: #d4d4d4;
+    }
+    QMenuBar::item:selected {
+        background-color: #094771;
+    }
+    QMenu {
+        background-color: #2d2d30;
+        color: #d4d4d4;
+        border: 1px solid #3c3c3c;
+    }
+    QMenu::item:selected {
+        background-color: #094771;
+    }
+
+    /* ─── 滚动条 ─── */
+    QScrollBar:vertical {
+        background-color: #1e1e1e;
+        width: 12px;
+        border: 0;
+    }
+    QScrollBar::handle:vertical {
+        background-color: #3c3c3c;
+        min-height: 24px;
+        border-radius: 3px;
+    }
+    QScrollBar::handle:vertical:hover {
+        background-color: #4f4f4f;
+    }
+    QScrollBar:horizontal {
+        background-color: #1e1e1e;
+        height: 12px;
+        border: 0;
+    }
+    QScrollBar::handle:horizontal {
+        background-color: #3c3c3c;
+        min-width: 24px;
+        border-radius: 3px;
+    }
+    QScrollBar::add-line, QScrollBar::sub-line { background: none; }
+
+    /* ─── 状态栏 / 工具栏 / 分隔线 ─── */
+    QStatusBar {
+        background-color: #2d2d30;
+        color: #d4d4d4;
+    }
+    QToolBar {
+        background-color: #2d2d30;
+        border: 0;
+    }
+    QSplitter::handle {
+        background-color: #3c3c3c;
+    }
+
+    /* ─── 标签 / 工具提示 ─── */
+    QLabel {
+        color: #d4d4d4;
+        background: transparent;
+    }
+    QToolTip {
+        background-color: #2d2d30;
+        color: #d4d4d4;
+        border: 1px solid #555;
+    }
+
+    /* ─── ✨ 金色强调保留(用户要求)─── */
+    /* 局部 setStyleSheet('color:#b4884e') 会自然覆盖此处通用色 */
+    """
+
+    @classmethod
+    def apply(cls, app, name):
+        """app 是 QApplication 实例,name = 'light' 或 'dark'"""
+        qss = cls.DARK_QSS if name == "dark" else cls.LIGHT_QSS
+        app.setStyleSheet(qss)
+        try:
+            from PyQt5.QtCore import QSettings
+            QSettings("NovelAI", "UI").setValue("theme", name)
+        except Exception:
+            pass
+
+    @classmethod
+    def current(cls):
+        """读上次保存的主题(默认 light)"""
+        try:
+            from PyQt5.QtCore import QSettings
+            return QSettings("NovelAI", "UI").value("theme", "light", type=str)
+        except Exception:
+            return "light"
+
+    @classmethod
+    def toggle(cls, app):
+        """切换 light ↔ dark,返回新主题名"""
+        new = "dark" if cls.current() == "light" else "light"
+        cls.apply(app, new)
+        return new
+
+
 class _TTSSynthThread(QThread):
     """v1.10:TTS 合成后台线程 — 逐段合成,边出边发信号,不阻塞 UI"""
     chunk_ready  = pyqtSignal(int, int, str)   # (idx, total, audio_path)
@@ -787,6 +977,25 @@ class ChapterEditor(QWidget):
         btn_row.addWidget(self.lbl_tts_speed)
         btn_row.addWidget(self.slider_tts_speed)
         btn_row.addWidget(self.lbl_tts_status)
+        # v1.20:🎨 编辑器自定义字色 + 🖌 背景色
+        self.btn_editor_fg = QPushButton("🎨 字色")
+        self.btn_editor_fg.setToolTip("调整章节编辑器的文字颜色")
+        self.btn_editor_fg.setStyleSheet(
+            "background:#7f8c8d;color:white;padding:4px 8px;border-radius:3px;")
+        self.btn_editor_fg.clicked.connect(self._pick_editor_fg)
+        self.btn_editor_bg = QPushButton("🖌 背景")
+        self.btn_editor_bg.setToolTip("调整章节编辑器的背景颜色")
+        self.btn_editor_bg.setStyleSheet(
+            "background:#7f8c8d;color:white;padding:4px 8px;border-radius:3px;")
+        self.btn_editor_bg.clicked.connect(self._pick_editor_bg)
+        self.btn_editor_reset = QPushButton("↺")
+        self.btn_editor_reset.setToolTip("重置编辑器颜色为默认(跟随当前主题)")
+        self.btn_editor_reset.setStyleSheet(
+            "background:#95a5a6;color:white;padding:4px 8px;border-radius:3px;")
+        self.btn_editor_reset.clicked.connect(self._reset_editor_colors)
+        btn_row.addWidget(self.btn_editor_fg)
+        btn_row.addWidget(self.btn_editor_bg)
+        btn_row.addWidget(self.btn_editor_reset)
         layout.addLayout(btn_row)
 
         layout.addWidget(QLabel("章节标题:"))
@@ -850,6 +1059,57 @@ class ChapterEditor(QWidget):
             self.pangu_highlighter = _PanguForbiddenHighlighter(self.content_edit.document())
         except Exception:
             self.pangu_highlighter = None
+
+    def _pick_editor_fg(self):
+        """v1.20:选择编辑器文字颜色 + 持久化 + 立即应用"""
+        from PyQt5.QtWidgets import QColorDialog
+        from PyQt5.QtGui import QColor
+        from PyQt5.QtCore import QSettings
+        s = QSettings("NovelAI", "Editor")
+        cur = s.value("fg", "", type=str)
+        init = QColor(cur) if cur else QColor("#d4d4d4")
+        c = QColorDialog.getColor(init, self, "选择文字颜色")
+        if c.isValid():
+            hex_str = c.name()
+            s.setValue("fg", hex_str)
+            self._apply_editor_colors()
+
+    def _pick_editor_bg(self):
+        """v1.20:选择编辑器背景颜色 + 持久化 + 立即应用"""
+        from PyQt5.QtWidgets import QColorDialog
+        from PyQt5.QtGui import QColor
+        from PyQt5.QtCore import QSettings
+        s = QSettings("NovelAI", "Editor")
+        cur = s.value("bg", "", type=str)
+        init = QColor(cur) if cur else QColor("#1a1a1a")
+        c = QColorDialog.getColor(init, self, "选择背景颜色")
+        if c.isValid():
+            hex_str = c.name()
+            s.setValue("bg", hex_str)
+            self._apply_editor_colors()
+
+    def _reset_editor_colors(self):
+        """v1.20:重置 → 删 QSettings 里的 fg/bg → 应用空 stylesheet → 跟随全局主题"""
+        from PyQt5.QtCore import QSettings
+        s = QSettings("NovelAI", "Editor")
+        s.remove("fg")
+        s.remove("bg")
+        self._apply_editor_colors()
+
+    def _apply_editor_colors(self):
+        """读 QSettings 的 fg/bg,组合成 stylesheet 应用到 content_edit"""
+        from PyQt5.QtCore import QSettings
+        s = QSettings("NovelAI", "Editor")
+        fg = s.value("fg", "", type=str)
+        bg = s.value("bg", "", type=str)
+        # 字体保留原值
+        base = "font-family: 'Microsoft YaHei'; font-size: 14px;"
+        style_parts = [base]
+        if fg:
+            style_parts.append(f"color: {fg};")
+        if bg:
+            style_parts.append(f"background-color: {bg};")
+        self.content_edit.setStyleSheet(" ".join(style_parts))
 
     def _update_word_count(self):
         text = self.content_edit.toPlainText()
@@ -7066,6 +7326,21 @@ class MainWindow(QMainWindow):
 
         # ---- 右侧 Tab ----
         self.tabs = QTabWidget()
+        # v1.20:Tab 右上角加 ☀️/🌙 主题切换按钮
+        from PyQt5.QtCore import QSettings as _QS_theme
+        _theme_name = _QS_theme("NovelAI", "UI").value("theme", "light", type=str)
+        self.btn_theme_toggle = QPushButton(
+            "🌙" if _theme_name == "light" else "☀️")
+        self.btn_theme_toggle.setFixedSize(36, 28)
+        self.btn_theme_toggle.setToolTip(
+            "切换 白天 ☀️ / 黑夜 🌙 主题(全局生效)\n"
+            "编辑器单独的字色 / 背景色在章节编辑器顶部 🎨 / 🖌 按钮")
+        self.btn_theme_toggle.setStyleSheet(
+            "QPushButton { background:transparent; border:1px solid #888; "
+            "border-radius:4px; font-size:14px; } "
+            "QPushButton:hover { background:#3c3c3c; }")
+        self.btn_theme_toggle.clicked.connect(self._on_toggle_theme)
+        self.tabs.setCornerWidget(self.btn_theme_toggle)
         self.tab_settings = CreationSettings()
         self.tab_outline = StoryOutline()
         self.tab_memory = DialogMemory()
@@ -10829,6 +11104,22 @@ class MainWindow(QMainWindow):
     # ════════════════════════════════════════════════
     # v1.10 TTS 朗读 — Index-TTS / EdgeTTS 后端
     # ════════════════════════════════════════════════
+    def _on_toggle_theme(self):
+        """v1.20:切换 light ↔ dark 主题,立即生效"""
+        from PyQt5.QtWidgets import QApplication
+        new_name = ThemeManager.toggle(QApplication.instance())
+        # 切换按钮图标 — 新主题是 dark 则显示 ☀️(下一步切回 light)
+        self.btn_theme_toggle.setText("☀️" if new_name == "dark" else "🌙")
+        # 切到 dark 时如果用户没自定义编辑器颜色,把默认 stylesheet 清空让全局 QSS 接管
+        # 切到 light 时也一样 — _apply_editor_colors 会读 QSettings(如果有自定义就保留)
+        try:
+            self.tab_editor._apply_editor_colors()
+        except Exception:
+            pass
+        self.tab_generation.log(
+            f"🎨 主题已切换 → {'🌙 黑夜' if new_name == 'dark' else '☀️ 白天'}",
+            "info")
+
     def _init_tts(self):
         """启动时初始化 TTS:QMediaPlayer + 状态"""
         try:
@@ -12582,6 +12873,12 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
+    # v1.20:启动时应用上次保存的主题(light/dark)
+    try:
+        ThemeManager.apply(app, ThemeManager.current())
+    except Exception as _e:
+        print(f"[Theme] 启动应用主题失败: {_e}", flush=True)
+
     # 字体倍数:只读用户手动设置(QSettings.font_scale),不再做自动检测
     # 原因:多屏 / 高分屏 Windows 缩放各种组合下自动检测不靠谱,
     #      手动滑块(创作设置最底)最稳。默认 ×1.0,用户拖了再生效。
@@ -12609,6 +12906,11 @@ def main():
     try:
         win = MainWindow()
         win.show()
+        # v1.20:应用编辑器自定义颜色(如果之前调过)
+        try:
+            win.tab_editor._apply_editor_colors()
+        except Exception:
+            pass
         # 字体倍数启动日志(只在 >1.0 时打,简洁)
         try:
             _sc = app.property("_novelai_dpi_scale") or 1.0
