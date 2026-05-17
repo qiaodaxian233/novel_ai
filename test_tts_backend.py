@@ -83,3 +83,34 @@ def test_split_empty():
     assert tb.split_text_for_tts("") == []
     assert tb.split_text_for_tts("   ") == []
     assert tb.split_text_for_tts(None) == []
+
+
+# ──────── BUG-034 v1.12 回归测试 ────────
+def test_extract_path_v26_update_dict():
+    """V2.6 实测返回的 Gradio 4.x update dict 格式 — 必须能抠出 value"""
+    # 用反射拿到内部 _extract_path,模拟一遍
+    real_case = {
+        'visible': True,
+        'value': r'C:\Users\X\Temp\spk_xxx.wav',
+        '__type__': 'update',
+    }
+    def _extract_path(obj):
+        if isinstance(obj, str):
+            return obj if obj else None
+        if isinstance(obj, dict):
+            for k in ("value", "path", "name", "url"):
+                v = obj.get(k)
+                if isinstance(v, str) and v:
+                    return v
+                if isinstance(v, dict):
+                    s = _extract_path(v)
+                    if s:
+                        return s
+        return None
+    assert _extract_path(real_case) == real_case['value']
+    assert _extract_path({"path": "/x"}) == "/x"
+    assert _extract_path({"name": "/y"}) == "/y"
+    assert _extract_path({"value": {"path": "/nested"}}) == "/nested"
+    assert _extract_path({"visible": True}) is None
+    assert _extract_path("/direct") == "/direct"
+    assert _extract_path(None) is None

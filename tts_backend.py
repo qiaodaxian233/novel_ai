@@ -270,20 +270,35 @@ class IndexTTSBackend(TTSBackend):
                 f"{self.get_api_schema()}"
             )
 
-        # result 可能是:文件路径字符串 / 元组 / 字典
+        # result 可能是:文件路径字符串 / 元组 / 字典 / Gradio 4.x 的 'update' dict
+        # BUG-034:V2.6 实测 result = {'visible': True, 'value': 'C:\\...wav', '__type__': 'update'}
         audio_path = None
-        if isinstance(result, str):
-            audio_path = result
-        elif isinstance(result, (tuple, list)) and len(result) > 0:
+
+        def _extract_path(obj):
+            """从单个 result item 抠音频路径出来"""
+            if isinstance(obj, str):
+                return obj if obj else None
+            if isinstance(obj, dict):
+                # Gradio 4.x update / value 字段
+                for key in ("value", "path", "name", "url"):
+                    v = obj.get(key)
+                    if isinstance(v, str) and v:
+                        return v
+                    if isinstance(v, dict):
+                        # 嵌套 {value: {path: ...}}
+                        sub = _extract_path(v)
+                        if sub:
+                            return sub
+            return None
+
+        if isinstance(result, (tuple, list)):
             for item in result:
-                if isinstance(item, str) and Path(item).exists():
-                    audio_path = item
+                cand = _extract_path(item)
+                if cand:
+                    audio_path = cand
                     break
-                if isinstance(item, dict) and "path" in item:
-                    audio_path = item["path"]
-                    break
-        elif isinstance(result, dict) and "path" in result:
-            audio_path = result["path"]
+        else:
+            audio_path = _extract_path(result)
 
         if not audio_path or not Path(audio_path).exists():
             return False, f"Index-TTS 返回的 result 找不到音频文件:{type(result).__name__} {str(result)[:200]}"
