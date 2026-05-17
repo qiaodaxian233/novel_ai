@@ -162,7 +162,16 @@ class IndexTTSBackend(TTSBackend):
             return self._client
         if not GRADIO_CLIENT_AVAILABLE:
             raise RuntimeError("缺 gradio_client:pip install gradio_client")
-        self._client = _GrCli(self.url, verbose=False)
+        # v1.15 BUG-037:download_files=False 绕过 client 内部 HTTP 下载,
+        # 单机 localhost 场景下 server 端 temp 路径直接就是本地真实路径,
+        # 同时避免迅雷/IDM 等下载管理器拦截 gradio_api HTTP 流量
+        try:
+            self._client = _GrCli(self.url, verbose=False, download_files=False)
+            print(f"[Index-TTS] Client 已连(download_files=False,绕过迅雷拦截)", flush=True)
+        except TypeError:
+            # 老版本 gradio_client 不支持 download_files 参数
+            self._client = _GrCli(self.url, verbose=False)
+            print(f"[Index-TTS] Client 已连(老版本,无 download_files 选项)", flush=True)
         return self._client
 
     def get_api_schema(self) -> str:
@@ -313,11 +322,24 @@ class IndexTTSBackend(TTSBackend):
         else:
             audio_path = _extract_path(result)
 
-        if not audio_path or not Path(audio_path).exists():
-            return False, f"Index-TTS 返回的 result 找不到音频文件:{type(result).__name__} {str(result)[:200]}"
-
+        # v1.15 BUG-037:加详细诊断,以后类似问题秒诊断
+        print(f"[Index-TTS] 抽取得 audio_path = {audio_path!r}", flush=True)
+        if not audio_path:
+            return False, (
+                f"Index-TTS 返回的 result 抠不出路径。type={type(result).__name__}\n"
+                f"完整 result: {str(result)[:500]}"
+            )
+        if not Path(audio_path).exists():
+            return False, (
+                f"Index-TTS 返回的路径不存在(可能被迅雷拦截 / 异机下载失败):\n"
+                f"  路径: {audio_path}\n"
+                f"  是否 HTTP URL: {str(audio_path).startswith('http')}\n"
+                f"建议:关闭迅雷/IDM 的 HTTP 监控,或者把 Index-TTS 跟程序放同一台机"
+            )
         try:
+            file_size = Path(audio_path).stat().st_size
             shutil.copy(audio_path, output_path)
+            print(f"[Index-TTS] 文件已复制: {audio_path} ({file_size} bytes) → {output_path}", flush=True)
             return True, "ok"
         except Exception as e:
             return False, f"复制音频文件失败:{e}"

@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.14"
+APP_VERSION = "v1.15"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1835,11 +1835,20 @@ class CreationSettings(QWidget):
         # 路径 1:Windows + WAV → winsound(标准库,几乎不会失败)
         if sys.platform == "win32" and ext == ".wav":
             try:
-                import winsound
-                winsound.PlaySound(out, winsound.SND_FILENAME | winsound.SND_ASYNC)
-                played_by = "winsound(标准库)"
+                # v1.15:播前 print 调试信息(看不到声音时一目了然)
+                _exists = os.path.exists(out)
+                _size = os.path.getsize(out) if _exists else 0
+                print(f"[TTS test] 准备 winsound 播放: {out} exists={_exists} size={_size}", flush=True)
+                if not _exists or _size == 0:
+                    play_err = f"文件不存在或空(size={_size}),winsound 跳过"
+                else:
+                    import winsound
+                    winsound.PlaySound(out, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                    played_by = "winsound(标准库)"
+                    print(f"[TTS test] winsound.PlaySound 已调用,应该开始播放", flush=True)
             except Exception as e:
                 play_err = f"winsound 失败:{e}"
+                print(f"[TTS test] winsound 异常: {e}", flush=True)
         # 路径 2:QMediaPlayer 兜底(WAV 在 win 用 winsound 已经成功,这里主要给 MP3 用)
         if played_by is None:
             try:
