@@ -4436,7 +4436,11 @@ class BrowserWorker(QObject):
         self._rl_current_action = None
         self._rl_current_state = None
         try:
-            if getattr(self, "flow_rl", None):
+            _rl_obj = getattr(self, "flow_rl", None)
+            if _rl_obj is None:
+                self.log_signal.emit(
+                    "⚠ worker 端 self.flow_rl 为 None,RL 决策跳过", "warn")
+            else:
                 # 推断任务类型
                 _label = task.get("label", "") or task.get("target", "")
                 if "章" in _label or task.get("target") == "chapter":
@@ -4452,16 +4456,22 @@ class BrowserWorker(QObject):
                 # 死磕次数(主线程在 task meta 里传)
                 _retry_used = task.get("retry_used", 0)
                 state = (_task_type, _provider, _retry_used)
-                action = self.flow_rl.choose_action(state, task_label=_label)
+                action = _rl_obj.choose_action(state, task_label=_label)
                 self._rl_current_state = state
                 self._rl_current_action = action
                 # 把 action 回传给主线程(供 reward 时使用)
                 task["_rl_action"] = action
                 self.log_signal.emit(
-                    f"🤖 RL 决策: state={state}, action={action}",
+                    f"🤖 RL 决策 [{_task_type}/{_provider}/retry={_retry_used}] "
+                    f"→ send_wait={action.get('send_wait')}s "
+                    f"stable={action.get('stable_threshold')}s "
+                    f"idle×{action.get('post_emit_wait')} "
+                    f"stratB={action.get('use_strategy_b')}",
                     "info")
         except Exception as _e_rl_d:
-            self.log_signal.emit(f"RL 决策异常(用默认):{_e_rl_d}", "warn")
+            self.log_signal.emit(f"⚠ RL 决策异常(用默认):{_e_rl_d}", "warn")
+            import traceback
+            self.log_signal.emit(traceback.format_exc()[-500:], "warn")
 
         # BUG-013 + 搜索 modal 兜底:注入三重防护(Ctrl+K 拦截 + 隐藏搜索按钮 + 自动关 modal)
         # 用 idempotent 的全局 flag 防重复绑定
@@ -6436,10 +6446,15 @@ class MainWindow(QMainWindow):
                     persist_settings=_QS_rl("NovelAI", "FlowRL"))
                 # 把 RL 实例挂给 worker(让 worker 在关键决策点查询/反馈)
                 self.worker.flow_rl = self.flow_rl
+                print(f"[FlowRL] ✓ 已启用,worker.flow_rl 设置成功 "
+                      f"(已加载 {len(self.flow_rl.history)} 条历史 / "
+                      f"{len(self.flow_rl.q_table)} 个 state)")
             except Exception as _e_rl:
-                print(f"[FlowRL] 初始化失败:{_e_rl}")
+                print(f"[FlowRL] ✗ 初始化失败:{_e_rl}")
+                import traceback; traceback.print_exc()
                 self.flow_rl = None
         else:
+            print("[FlowRL] ✗ flow_rl.py 没找到, RL 未启用")
             self.flow_rl = None
 
         # 批量生成状态

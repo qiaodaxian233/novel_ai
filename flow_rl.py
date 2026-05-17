@@ -205,9 +205,15 @@ class FlowRL:
     # ---------- 学习状态总结 ----------
     def summary(self) -> str:
         """返回学习状态摘要,用于在 UI 上显示"""
-        total_decisions = sum(
+        # 已反馈的决策(写进 Q 表的)
+        rewarded_decisions = sum(
             sum(c for _, c in actions.values())
             for actions in self.q_table.values())
+        # 已发生的决策(包括还没反馈的)
+        total_history = len(self.history)
+        # 等待反馈中的决策(决策了但还没 reward)
+        pending_feedback = sum(
+            1 for h in self.history if h.get("reward") is None)
         total_states = len(self.q_table)
         recent = self.history[-20:]
         total_reward = sum(
@@ -216,6 +222,15 @@ class FlowRL:
             sum(h["reward"] for h in recent if h["reward"] is not None)
             / max(1, sum(1 for h in recent if h["reward"] is not None))
         ) if recent else 0.0
+
+        # 最近几次决策详情(看 RL 在干什么)
+        recent_lines = []
+        for h in self.history[-5:]:
+            r = h.get("reward")
+            r_str = f"奖励={r:+.0f}" if r is not None else "(待反馈)"
+            label = h.get("task_label", "") or h.get("state", "")
+            recent_lines.append(
+                f"  · [{h.get('reason', '?')}] {label[:30]} → {r_str}")
 
         # 各 state 当前最优动作
         best_actions_per_state = []
@@ -227,15 +242,35 @@ class FlowRL:
             best_actions_per_state.append(
                 f"  {s_key}:  动作=[{best_a}], Q={best_q:.1f}, n={best_n}")
 
+        diagnosis = ""
+        if total_history == 0 and rewarded_decisions == 0:
+            diagnosis = (
+                "\n⚠ 诊断:RL 完全没被触发\n"
+                "可能原因:\n"
+                "  1. self.worker.flow_rl 没设置上 → 重启程序\n"
+                "  2. _send_prompt 走了不查 RL 的路径\n"
+                "  3. 没用到章节生成功能(只测了别的)\n")
+        elif total_history > 0 and rewarded_decisions == 0:
+            diagnosis = (
+                f"\n⚠ 诊断:决策有({total_history} 次)但反馈没接上\n"
+                "可能原因:\n"
+                "  1. 章节生成没走 _accept_chapter_and_continue\n"
+                "  2. 任务被中断(stop)没正常完成\n"
+                "  3. reward() 调用时异常被吞了\n")
+
         return (
             f"📊 流程 RL 学习状态\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"总决策次数: {total_decisions}\n"
+            f"已发生的决策: {total_history}\n"
+            f"  · 等待反馈中: {pending_feedback}\n"
+            f"  · 已学习(进 Q 表): {rewarded_decisions}\n"
             f"已学习的 state 数: {total_states}\n"
             f"累计奖励: {total_reward:+.1f}\n"
             f"最近 20 次平均奖励: {avg_recent:+.2f}\n"
-            f"\n各 state 最优动作:\n"
-            + "\n".join(best_actions_per_state[:10])
+            + diagnosis
+            + (f"\n最近决策:\n" + "\n".join(recent_lines) if recent_lines else "")
+            + f"\n\n各 state 最优动作:\n"
+            + ("\n".join(best_actions_per_state[:10]) or "  (尚无)")
             + ("\n  ...(更多省略)" if len(best_actions_per_state) > 10 else "")
         )
 
