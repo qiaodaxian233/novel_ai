@@ -4608,6 +4608,9 @@ class BrowserWorker(QObject):
         fast_stable_wait = 1.5
         normal_stable_wait = self.stable_wait
         no_change_streak = 0  # 连续无变化的轮数
+        # 继续生成防死循环计数:连续点击但 AI 没响应 → 3 次后放弃
+        cg_attempts = 0
+        cg_max_attempts = 3
         while time.time() - start < self.max_wait:
             if self._stop.is_set(): return
             cur = self._grab_last_response(prof)
@@ -4615,28 +4618,24 @@ class BrowserWorker(QObject):
             # ★ 优先级最高:扫"继续生成"按钮,每轮 0.3s 都跑(不依赖 stopping/cur 状态)
             #   DeepSeek 显示"继续生成"时 stop 按钮可能还在,所以不能等 stopping=False 才检测
             try:
-                cg_result = self.driver.execute_script(r"""
-                    // 加强点击: dispatchEvent mousedown + mouseup + click (React 兼容)
-                    function strongClick(el) {
-                        const opts = {bubbles: true, cancelable: true, view: window};
-                        try { el.dispatchEvent(new MouseEvent('mousedown', opts)); } catch(e) {}
-                        try { el.dispatchEvent(new MouseEvent('mouseup', opts)); } catch(e) {}
-                        try { el.click(); } catch(e) {}
-                    }
+                # 先找到元素 + 坐标 — 失败原因 1:JS click 在 DeepSeek 上无效,要用真实鼠标
+                cg_target = self.driver.execute_script(r"""
                     // 1) 严格匹配优先(性能最好)
                     const btns = document.querySelectorAll(
                         'button, div[role="button"], span[role="button"]');
                     for (const b of btns) {
                         if (b.offsetParent === null) continue;
                         const t = (b.innerText || b.textContent || '').trim();
-                        // 整词匹配 OR 短文本包含
                         if (t === '继续生成' || t === '继续' ||
                             (t.length <= 10 && t.includes('继续生成'))) {
-                            strongClick(b);
-                            return 'CLICKED:' + t.slice(0, 20);
+                            const r = b.getBoundingClientRect();
+                            // 标记元素 + 返回坐标
+                            b.setAttribute('data-novelai-cg-target', '1');
+                            return {x: r.left + r.width/2, y: r.top + r.height/2,
+                                    way: 'TEXT:' + t.slice(0, 20)};
                         }
                     }
-                    // 2) 兜底:扫所有 <span> 文字 '继续生成',往上找祖先按钮
+                    // 2) 兜底:span 反查祖先
                     const spans = document.querySelectorAll('span');
                     for (const s of spans) {
                         if (s.offsetParent === null) continue;
@@ -4646,23 +4645,75 @@ class BrowserWorker(QObject):
                             for (let i = 0; i < 5 && el; i++) {
                                 if (el.tagName === 'BUTTON' ||
                                     el.getAttribute('role') === 'button') {
-                                    strongClick(el);
-                                    return 'CLICKED_VIA_SPAN';
+                                    const r = el.getBoundingClientRect();
+                                    el.setAttribute('data-novelai-cg-target', '1');
+                                    return {x: r.left + r.width/2, y: r.top + r.height/2,
+                                            way: 'SPAN'};
                                 }
                                 el = el.parentElement;
                             }
                         }
                     }
-                    return '';
+                    return null;
                 """)
-                if cg_result:
-                    self.log_signal.emit(
-                        f"⚙ 检测到「继续生成」→ 已点击 ({cg_result}),重置等待...", "info")
+                if cg_target:
+                    cg_attempts += 1
+                    if cg_attempts > cg_max_attempts:
+                        # 连续点击 3 次都没效果 → 放弃,直接走完成判定
+                        self.log_signal.emit(
+                            f"⚠ 「继续生成」按钮连续点击 {cg_max_attempts} 次都无效,"
+                            f"放弃续写,以当前内容收尾({len(cur or '')} 字符)", "warn")
+                        # 清除标记
+                        try:
+                            self.driver.execute_script(
+                                "document.querySelectorAll('[data-novelai-cg-target]').forEach"
+                                "(e => e.removeAttribute('data-novelai-cg-target'));")
+                        except Exception:
+                            pass
+                        break  # 跳出循环,以当前内容完成
+                    # 用 Selenium ActionChains 模拟真实鼠标点击
+                    try:
+                        from selenium.webdriver.common.action_chains import ActionChains
+                        from selenium.webdriver.common.by import By
+                        target_el = self.driver.find_element(
+                            By.CSS_SELECTOR, '[data-novelai-cg-target="1"]')
+                        ActionChains(self.driver).move_to_element(target_el).pause(0.1).click().perform()
+                        self.log_signal.emit(
+                            f"⚙ 检测到「继续生成」→ ActionChains 点击 (第 {cg_attempts}/{cg_max_attempts} 次,"
+                            f"{cg_target.get('way','')}),重置等待...", "info")
+                    except Exception as _e_ac:
+                        # 退化到 JS dispatchEvent 三重(虽然可能没用,但留个保底)
+                        try:
+                            self.driver.execute_script(r"""
+                                const el = document.querySelector('[data-novelai-cg-target="1"]');
+                                if (!el) return;
+                                const opts = {bubbles: true, cancelable: true, view: window};
+                                el.dispatchEvent(new MouseEvent('pointerdown', opts));
+                                el.dispatchEvent(new MouseEvent('mousedown', opts));
+                                el.dispatchEvent(new MouseEvent('pointerup', opts));
+                                el.dispatchEvent(new MouseEvent('mouseup', opts));
+                                el.dispatchEvent(new MouseEvent('click', opts));
+                            """)
+                        except Exception:
+                            pass
+                        self.log_signal.emit(
+                            f"⚙ ActionChains 失败 ({_e_ac}),降级 JS 点击 (第 {cg_attempts}/{cg_max_attempts} 次)",
+                            "warn")
+                    # 清标记
+                    try:
+                        self.driver.execute_script(
+                            "document.querySelectorAll('[data-novelai-cg-target]').forEach"
+                            "(e => e.removeAttribute('data-novelai-cg-target'));")
+                    except Exception:
+                        pass
                     last_change = time.time()
                     last_text = ""
                     no_change_streak = 0
-                    time.sleep(2.0)  # 给 DeepSeek 处理点击 + 重新开始生成的时间
+                    time.sleep(2.5)  # 给 DeepSeek 更多处理时间
                     continue
+                else:
+                    # 这轮没看到"继续生成"按钮 → 重置 attempts(AI 可能恢复正常生成了)
+                    cg_attempts = 0
             except Exception as _e_cg:
                 pass
 
