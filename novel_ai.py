@@ -7157,10 +7157,20 @@ class GenerationControl(QWidget):
                 # 已经是期望值,不重复应用,但 summary 还是记录(给状态栏看)
                 pass
 
-        # 4. 状态栏提示 3 秒(向 MainWindow 发信号让它显示)
+        # 4. 预报即将使用的选择器档案
+        # _profile_for_url 是按 URL host 匹配的,提示用户切换后将命中哪个档案
+        target_url = AI_URLS.get(name, "")
+        try:
+            prof = _profile_for_url(target_url)
+            prof_name = prof.get("name", "通用")
+        except Exception:
+            prof_name = "?"
+
+        # 5. 状态栏提示 3 秒(向 MainWindow 发信号让它显示)
         summary = ", ".join(
             f"{k}={'✓' if v else '✗'}" for k, v in pref.items())
-        msg = f"📌 已加载 [{name}] 站点偏好: {summary}"
+        msg = (f"📌 [{name}] 偏好已加载: {summary} "
+               f"| 选择器档案将匹配: {prof_name}")
         print(f"[site] {msg}", flush=True)
 
         # 通过 MainWindow.statusBar() 显示
@@ -7170,7 +7180,7 @@ class GenerationControl(QWidget):
             w = w.parent()
         if w and hasattr(w, "statusBar"):
             try:
-                w.statusBar().showMessage(msg, 3000)
+                w.statusBar().showMessage(msg, 5000)   # 5 秒,内容比之前多
             except Exception:
                 pass
 
@@ -12512,11 +12522,8 @@ class MainWindow(QMainWindow):
             if not self.chapters and not self.tab_memory.summaries_edit.toPlainText().strip():
                 return
             self._autosave()
-            # 静默写日志(不弹 UI),便于事后追溯
-            try:
-                self.tab_generation.log("⏱ 60s 定时 autosave 已执行", "info")
-            except Exception:
-                pass
+            # v1.32 dev: 用户说自动保存别显示,只在 console 留痕便于事后追溯
+            print("[autosave] ⏱ 60s 定时 autosave 已执行", flush=True)
         except Exception:
             pass
 
