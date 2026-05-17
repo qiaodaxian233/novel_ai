@@ -2317,9 +2317,13 @@ class CharacterLibrary(QWidget):
             "自动拼到提示词里,有效防止人设崩坏与前后矛盾。")
         btn_row.addWidget(self.chk_inject)
 
-        # BUG-014 配套:每章生成完后自动抽取 6 库(默认关,避免太多 AI 调用)
+        # 每章生成完后自动抽取 6 库(默认勾上,QSettings 记住用户选择)
         self.chk_auto_extract = QCheckBox("✨ 每章生成后自动抽取到 6 库")
-        self.chk_auto_extract.setChecked(False)
+        # 从 QSettings 读上次选择,首次默认 True(推荐使用)
+        from PyQt5.QtCore import QSettings as _QS
+        _settings = _QS("NovelAI", "UserPrefs")
+        self.chk_auto_extract.setChecked(
+            _settings.value("auto_extract_6lib", True, type=bool))
         self.chk_auto_extract.setToolTip(
             "勾选后,每生成完一章,自动调用 AI 提取:\n"
             "  角色 / 关系 / 时间线 / 物品 / 战力 / 伏笔\n"
@@ -2327,6 +2331,10 @@ class CharacterLibrary(QWidget):
             "代价:每章多 1 次 AI 调用。如果你 AI 额度有限,可以关掉,\n"
             "改成手动批量提取(下方「🔍 从已写章节提取角色」按钮)。")
         self.chk_auto_extract.setStyleSheet("QCheckBox { color:#b4884e; font-weight:bold; }")
+        # 状态变化时持久化保存
+        self.chk_auto_extract.stateChanged.connect(
+            lambda s: _QS("NovelAI", "UserPrefs").setValue(
+                "auto_extract_6lib", bool(s)))
         btn_row.addWidget(self.chk_auto_extract)
 
         btn_row.addStretch()
