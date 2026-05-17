@@ -1430,6 +1430,48 @@ class CreationSettings(QWidget):
         except Exception:
             pass
 
+        # 安装实时持久化:任何控件变化立即 save_settings(防止程序异常退出丢失)
+        # save_settings 内部一次性写 30+ 项,200ms 防抖避免连续切换时频繁写盘
+        try:
+            from PyQt5.QtCore import QTimer
+            self._save_timer = QTimer(self)
+            self._save_timer.setSingleShot(True)
+            self._save_timer.setInterval(200)
+            self._save_timer.timeout.connect(self.save_settings)
+            def _trig():
+                if hasattr(self, "_save_timer"):
+                    self._save_timer.start()
+            # 注册所有需要持久化的控件
+            for group in (self.platform_group, self.audience_group, self.density_group,
+                          self.growth_group, self.conflict_group, self.detail_group,
+                          self.rhythm_group, self.mode_group, self.ai_group):
+                try:
+                    group.buttonClicked.connect(lambda *_: _trig())
+                except Exception:
+                    pass
+            for d in (self.genre_checks, self.ending_checks, self.golden_checks,
+                      self.persona_checks):
+                for cb in d.values():
+                    try:
+                        cb.stateChanged.connect(lambda *_: _trig())
+                    except Exception:
+                        pass
+            self.era_combo.currentTextChanged.connect(lambda *_: _trig())
+            self.era_custom.textChanged.connect(lambda *_: _trig())
+            self.chapter_custom.valueChanged.connect(lambda *_: _trig())
+            self.words_custom.valueChanged.connect(lambda *_: _trig())
+            self.prompt_offset.valueChanged.connect(lambda *_: _trig())
+            self.custom_url.textChanged.connect(lambda *_: _trig())
+            self.delay_check.stateChanged.connect(lambda *_: _trig())
+            self.pangu_check.stateChanged.connect(lambda *_: _trig())
+            for sl in self.style_sliders.values():
+                try:
+                    sl.valueChanged.connect(lambda *_: _trig())
+                except Exception:
+                    pass
+        except Exception as _e_persist:
+            print(f"[持久化注册] 部分控件挂载失败,不影响功能:{_e_persist}")
+
     # ---- 联动 ----
     def _sync_chapter_preset(self, checked):
         if not checked: return
@@ -2306,15 +2348,19 @@ class CharacterLibrary(QWidget):
         self._build_coolpts_tab()    # 新增:爽点编年
         
         # 底部: 操作按钮
+        from PyQt5.QtCore import QSettings as _QS_charlib
+        _cls = _QS_charlib("NovelAI", "CharLib")
         btn_row = QHBoxLayout()
         self.chk_inject = QCheckBox("写章节时自动注入到提示词")
-        self.chk_inject.setChecked(True)
+        self.chk_inject.setChecked(_cls.value("inject", True, type=bool))
         self.chk_inject.setToolTip(
             "勾选后,每次生成新章节会把:\n"
             " - 本章可能出场的角色档案\n"
             " - 主角当前状态(境界/位置/装备)\n"
             " - 待回收的伏笔\n"
             "自动拼到提示词里,有效防止人设崩坏与前后矛盾。")
+        self.chk_inject.stateChanged.connect(
+            lambda v: _QS_charlib("NovelAI", "CharLib").setValue("inject", bool(v)))
         btn_row.addWidget(self.chk_inject)
 
         # 每章生成完后自动抽取 6 库(默认勾上,QSettings 记住用户选择)
@@ -3096,14 +3142,23 @@ class CanonGuard(QWidget):
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        # 开关行
+        # 开关行 — 加 QSettings 持久化
+        from PyQt5.QtCore import QSettings as _QS_canon
+        _cs = _QS_canon("NovelAI", "CanonTab")
         crow = QHBoxLayout()
         self.chk_inject = QCheckBox("写章节前自动注入 Canon 约束")
-        self.chk_inject.setChecked(True)
+        self.chk_inject.setChecked(_cs.value("inject", True, type=bool))
         self.chk_audit = QCheckBox("写完后自动稽核(高严重度违反 → 触发死磕重写)")
-        self.chk_audit.setChecked(True)
+        self.chk_audit.setChecked(_cs.value("audit", True, type=bool))
         self.chk_extract = QCheckBox("写完后自动从章节抽取新 Canon")
-        self.chk_extract.setChecked(True)
+        self.chk_extract.setChecked(_cs.value("extract", True, type=bool))
+        # 实时写入
+        self.chk_inject.stateChanged.connect(
+            lambda v: _QS_canon("NovelAI", "CanonTab").setValue("inject", bool(v)))
+        self.chk_audit.stateChanged.connect(
+            lambda v: _QS_canon("NovelAI", "CanonTab").setValue("audit", bool(v)))
+        self.chk_extract.stateChanged.connect(
+            lambda v: _QS_canon("NovelAI", "CanonTab").setValue("extract", bool(v)))
         crow.addWidget(self.chk_inject); crow.addWidget(self.chk_audit)
         crow.addWidget(self.chk_extract); crow.addStretch()
         layout.addLayout(crow)
@@ -5828,6 +5883,48 @@ class GenerationControl(QWidget):
                 "安装后重启本软件。", "error")
 
         self.log_signal.connect(self._append_log)
+
+        # ─── 全部 UI 偏好持久化(QSettings 实时写入,不再等关程序)──
+        self._install_persistence()
+
+    def _install_persistence(self):
+        """把本 Tab 所有需要持久化的控件注册到 QSettings 实时写入。
+        启动时自动恢复 + 任何变更立即保存(防止程序异常退出丢设置)。"""
+        from PyQt5.QtCore import QSettings as _QS
+        s = _QS("NovelAI", "GenerationControl")
+
+        # 格式:(key, widget, getter_method, setter_method, signal_name, default)
+        items = [
+            # CheckBox 类
+            ("batch.batch_count", self.batch_count, "value", "setValue", "valueChanged", 15),
+            ("batch.retry_count", self.retry_count, "value", "setValue", "valueChanged", 10),
+            ("batch.quality_threshold", self.quality_threshold, "value", "setValue", "valueChanged", 75),
+            ("crit.words", self.chk_crit_words, "isChecked", "setChecked", "stateChanged", True),
+            ("crit.hook", self.chk_crit_hook, "isChecked", "setChecked", "stateChanged", True),
+            ("crit.canon", self.chk_crit_canon, "isChecked", "setChecked", "stateChanged", True),
+            ("crit.rhythm", self.chk_crit_rhythm, "isChecked", "setChecked", "stateChanged", False),
+            ("crit.char", self.chk_crit_char, "isChecked", "setChecked", "stateChanged", False),
+        ]
+        # 自动保存相关 checkbox(如果存在)
+        for attr in ("chk_autosave_proj", "chk_autosave_txt", "chk_auto_grab"):
+            if hasattr(self, attr):
+                w = getattr(self, attr)
+                items.append((f"save.{attr}", w, "isChecked", "setChecked", "stateChanged", True))
+
+        for key, widget, getter, setter, sig_name, default in items:
+            try:
+                # 1) 启动恢复
+                stored = s.value(key, default,
+                                 type=int if isinstance(default, int) else bool)
+                getattr(widget, setter)(stored)
+                # 2) 注册变更监听 → 实时写入
+                signal = getattr(widget, sig_name)
+                signal.connect(
+                    lambda _v=None, k=key, w=widget, g=getter:
+                    _QS("NovelAI", "GenerationControl").setValue(k, getattr(w, g)()))
+            except Exception as _e:
+                # 哪个控件不存在就跳过,不影响其他
+                pass
 
     def selected_kernel_channel(self):
         """1=Chrome 调试 attach / 2=系统 Edge (standalone 已移除)"""
