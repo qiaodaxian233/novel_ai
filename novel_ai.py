@@ -5065,9 +5065,13 @@ class BrowserWorker(QObject):
         # 必须用 React 的内部 setter 才能让 state 更新
         try:
             # ★ DeepSeek 深度思考模式:发送前检查并启用 R1 按钮
-            #   通过 _meta 字段传过来(send_to_ai 时传入)
-            if (prof.get("name", "").lower().startswith("deepseek")
-                    and self._deep_think_enabled):
+            #   (这里没 prof 参数,通过当前 URL 重算)
+            try:
+                _cur_prof = _profile_for_url(self._current_url())
+            except Exception:
+                _cur_prof = {"name": ""}
+            if (_cur_prof.get("name", "").lower().startswith("deepseek")
+                    and getattr(self, "_deep_think_enabled", False)):
                 try:
                     dt_state = self.driver.execute_script(r"""
                         // DeepSeek "深度思考" 按钮特征: 含 "深度思考" 文本
