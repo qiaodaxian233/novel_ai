@@ -5422,39 +5422,55 @@ class BrowserWorker(QObject):
             time.sleep(0.2)
             _AC(self.driver).send_keys(_K.RETURN).perform()
             self.log_signal.emit("已按 Enter 发送，等待响应...", "info")
-            time.sleep(1.5)
-            _after_cnt = self.driver.execute_script(_count_js) or 0
-            if _after_cnt > _before_cnt:
-                self.log_signal.emit(f"✓ 发送成功(消息数 {_before_cnt}→{_after_cnt})", "info")
-                return True
-            # ★ 关键修复:即使计数没变,如果"停止按钮"出现了 → Enter 已生效,不要走策略 B
-            #   (策略 B 可能误点停止按钮,把刚发的消息停掉)
-            try:
-                ai_writing = self.driver.execute_script(r"""
-                    // 看 textarea 旁边是不是有 stop 按钮(SVG rect 方块)或 aria-label 含停止
-                    const ta = document.querySelector('textarea');
-                    if (!ta) return false;
-                    let c = ta.parentElement;
-                    for (let i = 0; i < 5 && c; i++) {
-                        // SVG rect (方块图标 = stop)
-                        const stopByRect = c.querySelector('div[role="button"]:has(svg rect)');
-                        if (stopByRect && stopByRect.offsetParent !== null) return true;
-                        // aria-label 含停止
-                        const stopByLabel = c.querySelector(
-                            'div[role="button"][aria-label*="停止"], button[aria-label*="停止"]');
-                        if (stopByLabel && stopByLabel.offsetParent !== null) return true;
-                        c = c.parentElement;
-                    }
-                    return false;
-                """)
-                if ai_writing:
+            # ★ 关键修复:Enter 后给 DeepSeek 更长时间响应(尤其是冷启动 / 长 prompt)
+            #   分阶段等待 — 1.5s / 3s / 5s 各检查一次,任一通过就 return
+            for wait_step in (1.5, 1.5, 2.0):
+                time.sleep(wait_step)
+                _after_cnt = self.driver.execute_script(_count_js) or 0
+                # 检测 1:消息计数增加(最稳)
+                if _after_cnt > _before_cnt:
                     self.log_signal.emit(
-                        f"✓ Enter 已发送(检测到 AI 正在写,计数器假警 {_before_cnt}→{_after_cnt})",
-                        "info")
+                        f"✓ 发送成功(消息数 {_before_cnt}→{_after_cnt})", "info")
                     return True
-            except Exception:
-                pass
-            self.log_signal.emit(f"Enter后消息数未增加({_before_cnt}→{_after_cnt})，尝试按钮", "warn")
+                # 检测 2:AI 正在写(stop 按钮 / 新内容出现)
+                try:
+                    ai_writing = self.driver.execute_script(r"""
+                        const ta = document.querySelector('textarea');
+                        if (!ta) return false;
+                        let c = ta.parentElement;
+                        for (let i = 0; i < 5 && c; i++) {
+                            const stopByRect = c.querySelector('div[role="button"]:has(svg rect)');
+                            if (stopByRect && stopByRect.offsetParent !== null) return true;
+                            const stopByLabel = c.querySelector(
+                                'div[role="button"][aria-label*="停止"], button[aria-label*="停止"]');
+                            if (stopByLabel && stopByLabel.offsetParent !== null) return true;
+                            c = c.parentElement;
+                        }
+                        return false;
+                    """)
+                    if ai_writing:
+                        self.log_signal.emit(
+                            f"✓ Enter 已发送(检测到 AI 正在写,计数器假警 {_before_cnt}→{_after_cnt})",
+                            "info")
+                        return True
+                except Exception:
+                    pass
+                # 检测 3:textarea 是否被清空(发送后 DeepSeek 会清空输入)
+                try:
+                    ta_empty = self.driver.execute_script(r"""
+                        const ta = document.querySelector('textarea');
+                        return ta && ta.value.trim() === '';
+                    """)
+                    if ta_empty:
+                        self.log_signal.emit(
+                            f"✓ Enter 已发送(textarea 已清空,确认发送)", "info")
+                        return True
+                except Exception:
+                    pass
+            # 全部检测都失败 → 真的没发出去,日志告警 + 走策略 B
+            self.log_signal.emit(
+                f"Enter 后 5s 仍未确认发送({_before_cnt}→{_after_cnt} / textarea 未清空 / 无 AI 写迹象)，尝试按钮",
+                "warn")
         except Exception as e:
             self.log_signal.emit(f"Enter发送异常: {e}", "warn")
 
@@ -7166,6 +7182,23 @@ class MainWindow(QMainWindow):
             return
         target_words = meta.get("target_words", 3000)
         min_words = meta.get("min_words", int(target_words * 0.85))
+
+        # ★ BUG-027 防御:DeepSeek 串行任务有时回复抓取错位 → 抓到的不是章节,
+        #   是上一轮 JSON 稽核的残留 / 短回复。如果章节正文 < 500 字 且 retry_left > 0,
+        #   认定是 AI 没听懂指令的废话回复,直接重发原指令,不算章节
+        ck_content_len = len(content.strip()) if content else 0
+        if (ck_content_len < 500 and meta.get("retry_left", 0) > 0
+                and meta.get("target") != "golden_three"):
+            self.tab_generation.log(
+                f"⚠ 收到异常短的'章节回复'({ck_content_len} 字),疑似抓取错位/AI 误解指令,"
+                f"重发(剩余 {meta.get('retry_left', 0)} 次)",
+                "warn")
+            # 简单粗暴 — 重发死磕 prompt(不抓 JSON 校验)
+            new_meta = dict(meta)
+            new_meta["_held_content"] = ""  # 不存
+            self._retry_chapter_with_reasons(
+                new_meta, ["内容明显异常(疑似抓取错位),重发"])
+            return
 
         # ---- 即时校验(无 AI 调用)----
         instant_issues, need_ai_audit = self._check_chapter_quality(
