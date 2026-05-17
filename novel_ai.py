@@ -819,9 +819,45 @@ class ThemeManager:
 
     @classmethod
     def apply(cls, app, name):
-        """app 是 QApplication 实例,name = 'light' 或 'dark'"""
+        """app 是 QApplication 实例,name = 'light' 或 'dark'
+        v1.33 BUG-047: Fusion style 的 background/text 受 QPalette 控制,
+        QSS 优先级低 → 必须同时设 QPalette + QSS 才能完全切换主题。
+        """
+        from PyQt5.QtGui import QPalette, QColor
+        from PyQt5.QtCore import Qt
+        # 1. 设 QPalette(Fusion style 听这个)
+        palette = QPalette()
+        if name == "dark":
+            # VSCode Dark 同款色板
+            palette.setColor(QPalette.Window,           QColor("#1e1e1e"))   # 主窗口背景
+            palette.setColor(QPalette.WindowText,       QColor("#d4d4d4"))   # 主文字
+            palette.setColor(QPalette.Base,             QColor("#1a1a1a"))   # 输入框/编辑器底
+            palette.setColor(QPalette.AlternateBase,    QColor("#252526"))   # 表格隔行
+            palette.setColor(QPalette.ToolTipBase,      QColor("#2d2d30"))
+            palette.setColor(QPalette.ToolTipText,      QColor("#d4d4d4"))
+            palette.setColor(QPalette.Text,             QColor("#d4d4d4"))   # 输入框文字
+            palette.setColor(QPalette.Button,           QColor("#3c3c3c"))   # 按钮底
+            palette.setColor(QPalette.ButtonText,       QColor("#d4d4d4"))
+            palette.setColor(QPalette.BrightText,       QColor("#ffffff"))
+            palette.setColor(QPalette.Link,             QColor("#3794ff"))
+            palette.setColor(QPalette.Highlight,        QColor("#094771"))   # 选中蓝
+            palette.setColor(QPalette.HighlightedText,  QColor("#ffffff"))
+            # Disabled 状态(防止灰按钮看不清)
+            palette.setColor(QPalette.Disabled, QPalette.WindowText,
+                             QColor("#787878"))
+            palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#787878"))
+            palette.setColor(QPalette.Disabled, QPalette.ButtonText,
+                             QColor("#787878"))
+        else:
+            # light = Fusion 默认浅色(不强制改,用 standardPalette)
+            from PyQt5.QtWidgets import QStyle
+            palette = app.style().standardPalette()
+        app.setPalette(palette)
+
+        # 2. 再叠 QSS(细节:滚动条/表头/边框/hover)
         qss = cls.DARK_QSS if name == "dark" else cls.LIGHT_QSS
         app.setStyleSheet(qss)
+
         try:
             from PyQt5.QtCore import QSettings
             QSettings("NovelAI", "UI").setValue("theme", name)
