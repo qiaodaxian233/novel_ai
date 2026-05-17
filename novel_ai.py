@@ -4612,6 +4612,60 @@ class BrowserWorker(QObject):
             if self._stop.is_set(): return
             cur = self._grab_last_response(prof)
 
+            # ★ 优先级最高:扫"继续生成"按钮,每轮 0.3s 都跑(不依赖 stopping/cur 状态)
+            #   DeepSeek 显示"继续生成"时 stop 按钮可能还在,所以不能等 stopping=False 才检测
+            try:
+                cg_result = self.driver.execute_script(r"""
+                    // 加强点击: dispatchEvent mousedown + mouseup + click (React 兼容)
+                    function strongClick(el) {
+                        const opts = {bubbles: true, cancelable: true, view: window};
+                        try { el.dispatchEvent(new MouseEvent('mousedown', opts)); } catch(e) {}
+                        try { el.dispatchEvent(new MouseEvent('mouseup', opts)); } catch(e) {}
+                        try { el.click(); } catch(e) {}
+                    }
+                    // 1) 严格匹配优先(性能最好)
+                    const btns = document.querySelectorAll(
+                        'button, div[role="button"], span[role="button"]');
+                    for (const b of btns) {
+                        if (b.offsetParent === null) continue;
+                        const t = (b.innerText || b.textContent || '').trim();
+                        // 整词匹配 OR 短文本包含
+                        if (t === '继续生成' || t === '继续' ||
+                            (t.length <= 10 && t.includes('继续生成'))) {
+                            strongClick(b);
+                            return 'CLICKED:' + t.slice(0, 20);
+                        }
+                    }
+                    // 2) 兜底:扫所有 <span> 文字 '继续生成',往上找祖先按钮
+                    const spans = document.querySelectorAll('span');
+                    for (const s of spans) {
+                        if (s.offsetParent === null) continue;
+                        const txt = (s.textContent || '').trim();
+                        if (txt === '继续生成') {
+                            let el = s.parentElement;
+                            for (let i = 0; i < 5 && el; i++) {
+                                if (el.tagName === 'BUTTON' ||
+                                    el.getAttribute('role') === 'button') {
+                                    strongClick(el);
+                                    return 'CLICKED_VIA_SPAN';
+                                }
+                                el = el.parentElement;
+                            }
+                        }
+                    }
+                    return '';
+                """)
+                if cg_result:
+                    self.log_signal.emit(
+                        f"⚙ 检测到「继续生成」→ 已点击 ({cg_result}),重置等待...", "info")
+                    last_change = time.time()
+                    last_text = ""
+                    no_change_streak = 0
+                    time.sleep(2.0)  # 给 DeepSeek 处理点击 + 重新开始生成的时间
+                    continue
+            except Exception as _e_cg:
+                pass
+
             # 完成信号 1: 按钮快照恢复(AI 写完后,textarea 旁边按钮 SVG 变回发送前的样子)
             # 这是最稳的完成信号:不依赖任何 class/aria-label,只看按钮 SVG 形状指纹
             # AI 在写时,纸飞机(发送)→ 方块(停止),所以指纹会变;
@@ -4671,63 +4725,9 @@ class BrowserWorker(QObject):
             except Exception:
                 pass
 
-            # stop 不可见(按钮恢复) + 抓到内容 + 内容跟上次相同 → 立即完成
-            # ★★ 但要先检查 "继续生成" 按钮:DeepSeek 写到 token 上限会出现这个按钮
-            #    出现就自动点击 + 继续等(防止章节被截断 / 出现"继续生成"卡顿)
+            # stop 不可见(按钮恢复) + 抓到内容 + 内容跟上次相同 → 判定可能完成
+            # ★★ 但要 0.8s 保险确认按钮快照没"延迟恢复"
             if not stopping and cur and len(cur) > 30 and cur == last_text:
-                # 检查"继续生成"按钮(DeepSeek 特征)
-                # 用户给的真实 HTML: <button class="ds-basic-button..."><span>继续生成</span>...</button>
-                # 严格 === 可能因 innerText 周围空白匹配失败,改成 contains + 长度限制
-                continue_clicked = False
-                try:
-                    continue_clicked = self.driver.execute_script(r"""
-                        // 1) 优先用最精确的特征 button 含 span 子节点文本 '继续生成'
-                        const allBtns = document.querySelectorAll(
-                            'button, div[role="button"], span[role="button"]');
-                        for (const b of allBtns) {
-                            if (b.offsetParent === null) continue;
-                            // 看自己 + 直接 span 子节点的文字(过滤其他嵌套)
-                            const t = (b.innerText || b.textContent || '').trim();
-                            // 严格 == 失败时,容错 includes
-                            if (t === '继续生成' || t === '继续' ||
-                                (t.length <= 8 && t.includes('继续生成'))) {
-                                b.click();
-                                return 'CLICKED_CONTINUE:' + t.slice(0, 20);
-                            }
-                        }
-                        // 2) 退路:扫所有 span 含 "继续生成" 文字,往上找最近的 button/role=button 点击
-                        const spans = document.querySelectorAll('span');
-                        for (const s of spans) {
-                            if (s.offsetParent === null) continue;
-                            const txt = (s.textContent || '').trim();
-                            if (txt === '继续生成') {
-                                // 往上找最近的可点击祖先
-                                let el = s.parentElement;
-                                for (let i = 0; i < 5 && el; i++) {
-                                    if (el.tagName === 'BUTTON' ||
-                                        el.getAttribute('role') === 'button') {
-                                        el.click();
-                                        return 'CLICKED_VIA_SPAN';
-                                    }
-                                    el = el.parentElement;
-                                }
-                            }
-                        }
-                        return '';
-                    """)
-                except Exception:
-                    pass
-                if continue_clicked:
-                    self.log_signal.emit(
-                        f"⚙ 检测到「继续生成」按钮 → 已自动点击 ({continue_clicked}),继续等待...",
-                        "info")
-                    # 重置稳定时间,让循环继续等 AI 接着写
-                    last_change = time.time()
-                    last_text = ""  # 强制重新匹配,因为接下来会有新内容
-                    no_change_streak = 0
-                    time.sleep(2)  # 给 DeepSeek 处理点击 + 重新开始生成的时间
-                    continue
-                # 没"继续生成"按钮 → 真完成
                 # ★★ 保险减速:写完后再等 0.8s,确认按钮快照没"延迟恢复"
                 #    (有些机器 DeepSeek 渲染慢,按钮变回纸飞机后 AI 还在写最后几句)
                 self.log_signal.emit(
