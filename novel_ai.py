@@ -4430,6 +4430,39 @@ class BrowserWorker(QObject):
         prof = _profile_for_url(self._current_url())
         self.log_signal.emit(f"使用档案:{prof['name']}", "info")
 
+        # ★★★ RL 决策点:根据当前任务类型查 Q 表选最优参数
+        #   state = (任务类型, AI 供应商, 死磕次数)
+        #   action = {send_wait, stable_threshold, post_emit_wait, use_strategy_b}
+        self._rl_current_action = None
+        self._rl_current_state = None
+        try:
+            if getattr(self, "flow_rl", None):
+                # 推断任务类型
+                _label = task.get("label", "") or task.get("target", "")
+                if "章" in _label or task.get("target") == "chapter":
+                    _task_type = "chapter"
+                elif "稽核" in _label or "评分" in _label or "json" in _label.lower():
+                    _task_type = "json_short"
+                elif task.get("target") == "golden_three":
+                    _task_type = "golden_three"
+                else:
+                    _task_type = "other"
+                # AI 供应商(从 URL 推断)
+                _provider = (prof.get("name", "") or "unknown").lower().split()[0]
+                # 死磕次数(主线程在 task meta 里传)
+                _retry_used = task.get("retry_used", 0)
+                state = (_task_type, _provider, _retry_used)
+                action = self.flow_rl.choose_action(state, task_label=_label)
+                self._rl_current_state = state
+                self._rl_current_action = action
+                # 把 action 回传给主线程(供 reward 时使用)
+                task["_rl_action"] = action
+                self.log_signal.emit(
+                    f"🤖 RL 决策: state={state}, action={action}",
+                    "info")
+        except Exception as _e_rl_d:
+            self.log_signal.emit(f"RL 决策异常(用默认):{_e_rl_d}", "warn")
+
         # BUG-013 + 搜索 modal 兜底:注入三重防护(Ctrl+K 拦截 + 隐藏搜索按钮 + 自动关 modal)
         # 用 idempotent 的全局 flag 防重复绑定
         self._inject_kbd_guard()
@@ -4660,7 +4693,15 @@ class BrowserWorker(QObject):
         # 长章节(>=1000 字)→ 用 self.stable_wait(默认 4s)防 AI 卡顿误判
         ultrafast_stable_wait = 0.9
         fast_stable_wait = 1.5
-        normal_stable_wait = self.stable_wait
+        # RL 接管"长章节稳定阈值"(>= 1000 字时用,默认 4s 防卡顿误判)
+        try:
+            if getattr(self, "_rl_current_action", None):
+                normal_stable_wait = float(
+                    self._rl_current_action.get("stable_threshold", self.stable_wait))
+            else:
+                normal_stable_wait = self.stable_wait
+        except Exception:
+            normal_stable_wait = self.stable_wait
         no_change_streak = 0  # 连续无变化的轮数
         # 继续生成防死循环计数:连续点击但 AI 没响应 → 3 次后放弃
         cg_attempts = 0
@@ -4723,6 +4764,15 @@ class BrowserWorker(QObject):
                         self.log_signal.emit(
                             f"⚠ 「继续生成」按钮连续点击 {cg_max_attempts} 次都无效,"
                             f"放弃续写,以当前内容收尾({len(cur or '')} 字符)", "warn")
+                        # ★ RL 反馈:死循环 -30 分(避免下次重复)
+                        try:
+                            if getattr(self, "flow_rl", None) and self._rl_current_state:
+                                from flow_rl import REWARDS as _R
+                                self.flow_rl.reward(
+                                    self._rl_current_state, self._rl_current_action,
+                                    _R["continue_gen_failed"], "继续生成连点 3 次无效")
+                        except Exception:
+                            pass
                         # 清除标记
                         try:
                             self.driver.execute_script(
@@ -4920,8 +4970,15 @@ class BrowserWorker(QObject):
                 """)
                 if is_idle:
                     consec_idle += 1
-                    # 连续 3 次(0.6s)都空闲才算真空闲(防误判)
-                    if consec_idle >= 3:
+                    # 用 RL 推荐的连续次数(默认 3,= 0.6s)
+                    _rl_post_wait = 3
+                    try:
+                        if getattr(self, "_rl_current_action", None):
+                            _rl_post_wait = int(
+                                self._rl_current_action.get("post_emit_wait", 3))
+                    except Exception:
+                        pass
+                    if consec_idle >= _rl_post_wait:
                         break
                 else:
                     consec_idle = 0
@@ -5528,7 +5585,19 @@ class BrowserWorker(QObject):
             self.log_signal.emit("已按 Enter 发送，等待响应...", "info")
             # ★ 关键修复:Enter 后给 DeepSeek 更长时间响应(尤其是冷启动 / 长 prompt)
             #   分阶段等待 — 1.5s / 3s / 5s 各检查一次,任一通过就 return
-            for wait_step in (1.5, 1.5, 2.0):
+            # RL 推荐的 send_wait(总时长),拆分为 3 段
+            _rl_total_wait = 5.0  # 默认 5s 分 1.5+1.5+2
+            try:
+                if getattr(self, "_rl_current_action", None):
+                    _rl_total_wait = float(
+                        self._rl_current_action.get("send_wait", 3.0))
+            except Exception:
+                pass
+            # 把总时长拆成 3 段,前两段各 30%,最后一段 40%
+            _step1 = _rl_total_wait * 0.3
+            _step2 = _rl_total_wait * 0.3
+            _step3 = _rl_total_wait * 0.4
+            for wait_step in (_step1, _step2, _step3):
                 time.sleep(wait_step)
                 _after_cnt = self.driver.execute_script(_count_js) or 0
                 # 检测 1:消息计数增加(最稳)
@@ -5577,6 +5646,16 @@ class BrowserWorker(QObject):
                 "warn")
         except Exception as e:
             self.log_signal.emit(f"Enter发送异常: {e}", "warn")
+
+        # ★ RL 控制:如果 RL 学到"这个 state 不该走策略 B" → 直接 return False
+        try:
+            if (getattr(self, "_rl_current_action", None)
+                    and self._rl_current_action.get("use_strategy_b") is False):
+                self.log_signal.emit(
+                    "🤖 RL 建议跳过策略 B(避免误点 stop),return False", "info")
+                return False
+        except Exception:
+            pass
 
         # 策略B: 强制点击按钮(DeepSeek + ChatGPT 通用,加 textarea 邻近按钮策略)
         try:
@@ -7096,6 +7175,10 @@ class MainWindow(QMainWindow):
             "url": url,
             "type_delay_ms": type_delay,
             "allow_attachment": allow_att,
+            # ★ 给 RL 决策用的上下文
+            "label": label,
+            "target": target,
+            "retry_used": extra.get("retry_used", 0),
         })
 
     def _on_response_received(self, task_id, content):
