@@ -217,6 +217,42 @@ class CritiqueRulesInjectStep(PipelineStep):
         done()
 
 
+class CharLibInjectStep(PipelineStep):
+    """v1.23 BUG-041:注入角色与世界 6 库(角色档案/关系/物品/伏笔/钩子/爽点)
+
+    数据源:tab_charlib(CharacterLibrary)的 build_inject_block 方法
+    跟旧路径(if not workflow)里的 charlib_block 注入完全等价
+
+    之前 workflow 完全跳过 6 库注入 —— 用户开了 ✨ 自动抽取也白搭,
+    AI 永远看不到角色与世界的结构化数据,人物语气和设定全凭运气。
+    """
+    name = "charlib_inject"
+
+    def __init__(self, main_window):
+        self._mw = main_window
+
+    @property
+    def enabled(self) -> bool:
+        return (hasattr(self._mw, "tab_charlib") and
+                hasattr(self._mw.tab_charlib, "chk_inject") and
+                self._mw.tab_charlib.chk_inject.isChecked())
+
+    def run(self, ctx: PipelineContext, done):
+        try:
+            block = self._mw.tab_charlib.build_inject_block(
+                current_chapter=ctx.ch_num)
+            if block:
+                ctx.append_prompt(
+                    block, "角色与世界 6 库", self._mw.tab_generation.log)
+        except Exception as e:
+            try:
+                self._mw.tab_generation.log(
+                    f"⚠ CharLibInjectStep 注入失败: {e}", "warn")
+            except Exception:
+                pass
+        done()
+
+
 # ======================================================================
 # 4.  Phase 3: POST_WRITE Steps — 校验
 # ======================================================================
@@ -362,7 +398,8 @@ class CharacterScoreStep(PipelineStep):
 
     def run(self, ctx: PipelineContext, done):
         from novel_ai import PROMPTS
-        chars = self._mw.tab_memory.chars_edit.toPlainText().strip() or "(暂无)"
+        # v1.23 BUG-041:用统一接口,合并 6 库 + memory prose
+        chars = self._mw.get_unified_chars_summary() or "(暂无)"
         prompt = PROMPTS["critique_character"].format(
             characters=chars, content=ctx.content[:6000])
 
@@ -539,6 +576,8 @@ class GenerationWorkflow:
         # --- PRE_WRITE ---
         self._registry.register("pre_write", MemoryInjectStep(mw),        priority=10)
         self._registry.register("pre_write", CanonInjectStep(mw),         priority=20)
+        # v1.23 BUG-041:补 6 库注入(之前 workflow 路径完全漏注入这块)
+        self._registry.register("pre_write", CharLibInjectStep(mw),       priority=25)
         self._registry.register("pre_write", CritiqueRulesInjectStep(mw), priority=30)
 
         # --- POST_WRITE ---

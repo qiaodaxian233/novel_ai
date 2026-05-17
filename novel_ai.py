@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.22"
+APP_VERSION = "v1.23"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -8190,7 +8190,8 @@ class MainWindow(QMainWindow):
             self._send_to_ai(prompt, f"节奏稽核-第{ch_num}章",
                              target="critique_rhythm", ch_num=ch_num)
         elif next_kind == "character":
-            chars = self.tab_memory.chars_edit.toPlainText().strip() or "(暂无)"
+            # v1.23 BUG-041:用统一接口,合并 6 库 + memory prose 两个数据源
+            chars = self.get_unified_chars_summary() or "(暂无)"
             prompt = PROMPTS["critique_character"].format(
                 characters=chars, content=content[:6000])
             self._pending_task_target = {
@@ -8716,6 +8717,42 @@ class MainWindow(QMainWindow):
                 min_words=int(s.get_words_per_chapter() * 0.9),
                 target_words=s.get_words_per_chapter(),
             )
+            # v1.23 BUG-041:补齐 _send_next_chapter 实际会 append 的所有内容
+            # 让用户能看到真实发给 AI 的完整 prompt
+            try:
+                _full = s.get_full_settings_block()
+                preview_prompt += f"\n\n【完整设定参考】\n{_full}"
+            except Exception:
+                pass
+            # 对话记忆
+            try:
+                if hasattr(self, "tab_memory") and \
+                        getattr(self.tab_memory, "auto_inject", None) and \
+                        self.tab_memory.auto_inject.isChecked():
+                    _mem = self._build_memory_block()
+                    if _mem:
+                        preview_prompt += f"\n\n{_mem}"
+            except Exception:
+                pass
+            # Canon 设定
+            try:
+                if hasattr(self, "tab_canon") and \
+                        getattr(self.tab_canon, "chk_inject", None) and \
+                        self.tab_canon.chk_inject.isChecked():
+                    _can = self._build_canon_block()
+                    if _can:
+                        preview_prompt += f"\n\n{_can}"
+            except Exception:
+                pass
+            # 角色与世界 6 库
+            try:
+                if hasattr(self, "tab_charlib"):
+                    _cl = self.tab_charlib.build_inject_block(
+                        current_chapter=cur_idx + 2)
+                    if _cl:
+                        preview_prompt += _cl
+            except Exception:
+                pass
         except Exception as e:
             preview_prompt = f"[预览失败] PROMPTS['chapter'].format 报错: {e}"
 
@@ -10274,6 +10311,53 @@ class MainWindow(QMainWindow):
             label="记忆恢复·上下文同步",
             target="conv_restore",
         )
+
+    def get_unified_chars_summary(self):
+        """v1.23 BUG-041:统一的角色档案数据接口
+
+        合并两个数据源(避免 critique_character 永远 (暂无)):
+        1. tab_charlib(6 库自动抽取的结构化数据)— 优先
+        2. tab_memory.chars_edit(对话记忆 prose 文本)— 兜底
+
+        如果两个都空返回 "" — 调用方自己决定显示 "(暂无)" 还是跳过整段
+        """
+        lines = []
+        # 优先 1:6 库角色表
+        try:
+            if hasattr(self, "tab_charlib") and hasattr(self.tab_charlib, "tbl_chars"):
+                cl = self.tab_charlib
+                rows = []
+                for r in range(cl.tbl_chars.rowCount()):
+                    cells = [
+                        cl.tbl_chars.item(r, c).text() if cl.tbl_chars.item(r, c) else ""
+                        for c in range(8)
+                    ]
+                    name, role, look, pers, mark, ability, state, _ = cells
+                    if not name.strip():
+                        continue
+                    bits = []
+                    if role:    bits.append(f"定位-{role}")
+                    if look:    bits.append(f"外貌-{look}")
+                    if pers:    bits.append(f"性格-{pers}")
+                    if mark:    bits.append(f"标志-{mark}")
+                    if ability: bits.append(f"能力-{ability}")
+                    if state:   bits.append(f"状态-{state}")
+                    rows.append(f"  · {name}:" + "; ".join(bits))
+                if rows:
+                    lines.append("[来源:角色与世界 6 库,共 {} 人]".format(len(rows)))
+                    lines.extend(rows[:10])   # 最多 10 人,避免过长
+        except Exception:
+            pass
+        # 兜底 2:对话记忆 prose
+        try:
+            prose = self.tab_memory.chars_edit.toPlainText().strip()
+            if prose:
+                if lines:
+                    lines.append("\n[来源:对话记忆 prose 补充]")
+                lines.append(prose)
+        except Exception:
+            pass
+        return "\n".join(lines)
 
     def _build_memory_block(self):
         """
