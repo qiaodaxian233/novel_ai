@@ -4572,6 +4572,16 @@ class BrowserWorker(QObject):
         # 4) 等新回复出现(对话条数 +1 OR 抓到内容)
         # 因 DeepSeek 计数策略 prev/cur 在短回复时容易失灵,加内容兜底
         # 提速:30s deadline → 15s,轮询 0.5s → 0.2s
+        # ★ 关键修复:发送前先记录"上一条回复的指纹",抓取时必须确认是新回复
+        #   防止串行任务时抓到上一轮的输出(BUG-027 后续根治)
+        prev_response_fingerprint = ""
+        try:
+            _prev_text = self._grab_last_response(prof) or ""
+            # 用前 100 字 + 长度作指纹(全文比较太慢)
+            prev_response_fingerprint = f"{_prev_text[:100]}|{len(_prev_text)}"
+        except Exception:
+            pass
+
         time.sleep(1.5)  # 给 DOM 渲染新回复块的最短时间(原 3s)
         deadline = time.time() + 15
         while time.time() < deadline:
@@ -4583,7 +4593,13 @@ class BrowserWorker(QObject):
             try:
                 early_text = self._grab_last_response(prof)
                 if early_text and len(early_text) > 30:
-                    # 可能 prev_count 算错了,但实际已有内容
+                    # ★ 防串:检查是不是新回复(指纹必须变化)
+                    cur_fp = f"{early_text[:100]}|{len(early_text)}"
+                    if cur_fp == prev_response_fingerprint:
+                        # 还是上一轮的输出,继续等
+                        time.sleep(0.2)
+                        continue
+                    # 可能 prev_count 算错了,但实际已有新内容
                     self.log_signal.emit(
                         f"检测到回复内容(已抓 {len(early_text)} 字符),进入稳定等待",
                         "info")
@@ -4614,6 +4630,12 @@ class BrowserWorker(QObject):
         while time.time() - start < self.max_wait:
             if self._stop.is_set(): return
             cur = self._grab_last_response(prof)
+            # ★ 防串:如果抓到的内容跟发送前指纹一致 → 这是上一轮残留,不是新回复
+            #   假装 cur 为空,让循环继续等,直到 DeepSeek 真出新回复
+            if cur and prev_response_fingerprint:
+                cur_fp = f"{cur[:100]}|{len(cur)}"
+                if cur_fp == prev_response_fingerprint:
+                    cur = ""  # 阻止把上一轮的输出当成本轮的
 
             # ★ 优先级最高:扫"继续生成"按钮,每轮 0.3s 都跑(不依赖 stopping/cur 状态)
             #   DeepSeek 显示"继续生成"时 stop 按钮可能还在,所以不能等 stopping=False 才检测
