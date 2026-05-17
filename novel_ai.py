@@ -9049,17 +9049,25 @@ class MainWindow(QMainWindow):
         issues = []
         cfg = self.tab_generation.critique_config()
 
+        # 显眼日志:让用户看见检查在跑(用户多次问"质量到底有没有检查")
+        self.tab_generation.log(
+            f"🔍 章节质量校验启动 (字数{len(content)} 目标{target_words} 阈值{self.tab_generation.quality_threshold.value()}分)...",
+            "info")
+        ran_checks = []
+
         # 1. 字数
         actual = len(re.sub(r'\s', '', content))
-        if cfg.get("word_count") and actual < min_words:
-            issues.append(
-                f"字数不达标:目标 {target_words} 字,实际 {actual} 字"
-                f"(差 {min_words - actual} 字)")
+        if cfg.get("word_count"):
+            ran_checks.append("字数")
+            if actual < min_words:
+                issues.append(
+                    f"字数不达标:目标 {target_words} 字,实际 {actual} 字"
+                    f"(差 {min_words - actual} 字)")
 
         # 2. 章末钩子(无 AI 调用,启发式)
         if cfg.get("hook"):
+            ran_checks.append("钩子")
             tail = content[-200:].strip()
-            # 启发式:章末段最后一句是否含悬念词、问号、省略号
             hook_markers = (
                 '?', '?', '...', '……',
                 '突然', '却见', '只是', '可是', '然而', '没想到',
@@ -9072,6 +9080,7 @@ class MainWindow(QMainWindow):
 
         # 3. 禁用词扫描(高严重度 → 直接触发死磕重写)
         # 阈值:总命中次数 >5 或 单词命中 >2 都算违反
+        ran_checks.append("禁用词")
         try:
             from pangu_system import PanguEngine as _PE
             hits = _PE.detect_forbidden_words(content)
@@ -9083,10 +9092,14 @@ class MainWindow(QMainWindow):
                     f"禁用词违规(累计 {total_count} 次,触发铁律):{top_str}。"
                     f"必须全部删除或换说法,这是盘古铁律第 15 条"
                 )
+            else:
+                self.tab_generation.log(
+                    f"  · 禁用词扫描通过(累计 {total_count} 次,未超阈值)", "info")
         except Exception:
             pass
 
         # 4. 盘古综合评分门(分数低于阈值 → 死磕)
+        ran_checks.append("盘古综合评分")
         try:
             threshold = self.tab_generation.quality_threshold.value()
             if threshold > 0:
@@ -9094,7 +9107,6 @@ class MainWindow(QMainWindow):
                 eng = get_default_engine()
                 lint = eng.quick_chapter_lint(content)
                 score = lint.get("score", 0)
-                # 存到 meta 供日志输出 — 通过 issues 末尾的特殊标记携带
                 if score < threshold:
                     score_issues = lint.get("issues", [])
                     issues.append(
@@ -9103,11 +9115,23 @@ class MainWindow(QMainWindow):
                         f"分数到 {threshold} 才放行"
                     )
                 else:
-                    # 达标也打个肯定日志(让用户看到)
                     self.tab_generation.log(
-                        f"  · 盘古评分 {score}/100 ≥ 阈值 {threshold} ✓", "info")
+                        f"  · 盘古综合评分 {score}/100 ≥ 阈值 {threshold} ✓", "info")
+            else:
+                self.tab_generation.log(
+                    f"  · 评分门已关闭(阈值=0,跳过)", "info")
         except Exception as _se:
             self.tab_generation.log(f"评分门跑失败(忽略):{_se}", "warn")
+
+        # 汇总
+        if issues:
+            self.tab_generation.log(
+                f"🔍 即时校验完成:跑了 [{', '.join(ran_checks)}] {len(ran_checks)} 项 → "
+                f"发现 {len(issues)} 个问题 → 触发死磕", "warn")
+        else:
+            self.tab_generation.log(
+                f"🔍 即时校验完成:跑了 [{', '.join(ran_checks)}] {len(ran_checks)} 项 → "
+                f"全部通过 ✓", "success")
 
         return issues, (cfg.get("canon") or cfg.get("rhythm") or cfg.get("character"))
 
