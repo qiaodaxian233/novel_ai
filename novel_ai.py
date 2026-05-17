@@ -6886,12 +6886,30 @@ class MainWindow(QMainWindow):
                 "请先在『生成控制』页点『🚀 启动浏览器』,完成 AI 网站登录后再生成。")
             return
         # 同步 UI 设置到 worker(每次发送前都同步,允许用户中途切换)
+        # ★ 智能开关:深度思考只对"长正文创作"任务有用,JSON 评分稽核反而会触发 R1 思考超时
+        #   → 把短输出 / JSON 任务里的深度思考自动关掉(章节正文/优化/老刀点评/30 项质检 才开)
         try:
-            self.worker._deep_think_enabled = (
+            # 自动判断当前任务是否适合深度思考
+            _deep_targets = {
+                "chapter", "golden_three", "optimize",
+                "laodao_critique", "laodao_autofix",
+                "pangu_qcheck", "pangu_autofix", "pangu_spiral",
+            }
+            user_wants_deep = (
                 self.tab_settings.chk_deep_think.isChecked()
                 if hasattr(self.tab_settings, "chk_deep_think") else False)
+            # 章节正文 / 创作类 → 听用户的;JSON 短评分类 → 强制关
+            if target in _deep_targets:
+                self.worker._deep_think_enabled = user_wants_deep
+            else:
+                # canon_audit / rhythm_check / character_check / 抽取 / 摘要等 → 强制关
+                self.worker._deep_think_enabled = False
+                if user_wants_deep:
+                    self.tab_generation.log(
+                        f"  ↳ {label} 是 JSON/短输出任务,自动关闭深度思考(避免 R1 思考超时)",
+                        "info")
         except Exception:
-            pass
+            self.worker._deep_think_enabled = False
         self.tabs.setCurrentWidget(self.tab_generation)
         self.tab_generation.log(f"准备发送:{label} ({len(prompt)} 字符)", "info")
         # 记录这次任务的目标位置(由 _on_response_received 处理回填)
