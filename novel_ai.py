@@ -6932,10 +6932,8 @@ class GenerationControl(QWidget):
 
         layout.addWidget(bbox)
 
-        # 联动:站点切换更新 URL
-        self.site_combo.currentTextChanged.connect(
-            lambda name: self.url_input.setText(AI_URLS.get(name, ""))
-            if name in AI_URLS else None)
+        # 联动:站点切换更新 URL + 加载站点偏好(BUG-044 v1.32)
+        self.site_combo.currentTextChanged.connect(self._on_site_changed)
 
         # ---- 生成参数 ----
         gbox = QGroupBox("批量生成参数")
@@ -7117,6 +7115,64 @@ class GenerationControl(QWidget):
         if idx == 2:
             return "msedge"
         return "chrome"  # 默认 attach
+
+    # ───────── v1.32 BUG-044: 站点偏好绑定 ─────────
+    SITE_PREFERENCES = {
+        # 站点名 → (auto_save, auto_grab, use_attachment)
+        # 只对镜像站做特殊处理(因为有审核,需要走附件)
+        # 其他站点不在表里 → 保持当前 UI 状态不动
+        "ChatGPT镜像": {
+            "auto_save": False,           # 镜像站不需要自动 TXT(用户用得少)
+            "auto_grab": True,            # 自动回填到章节
+            "use_attachment": True,       # 关键:必须走附件绕过审核
+        },
+        # 未来可加:
+        # "DeepSeek": {...},
+        # "ChatGPT 官方": {...},
+    }
+
+    def _on_site_changed(self, name):
+        """v1.32:切换站点时 — 1. 更新 URL  2. 应用站点偏好(如果有)"""
+        # 1. 更新 URL
+        if name in AI_URLS:
+            self.url_input.setText(AI_URLS[name])
+
+        # 2. 应用站点偏好(只对表里有定义的站)
+        pref = self.SITE_PREFERENCES.get(name)
+        if not pref:
+            # 表里没有 → 保持当前 UI 状态不动,但 console 留痕
+            print(f"[site] 切换到 '{name}',无专属偏好,保持当前 UI 状态", flush=True)
+            return
+
+        # 3. 应用三个 checkbox
+        applied = []
+        for attr, expected in pref.items():
+            w = getattr(self, attr, None)
+            if w is None:
+                continue
+            if w.isChecked() != expected:
+                w.setChecked(expected)
+                applied.append(f"{attr}={'开' if expected else '关'}")
+            else:
+                # 已经是期望值,不重复应用,但 summary 还是记录(给状态栏看)
+                pass
+
+        # 4. 状态栏提示 3 秒(向 MainWindow 发信号让它显示)
+        summary = ", ".join(
+            f"{k}={'✓' if v else '✗'}" for k, v in pref.items())
+        msg = f"📌 已加载 [{name}] 站点偏好: {summary}"
+        print(f"[site] {msg}", flush=True)
+
+        # 通过 MainWindow.statusBar() 显示
+        # GenerationControl 是 tab 不是 MainWindow,要往上找
+        w = self
+        while w and not hasattr(w, "statusBar"):
+            w = w.parent()
+        if w and hasattr(w, "statusBar"):
+            try:
+                w.statusBar().showMessage(msg, 3000)
+            except Exception:
+                pass
 
     def critique_config(self):
         """返回当前启用的章节校验维度"""
