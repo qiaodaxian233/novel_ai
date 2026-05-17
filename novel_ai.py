@@ -9923,16 +9923,26 @@ class MainWindow(QMainWindow):
         """🔄 改名工具:多对应一次替换大纲全部文本(也可选择是否覆盖章节正文)
         例如:林远→苏白 + 林悦→苏雨 + 天剑宗→玄霄宗,一次提交。"""
         # 收集所有要扫描的目标(QPlainTextEdit + chapter content)
-        targets = [
-            ("特殊需求", self.tab_outline.special_edit),
-            ("简介", self.tab_outline.intro_edit),
-            ("故事种子", self.tab_outline.seed_edit),
-            ("世界观", self.tab_outline.worldview_edit),
-            ("LO世界观层", self.tab_outline.lo_edit),
-            ("故事结构", self.tab_outline.structure_edit),
-            ("章节大纲", self.tab_outline.chapter_outline_edit),
-            ("角色设定", self.tab_settings.chars_edit),
+        # 用 _get_widget 容错:某个字段在重构后改名/删了,不会整个崩
+        def _get_widget(obj, attr):
+            return getattr(obj, attr, None) if obj is not None else None
+
+        raw_targets = [
+            ("特殊需求", _get_widget(self.tab_outline, "special_edit")),
+            ("简介", _get_widget(self.tab_outline, "intro_edit")),
+            ("故事种子", _get_widget(self.tab_outline, "seed_edit")),
+            ("世界观", _get_widget(self.tab_outline, "worldview_edit")),
+            ("LO世界观层", _get_widget(self.tab_outline, "lo_edit")),
+            ("故事结构", _get_widget(self.tab_outline, "structure_edit")),
+            ("章节大纲", _get_widget(self.tab_outline, "chapter_outline_edit")),
+            ("角色档案", _get_widget(self.tab_memory, "chars_edit")),
         ]
+        # 过滤掉 None(不存在的 widget),日志记下缺失项
+        targets = [(label, w) for label, w in raw_targets if w is not None]
+        missing = [label for label, w in raw_targets if w is None]
+        if missing:
+            self.tab_generation.log(
+                f"改名工具:以下字段没找到 widget,跳过 → {missing}", "warn")
 
         dlg = QDialog(self)
         dlg.setWindowTitle("🔄 改名工具(批量替换大纲/章节中的角色/地名/门派)")
