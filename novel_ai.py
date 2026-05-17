@@ -5798,10 +5798,11 @@ class BrowserWorker(QObject):
                 if removed == 0:
                     if round_idx == 0:
                         # 首轮就没找到删除按钮,正常情况(无附件)
-                        pass
+                        print(f"[_clear_attachments] 首轮无删除按钮(无残留附件),正常", flush=True)
                     break
                 
-                self.log_signal.emit(f"✓ 第{round_idx+1}轮清除 {removed} 个附件", "info")
+                self.log_signal.emit(f"✓ 第{round_idx+1}轮清除 {removed} 个残留附件", "info")
+                print(f"[_clear_attachments] 第{round_idx+1}轮: 移除 {removed} 个", flush=True)
                 import time as _t; _t.sleep(0.5)  # 等 React 重渲染
             
             # 重置所有 file input 的 value
@@ -5954,6 +5955,69 @@ class BrowserWorker(QObject):
                 # 即使没检测到也试试,可能是镜像站DOM结构特殊
                 _t.sleep(1.5)
                 return True
+
+            # ★ v1.32 dev: 发送前最后一道防线 — 验证附件 chip 真在 composer 里 ★
+            # 镜像站审核管道可能延迟,附件"上传完成"≠服务端"接受完成"
+            # 通过检测 composer 区域内可见的删除按钮数(应该 >= 1 且 = 1)来验证
+            _t.sleep(1.5)   # 多等 1.5s 让镜像站审核流程跑完
+            try:
+                chip_state = self.driver.execute_script(r"""
+                    const fname = arguments[0];
+                    const composer = document.querySelector('form, [class*="composer" i]');
+                    if (!composer) return {chips: 0, hasFile: false};
+                    // 数 composer 里可见的"移除文件"按钮
+                    const removeBtns = composer.querySelectorAll('button[aria-label*="移除文件"], button[aria-label*="Remove file"]');
+                    const visibleChips = Array.from(removeBtns).filter(b => {
+                        const r = b.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    });
+                    // 找文件名是否在 composer 文本里
+                    const hasFile = composer.innerText.includes(fname);
+                    return {chips: visibleChips.length, hasFile, names: visibleChips.map(b => b.getAttribute('aria-label'))};
+                """, fname) or {}
+                chip_n = chip_state.get('chips', 0)
+                has_file = chip_state.get('hasFile', False)
+                names = chip_state.get('names', [])
+                print(f"[upload chip 验证] chips={chip_n} hasFile={has_file} names={names}", flush=True)
+                if chip_n == 0 or not has_file:
+                    self.log_signal.emit(
+                        f"⚠ 附件 chip 验证失败(chips={chip_n}/has_file={has_file}),"
+                        f"镜像站可能正在审核,再等 3s",
+                        "warn")
+                    _t.sleep(3)
+                    # 再验一次
+                    chip_n2 = self.driver.execute_script("""
+                        const composer = document.querySelector('form, [class*="composer" i]');
+                        if (!composer) return 0;
+                        return composer.querySelectorAll('button[aria-label*="移除文件"], button[aria-label*="Remove file"]').length;
+                    """) or 0
+                    if chip_n2 == 0:
+                        self.log_signal.emit(
+                            "⚠ 附件 chip 仍未出现,镜像站审核可能拒绝了附件,后续若发送失败请重启浏览器",
+                            "warn")
+                elif chip_n > 1:
+                    # 残留多个附件 — 严重 BUG-B 场景
+                    self.log_signal.emit(
+                        f"⚠ composer 检测到 {chip_n} 个附件 chip,有残留!尝试清理多余...",
+                        "warn")
+                    print(f"[upload chip 验证] 异常多 chip: {names}", flush=True)
+                    # 多余的从后往前删(保留第一个 = 当前任务的)
+                    self.driver.execute_script(r"""
+                        const composer = document.querySelector('form, [class*="composer" i]');
+                        if (!composer) return;
+                        const btns = Array.from(composer.querySelectorAll('button[aria-label*="移除文件"], button[aria-label*="Remove file"]'));
+                        // 保留第一个,删除剩下的
+                        for (let i = 1; i < btns.length; i++) {
+                            try { btns[i].click(); } catch(e) {}
+                        }
+                    """)
+                    _t.sleep(1)
+                else:
+                    self.log_signal.emit(
+                        f"✓ 附件 chip 验证通过(1 个 chip 已挂载)",
+                        "info")
+            except Exception as _ce:
+                print(f"[upload chip 验证] 异常: {_ce}", flush=True)
 
             return True
 
@@ -6345,6 +6409,8 @@ class BrowserWorker(QObject):
             time.sleep(0.2)
             _AC(self.driver).send_keys(_K.RETURN).perform()
             self.log_signal.emit("已按 Enter 发送，等待响应...", "info")
+            # v1.32 dev: console 诊断 — 看 Enter 后 1 秒内 composer 文本是否清空
+            print(f"[dispatch_send] Enter 后 1s, _before_cnt={_before_cnt}", flush=True)
             # ★ 关键修复:Enter 后给 DeepSeek 更长时间响应(尤其是冷启动 / 长 prompt)
             #   分阶段等待 — 1.5s / 3s / 5s 各检查一次,任一通过就 return
             # RL 推荐的 send_wait(总时长),拆分为 3 段
