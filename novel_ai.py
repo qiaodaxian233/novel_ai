@@ -70,6 +70,14 @@ try:
 except ImportError:
     WORKFLOW_AVAILABLE = False
 
+# ---- 流程强化学习(自学习哪种等待/重试策略最优) ----
+try:
+    from flow_rl import FlowRL, REWARDS as RL_REWARDS
+    FLOW_RL_AVAILABLE = True
+except ImportError:
+    FLOW_RL_AVAILABLE = False
+    RL_REWARDS = {}
+
 # ---- 工作流可视化面板(新增) ----
 try:
     from workflow_panel import WorkflowPanel
@@ -6339,6 +6347,22 @@ class MainWindow(QMainWindow):
 
         # 浏览器自动化 worker
         self.worker = BrowserWorker()
+
+        # 流程强化学习(自学习最优等待/重试策略)
+        if FLOW_RL_AVAILABLE:
+            from PyQt5.QtCore import QSettings as _QS_rl
+            try:
+                self.flow_rl = FlowRL(
+                    epsilon=0.15,
+                    persist_settings=_QS_rl("NovelAI", "FlowRL"))
+                # 把 RL 实例挂给 worker(让 worker 在关键决策点查询/反馈)
+                self.worker.flow_rl = self.flow_rl
+            except Exception as _e_rl:
+                print(f"[FlowRL] 初始化失败:{_e_rl}")
+                self.flow_rl = None
+        else:
+            self.flow_rl = None
+
         # 批量生成状态
         self._batch_remaining = 0
         self._batch_paused = False
@@ -6578,6 +6602,39 @@ class MainWindow(QMainWindow):
         a_clean_meta = QAction("🧹 扫描清理所有章节尾部元信息(本章完/钩子/选项)", self)
         a_clean_meta.triggered.connect(self.batch_clean_chapter_meta)
         tm.addAction(a_clean_meta)
+        tm.addSeparator()
+        a_rl_show = QAction("🤖 流程 RL 学习状态(看自学习成果)", self)
+        a_rl_show.triggered.connect(self.show_flow_rl_status)
+        tm.addAction(a_rl_show)
+        a_rl_reset = QAction("🔄 重置 RL 学习数据(慎用)", self)
+        a_rl_reset.triggered.connect(self.reset_flow_rl)
+        tm.addAction(a_rl_reset)
+
+    def show_flow_rl_status(self):
+        """显示流程 RL 学习状态"""
+        if not self.flow_rl:
+            QMessageBox.information(
+                self, "RL 未启用",
+                "流程强化学习未启用(flow_rl.py 可能没找到)。\n"
+                "确认仓库根目录有 flow_rl.py 文件。")
+            return
+        try:
+            text = self.flow_rl.summary()
+            QMessageBox.information(self, "🤖 流程 RL 学习状态", text)
+        except Exception as e:
+            QMessageBox.warning(self, "RL 状态查询失败", str(e))
+
+    def reset_flow_rl(self):
+        """重置 RL 学习数据"""
+        if not self.flow_rl:
+            return
+        ret = QMessageBox.question(
+            self, "确认重置",
+            "确定要清空所有 RL 学习数据吗?\n"
+            "(重置后程序从头学习,之前的经验丢失)")
+        if ret == QMessageBox.Yes:
+            self.flow_rl.reset()
+            QMessageBox.information(self, "已重置", "RL 学习数据已清空")
 
     def _build_ui(self):
         central = QWidget(); self.setCentralWidget(central)
@@ -9628,8 +9685,29 @@ class MainWindow(QMainWindow):
                 meta.get("_held_content", ""), meta)
             return
 
+        # ★ RL 反馈:死磕一次 = 扣分
+        try:
+            if self.flow_rl:
+                retry_used = meta.get("retry_used", 0)
+                state = ("chapter", "deepseek", retry_used)
+                action = meta.get("_rl_action", {"send_wait": 3.0,
+                                                 "stable_threshold": 1.5,
+                                                 "post_emit_wait": 3,
+                                                 "use_strategy_b": False})
+                reward_val = RL_REWARDS["retry_needed"]
+                # 章节字数严重不足 → 额外扣分
+                content = meta.get("_held_content", "")
+                if content and len(content) < 500:
+                    reward_val += RL_REWARDS["chapter_word_count_short"]
+                self.flow_rl.reward(
+                    state, action, reward_val,
+                    f"死磕重写({len(reasons)} 个问题)")
+        except Exception:
+            pass
+
         new_meta = dict(meta)
         new_meta["retry_left"] = retry - 1
+        new_meta["retry_used"] = meta.get("retry_used", 0) + 1  # 记录用了几次
         new_meta.pop("_held_content", None)
         reason_block = "\n".join(f"  · {r}" for r in reasons)
         # 如果违规里有禁用词,加超强力指令
@@ -9675,6 +9753,32 @@ class MainWindow(QMainWindow):
 
     def _accept_chapter_and_continue(self, content, meta):
         """章节通过校验或死磕用尽 → 入库并触发后续链"""
+        # ★ RL 反馈:章节成功 → 加分(根据死磕次数决定加多少)
+        try:
+            if self.flow_rl and meta.get("target") not in ("golden_three",):
+                retry_used = meta.get("retry_used", 0)
+                reward_val = (
+                    RL_REWARDS["chapter_success_first_try"]
+                    if retry_used == 0
+                    else RL_REWARDS["chapter_success_after_retry"]
+                )
+                content_len = len(content or "")
+                if content_len >= 2000:
+                    reward_val += RL_REWARDS["chapter_word_count_ok"]
+                state = ("chapter", "deepseek", retry_used)
+                action = meta.get("_rl_action", {"send_wait": 3.0,
+                                                 "stable_threshold": 1.5,
+                                                 "post_emit_wait": 3,
+                                                 "use_strategy_b": False})
+                self.flow_rl.reward(
+                    state, action, reward_val,
+                    f"章节成功(retry={retry_used}, 长度={content_len})")
+                self.tab_generation.log(
+                    f"🎯 RL 奖励: {reward_val:+d} ({state[0]}, 死磕{retry_used} 次)",
+                    "info")
+        except Exception as _e_rl:
+            pass
+
         if meta.get("target") == "golden_three":
             self._split_and_save_golden_three(content)
             last_ch_num = len(self.chapters)
