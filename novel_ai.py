@@ -4445,6 +4445,36 @@ class BrowserWorker(QObject):
         except Exception:
             pass
 
+        # ★★★ BUG-029 第二道防线:发送前确认 AI 真空闲
+        #   防止上一任务的"完成判定"过早,这一轮发送进入到 AI 还在写的状态
+        try:
+            idle_deadline = time.time() + 10
+            while time.time() < idle_deadline:
+                is_idle = self.driver.execute_script(r"""
+                    const ta = document.querySelector('textarea');
+                    if (!ta) return true;  // 没 textarea 就跳过
+                    let c = ta.parentElement;
+                    for (let i = 0; i < 5 && c; i++) {
+                        const stop1 = c.querySelector('div[role="button"]:has(svg rect)');
+                        if (stop1 && stop1.offsetParent !== null) return false;
+                        const stop2 = c.querySelector(
+                            'div[role="button"][aria-label*="停止"], button[aria-label*="停止"]');
+                        if (stop2 && stop2.offsetParent !== null) return false;
+                        c = c.parentElement;
+                    }
+                    return !ta.disabled;
+                """)
+                if is_idle:
+                    break
+                self.log_signal.emit(
+                    "⏳ 等待 AI 完成上一轮(stop 按钮仍可见)...", "info")
+                time.sleep(0.5)
+            else:
+                self.log_signal.emit(
+                    "⚠ 等 AI 空闲超时 10s,强制开始本次任务(可能 DeepSeek 卡住)", "warn")
+        except Exception:
+            pass
+
         # 1) 等输入框出现(最长 15s)
         deadline = time.time() + 15
         while time.time() < deadline:
@@ -4851,6 +4881,50 @@ class BrowserWorker(QObject):
         else:
             self.log_signal.emit(
                 "回复抓取为空,可能选择器需调整(到 SITE_PROFILES 微调)", "warn")
+
+        # ★★★ BUG-029 关键修复:emit 前必须等 AI 真正空闲
+        #   用户原话"上一个任务还没结束,下一个任务就已经开始了"
+        #   完成判定可能过早,emit 后主线程立即发下一个任务,
+        #   导致 textarea 注入到 DeepSeek 还没回复完的状态 → 抓串
+        try:
+            stable_idle_start = time.time()
+            consec_idle = 0
+            while time.time() - stable_idle_start < 5.0:
+                # 检测两个信号都满足才算真空闲:
+                # 1. 没有 stop 按钮 (AI 不在写)
+                # 2. textarea 可输入 (没被禁用)
+                is_idle = self.driver.execute_script(r"""
+                    // 1) 没 stop 按钮
+                    const ta = document.querySelector('textarea');
+                    if (!ta) return false;
+                    let c = ta.parentElement;
+                    for (let i = 0; i < 5 && c; i++) {
+                        const stop1 = c.querySelector('div[role="button"]:has(svg rect)');
+                        if (stop1 && stop1.offsetParent !== null) return false;
+                        const stop2 = c.querySelector(
+                            'div[role="button"][aria-label*="停止"], button[aria-label*="停止"]');
+                        if (stop2 && stop2.offsetParent !== null) return false;
+                        c = c.parentElement;
+                    }
+                    // 2) textarea 可用
+                    if (ta.disabled) return false;
+                    return true;
+                """)
+                if is_idle:
+                    consec_idle += 1
+                    # 连续 3 次(0.6s)都空闲才算真空闲(防误判)
+                    if consec_idle >= 3:
+                        break
+                else:
+                    consec_idle = 0
+                time.sleep(0.2)
+            else:
+                # 5s 都没等到,记日志但还是继续(防卡死)
+                self.log_signal.emit(
+                    "⚠ AI 空闲确认超时(5s),继续下一任务(可能 DeepSeek 卡住)", "warn")
+        except Exception as _e_idle:
+            self.log_signal.emit(f"AI 空闲检测异常:{_e_idle}", "warn")
+
         self.response_received.emit(task_id, last_text)
 
     # ---------- 附件上传：把长文本 prompt 转 txt 上传 ----------
