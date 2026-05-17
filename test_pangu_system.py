@@ -192,9 +192,17 @@ class TestPanguCore(unittest.TestCase):
 
     def test_quality_check_prompt(self):
         p = self.engine.build_quality_check_prompt("章节正文示例")
-        self.assertIn("30 项质检", p)
+        # v1.33:升级到 38 项(30 原 + 8 大坑)
+        self.assertIn("38 项智能质检", p)
+        self.assertIn("八大坑专项", p)
+        self.assertIn("K1 视角统一", p)
+        self.assertIn("K8 市场意识", p)
+        self.assertIn("K_scores", p)   # 新 JSON 字段
         self.assertIn("章节正文示例", p)
         self.assertIn("JSON", p)
+        # 第 19 项已修(原"只用说"错误指引去掉,改 13 法)
+        self.assertNotIn('只用"说"', p)
+        self.assertIn("13 法", p)
 
     def test_spiral_diagnose_prompt(self):
         p = self.engine.build_spiral_diagnose_prompt("章节内容")

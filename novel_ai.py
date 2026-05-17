@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.32"
+APP_VERSION = "v1.33"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -413,7 +413,7 @@ PROMPTS = {
     ),
 
     "pangu_autofix": (
-        "你是【盘古超级系统】驻场修复员。下面是一篇章节,以及盘古 30 项质检发现的问题。\n"
+        "你是【盘古超级系统】驻场修复员。下面是一篇章节,以及盘古 38 项智能质检(30 项基础 + 8 大坑)发现的问题。\n"
         "请按建议**直接修复原文**,不要解释、不要 JSON、不要 markdown 代码块。\n\n"
         "修复规则:\n"
         "1. **只改有问题的地方**,没问题的段落原样保留,不要随意改\n"
@@ -918,10 +918,16 @@ class ChapterEditor(QWidget):
             "background:#27ae60;color:white;padding:4px 10px;border-radius:3px;")
         self.btn_pangu_lint.setToolTip("0-token 本地检测:禁用词/长句/破折号/三连点")
         self.btn_pangu_lint.clicked.connect(self._on_pangu_lint)
-        self.btn_pangu_qcheck = QPushButton("📊 30项质检")
+        self.btn_pangu_qcheck = QPushButton("📊 智能质检")
         self.btn_pangu_qcheck.setStyleSheet(
             "background:#e67e22;color:white;padding:4px 10px;border-radius:3px;")
-        self.btn_pangu_qcheck.setToolTip("发给 AI 跑盘古 30 项深度质检,返回 JSON")
+        self.btn_pangu_qcheck.setToolTip(
+            "📊 智能质检(38 项 = 30 项原盘古 + 8 大坑专项)\n"
+            "发 AI 深度审稿,返回 JSON:\n"
+            "  · 总分 0-100\n"
+            "  · 失败条目编号\n"
+            "  · 八大坑 K1-K8 各项 0-10 分\n"
+            "  · 修改建议")
         self.btn_pangu_qcheck.clicked.connect(self._on_pangu_qcheck)
         self.btn_laodao = QPushButton("🔪 老刀毒舌点评")
         self.btn_laodao.setStyleSheet(
@@ -8993,7 +8999,7 @@ class MainWindow(QMainWindow):
 
         # 弹结果对话框(改成 QDialog,加"AI 自动修复"按钮)
         dlg = QDialog(self)
-        dlg.setWindowTitle("📊 盘古 30 项质检结果")
+        dlg.setWindowTitle("📊 智能质检结果 - 38 项")
         dlg.setMinimumWidth(600)
         lay = QVBoxLayout(dlg)
 
@@ -9017,6 +9023,45 @@ class MainWindow(QMainWindow):
                 f"<i>相关段落已在编辑器里浅黄高亮(段号:{sorted(block_ids)[:10]})</i>")
             seg_lab.setStyleSheet("color:#888; padding:4px;")
             lay.addWidget(seg_lab)
+
+        # v1.33:八大坑 K_scores 展示
+        k_scores = data.get("K_scores", {})
+        if k_scores:
+            K_NAMES = {
+                "K1": "视角统一", "K2": "对话有效", "K3": "爽点付费",
+                "K4": "主角主动", "K5": "反派合理", "K6": "无毒点",
+                "K7": "节奏紧凑", "K8": "市场意识",
+            }
+            k_lines = ["<b>🔥 八大坑专项评分:</b><table cellpadding='3'>"]
+            for key in ("K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8"):
+                sc = k_scores.get(key, "?")
+                name = K_NAMES.get(key, key)
+                # 进度条 0-10
+                try:
+                    sc_int = int(sc)
+                    bar_fill = "█" * sc_int + "░" * (10 - sc_int)
+                    color = ("#27ae60" if sc_int >= 8 else
+                             "#f39c12" if sc_int >= 5 else "#e74c3c")
+                except (ValueError, TypeError):
+                    bar_fill, color = "?" * 10, "#888"
+                k_lines.append(
+                    f"<tr><td><b>{key} {name}</b></td>"
+                    f"<td><span style='color:{color};font-family:monospace'>{bar_fill}</span></td>"
+                    f"<td style='color:{color}'><b>{sc}/10</b></td></tr>")
+            k_lines.append("</table>")
+            k_worst = data.get("K_worst", [])
+            if k_worst:
+                k_lines.append(
+                    f"<br><b>⚠ 最弱:</b>"
+                    f"<span style='color:#e74c3c'>{', '.join(k_worst)}</span>")
+            k_verdict = data.get("K_verdict", "")
+            if k_verdict:
+                k_lines.append(f"<br><i>{k_verdict}</i>")
+            k_lab = QLabel("".join(k_lines))
+            k_lab.setWordWrap(True)
+            k_lab.setStyleSheet(
+                "padding:8px; background:#fffbe6; border:1px solid #f0c36d;")
+            lay.addWidget(k_lab)
 
         # 按钮区
         btn_row = QHBoxLayout()
