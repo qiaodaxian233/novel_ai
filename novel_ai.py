@@ -7240,8 +7240,36 @@ class MainWindow(QMainWindow):
                 self._on_laodao_autofix_response(content, ch_idx, orig)
                 self._pending_task_target = None
                 return
-        except Exception:
-            pass
+        except Exception as _e_dispatch:
+            # ★ BUG-031 治本:不再静默吞 dispatch 异常,且若 target 是已被路由的
+            #   系列(pangu_* / laodao_*),即使 handler 抛了也绝不落到主 dispatch
+            #   兜底(否则用户辛苦修出的内容被复制到剪贴板就算完)
+            import traceback
+            _tb = traceback.format_exc()
+            try:
+                self.tab_generation.log(
+                    f"⚠ 回填 dispatch 抛异常(原本会被吞,现已暴露):{_e_dispatch}",
+                    "error")
+                for _ln in _tb.strip().splitlines()[-8:]:
+                    self.tab_generation.log(f"  {_ln}", "error")
+            except Exception:
+                pass
+            print("=" * 60, flush=True)
+            print(f"[_on_response_received dispatch 异常] task={task_id!r}", flush=True)
+            print(_tb, flush=True)
+            print("=" * 60, flush=True)
+            # 命中已知系列 → 不走主 dispatch 兜底,避免内容被复制到剪贴板就算完
+            _ROUTED_TARGETS = {
+                "pangu_qcheck", "pangu_spiral", "pangu_mode",
+                "pangu_autofix", "laodao_critique", "laodao_autofix",
+            }
+            try:
+                _tgt = (self._pending_task_target or {}).get("target", "")
+            except Exception:
+                _tgt = ""
+            if _tgt in _ROUTED_TARGETS:
+                self._pending_task_target = None
+                return
         if not content or not content.strip():
             self.tab_generation.log(f"任务『{task_id}』未抓到内容(选择器需调整)", "warn")
             content = ""
@@ -7948,24 +7976,55 @@ class MainWindow(QMainWindow):
             if ret != QMessageBox.Yes:
                 self.tab_generation.log("已放弃 AI 修复结果(长度异常)", "warn")
                 return
+        # BUG-031 加固:核心回填 ① 绝对不被后续 UI/IO 失败连累
         if 0 <= ch_idx < len(self.chapters):
+            # ① 核心:写进 chapter dict
             self.chapters[ch_idx]["content"] = fixed
-            if self.tab_editor.current_index == ch_idx:
-                self.tab_editor.content_edit.setPlainText(fixed)
+            # ② 以下每步独立 try
+            try:
+                if self.tab_editor.current_index == ch_idx:
+                    self.tab_editor.content_edit.setPlainText(fixed)
+            except Exception as _e_ed:
+                self.tab_generation.log(
+                    f"⚠ 编辑器 setPlainText 失败(内容已入章节 dict):{_e_ed}", "warn")
             try:
                 self.save_project()
             except Exception:
-                self._autosave()
+                try:
+                    self._autosave()
+                except Exception as _e_sv:
+                    self.tab_generation.log(
+                        f"⚠ 保存失败但内容已回填,可手动保存:{_e_sv}", "warn")
+            try:
+                self.tab_generation.log(
+                    f"✓ 老刀建议重写完成第 {ch_idx+1} 章:{orig_len}→{new_len} 字。"
+                    f"原版本可通过菜单 → 🕓 恢复历史版本 找回",
+                    "success")
+            except Exception:
+                pass
+            try:
+                QMessageBox.information(
+                    self, "✓ 老刀修复完成",
+                    f"第 {ch_idx+1} 章已按老刀建议重写 + 回填 + 保存。\n\n"
+                    f"字数变化:{orig_len} → {new_len}\n"
+                    f"想要旧版本?菜单 → 文件 → 🕓 恢复历史版本(最近 10 次)\n\n"
+                    f"建议:再点一次「🔪 老刀毒舌点评」看新版评价 / 「📊 30项质检」看新得分。")
+            except Exception:
+                pass
+        else:
+            # ch_idx 不合法 — 兜底剪贴板 + 告知
+            try:
+                QApplication.clipboard().setText(fixed)
+            except Exception:
+                pass
             self.tab_generation.log(
-                f"✓ 老刀建议重写完成第 {ch_idx+1} 章:{orig_len}→{new_len} 字。"
-                f"原版本可通过菜单 → 🕓 恢复历史版本 找回",
-                "success")
-            QMessageBox.information(
-                self, "✓ 老刀修复完成",
-                f"第 {ch_idx+1} 章已按老刀建议重写 + 回填 + 保存。\n\n"
-                f"字数变化:{orig_len} → {new_len}\n"
-                f"想要旧版本?菜单 → 文件 → 🕓 恢复历史版本(最近 10 次)\n\n"
-                f"建议:再点一次「🔪 老刀毒舌点评」看新版评价 / 「📊 30项质检」看新得分。")
+                f"⚠ 老刀修复回填失败:ch_idx={ch_idx} 超出章节范围(共 {len(self.chapters)} 章)。"
+                f"已抓到 {new_len} 字,复制到剪贴板。",
+                "error")
+            QMessageBox.warning(
+                self, "回填失败",
+                f"无法把老刀修复结果写入章节:ch_idx={ch_idx} 不在 0~{len(self.chapters)-1} 范围内。\n"
+                f"内容({new_len} 字)已复制到剪贴板,可手动粘贴。")
 
     def _on_pangu_spiral(self, content):
         # 让 AI 诊断当前章节处于 P1-P7 哪个螺旋阶段
@@ -8217,30 +8276,61 @@ class MainWindow(QMainWindow):
             if ret != QMessageBox.Yes:
                 self.tab_generation.log("已放弃 AI 修复结果(长度异常)", "warn")
                 return
-        # 回填
+        # ─── 回填 ─── BUG-031 加固:核心动作 ① 绝对不被后续 UI/IO 失败连累
         if 0 <= ch_idx < len(self.chapters):
+            # ① 核心:把内容写进 chapter dict — 一旦这步成功,回填这件事就完成了
             self.chapters[ch_idx]["content"] = fixed
-            # 如果当前正在编辑这一章,刷新编辑器
-            if self.tab_editor.current_index == ch_idx:
-                self.tab_editor.content_edit.setPlainText(fixed)
-            # 清掉质检高亮(修完了)
-            if hasattr(self.tab_editor, "pangu_highlighter") and self.tab_editor.pangu_highlighter:
-                self.tab_editor.pangu_highlighter.set_qcheck_blocks(set())
-            # 立即 autosave + 备份
+            # ② 以下每一步独立 try,任何一步抛都不影响"内容已入章节"这个事实
             try:
-                self.save_project()  # save_project 会触发 _rotate_project_backups 保留 10 次
+                if self.tab_editor.current_index == ch_idx:
+                    self.tab_editor.content_edit.setPlainText(fixed)
+            except Exception as _e_ed:
+                self.tab_generation.log(
+                    f"⚠ 编辑器 setPlainText 失败(内容已入章节 dict):{_e_ed}", "warn")
+            try:
+                if hasattr(self.tab_editor, "pangu_highlighter") and self.tab_editor.pangu_highlighter:
+                    self.tab_editor.pangu_highlighter.set_qcheck_blocks(set())
             except Exception:
-                self._autosave()
+                pass
+            # 立即 autosave + 备份(失败也无所谓,内容已入 dict 下次手动保存即可)
+            try:
+                self.save_project()
+            except Exception:
+                try:
+                    self._autosave()
+                except Exception as _e_sv:
+                    self.tab_generation.log(
+                        f"⚠ 保存失败但内容已回填,可手动保存:{_e_sv}", "warn")
+            try:
+                self.tab_generation.log(
+                    f"✓ AI 修复完成第 {ch_idx+1} 章:{orig_len}→{new_len} 字。"
+                    f"原版本可通过菜单 → 🕓 恢复历史版本 找回",
+                    "success")
+            except Exception:
+                pass
+            try:
+                QMessageBox.information(
+                    self, "✓ AI 修复完成",
+                    f"第 {ch_idx+1} 章已自动修复 + 回填 + 保存。\n\n"
+                    f"字数变化:{orig_len} → {new_len}\n"
+                    f"想要旧版本?菜单 → 文件 → 🕓 恢复历史版本(最近 10 次)\n\n"
+                    f"建议:再点一次「📊 30项质检」看新得分。")
+            except Exception:
+                pass
+        else:
+            # ch_idx 不合法 — 不能静默,把内容塞剪贴板兜底 + 告知用户
+            try:
+                QApplication.clipboard().setText(fixed)
+            except Exception:
+                pass
             self.tab_generation.log(
-                f"✓ AI 修复完成第 {ch_idx+1} 章:{orig_len}→{new_len} 字。"
-                f"原版本可通过菜单 → 🕓 恢复历史版本 找回",
-                "success")
-            QMessageBox.information(
-                self, "✓ AI 修复完成",
-                f"第 {ch_idx+1} 章已自动修复 + 回填 + 保存。\n\n"
-                f"字数变化:{orig_len} → {new_len}\n"
-                f"想要旧版本?菜单 → 文件 → 🕓 恢复历史版本(最近 10 次)\n\n"
-                f"建议:再点一次「📊 30项质检」看新得分。")
+                f"⚠ AI 修复回填失败:ch_idx={ch_idx} 超出章节范围(共 {len(self.chapters)} 章)。"
+                f"已抓到 {new_len} 字,复制到剪贴板。",
+                "error")
+            QMessageBox.warning(
+                self, "回填失败",
+                f"无法把修复结果写入章节:ch_idx={ch_idx} 不在 0~{len(self.chapters)-1} 范围内。\n"
+                f"内容({new_len} 字)已复制到剪贴板,可手动粘贴。")
 
     # ───── Phase B:盘古帮助查询面板 ─────
     def _on_pangu_show_manual(self):
