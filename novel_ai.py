@@ -5372,6 +5372,33 @@ class BrowserWorker(QObject):
             if _after_cnt > _before_cnt:
                 self.log_signal.emit(f"✓ 发送成功(消息数 {_before_cnt}→{_after_cnt})", "info")
                 return True
+            # ★ 关键修复:即使计数没变,如果"停止按钮"出现了 → Enter 已生效,不要走策略 B
+            #   (策略 B 可能误点停止按钮,把刚发的消息停掉)
+            try:
+                ai_writing = self.driver.execute_script(r"""
+                    // 看 textarea 旁边是不是有 stop 按钮(SVG rect 方块)或 aria-label 含停止
+                    const ta = document.querySelector('textarea');
+                    if (!ta) return false;
+                    let c = ta.parentElement;
+                    for (let i = 0; i < 5 && c; i++) {
+                        // SVG rect (方块图标 = stop)
+                        const stopByRect = c.querySelector('div[role="button"]:has(svg rect)');
+                        if (stopByRect && stopByRect.offsetParent !== null) return true;
+                        // aria-label 含停止
+                        const stopByLabel = c.querySelector(
+                            'div[role="button"][aria-label*="停止"], button[aria-label*="停止"]');
+                        if (stopByLabel && stopByLabel.offsetParent !== null) return true;
+                        c = c.parentElement;
+                    }
+                    return false;
+                """)
+                if ai_writing:
+                    self.log_signal.emit(
+                        f"✓ Enter 已发送(检测到 AI 正在写,计数器假警 {_before_cnt}→{_after_cnt})",
+                        "info")
+                    return True
+            except Exception:
+                pass
             self.log_signal.emit(f"Enter后消息数未增加({_before_cnt}→{_after_cnt})，尝试按钮", "warn")
         except Exception as e:
             self.log_signal.emit(f"Enter发送异常: {e}", "warn")
@@ -5405,6 +5432,16 @@ class BrowserWorker(QObject):
                         let bestX = -Infinity;
                         for (const c of candidates) {
                             if (c.offsetParent === null) continue;
+                            // ★★ 关键修复:排除 stop 按钮(防止 AI 写时把停止按钮当发送按钮)
+                            // 停止按钮特征:SVG 含 rect 元素(方块图标),或 aria-label 含"停止"
+                            const hasRect = c.querySelector('svg rect') !== null;
+                            const ariaLabel = (c.getAttribute('aria-label') || '').toLowerCase();
+                            const isStopBtn = hasRect || ariaLabel.includes('停止')
+                                || ariaLabel.includes('stop');
+                            if (isStopBtn) continue;
+                            // 排除"深度思考""智能搜索"等带文字的按钮
+                            const txt = (c.innerText || c.textContent || '').trim();
+                            if (txt && txt.length > 0 && txt.length < 10) continue;
                             const r = c.getBoundingClientRect();
                             // 选 textarea 右下方的, 优先最靠右
                             if (r.top >= taRect.top - 10 && r.left >= taRect.left
