@@ -1871,7 +1871,15 @@ class StoryOutline(QWidget):
         obtns = QHBoxLayout()
         self.btn_gen_all = QPushButton("✨ 一键补齐所有大纲 (AI智能统筹) ✨")
         self.btn_regen_all = QPushButton("不满意?重新生成整套大纲")
+        self.btn_rename = QPushButton("🔄 改名工具 (角色/地名/门派一键替换)")
+        self.btn_rename.setStyleSheet(
+            "background:#9b59b6;color:white;padding:4px 10px;border-radius:3px;font-weight:bold;")
+        self.btn_rename.setToolTip(
+            "扫描大纲全部文本(简介/种子/世界观/LO层/结构/章节大纲/特殊需求/角色设定),\n"
+            "把指定的旧名换成新名。支持多个对应关系一次替换。\n"
+            "例如:林远 → 苏白 + 林悦 → 苏雨,一次提交。")
         obtns.addWidget(self.btn_gen_all); obtns.addWidget(self.btn_regen_all)
+        obtns.addWidget(self.btn_rename)
         layout.addLayout(obtns)
 
         crow = QHBoxLayout()
@@ -6218,6 +6226,7 @@ class MainWindow(QMainWindow):
         self.tab_outline.btn_gen_lo.clicked.connect(lambda: self.gen_outline_part("LO世界观层"))
         self.tab_outline.btn_gen_struct.clicked.connect(lambda: self.gen_outline_part("故事结构"))
         self.tab_outline.btn_gen_ch.clicked.connect(lambda: self.gen_outline_part("章节大纲"))
+        self.tab_outline.btn_rename.clicked.connect(self.open_rename_dialog)
         self.tab_outline.btn_extract_intro.clicked.connect(self.extract_intro)
         self.tab_outline.btn_import_special.clicked.connect(
             lambda: self._import_to(self.tab_outline.special_edit))
@@ -9652,6 +9661,209 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请先填写大纲内容"); return
         prompt = PROMPTS["intro"].format(seed=seed, worldview=wv, structure=st)
         self._send_to_ai(prompt, "作品简介", target="intro")
+
+    def open_rename_dialog(self):
+        """🔄 改名工具:多对应一次替换大纲全部文本(也可选择是否覆盖章节正文)
+        例如:林远→苏白 + 林悦→苏雨 + 天剑宗→玄霄宗,一次提交。"""
+        # 收集所有要扫描的目标(QPlainTextEdit + chapter content)
+        targets = [
+            ("特殊需求", self.tab_outline.special_edit),
+            ("简介", self.tab_outline.intro_edit),
+            ("故事种子", self.tab_outline.seed_edit),
+            ("世界观", self.tab_outline.worldview_edit),
+            ("LO世界观层", self.tab_outline.lo_edit),
+            ("故事结构", self.tab_outline.structure_edit),
+            ("章节大纲", self.tab_outline.chapter_outline_edit),
+            ("角色设定", self.tab_settings.chars_edit),
+        ]
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🔄 改名工具(批量替换大纲/章节中的角色/地名/门派)")
+        dlg.setMinimumWidth(700)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(
+            "<b>使用方法:</b>每行一个对应关系,格式 <code>旧名 → 新名</code> 或 "
+            "<code>旧名 = 新名</code>(中间用 → 或 = 或制表符或多个空格都行)<br>"
+            "支持一次替换多个,例如:<br>"
+            "&nbsp;&nbsp;<code>林远 → 苏白</code><br>"
+            "&nbsp;&nbsp;<code>林悦 → 苏雨</code><br>"
+            "&nbsp;&nbsp;<code>天剑宗 → 玄霄宗</code>"))
+        rename_text = QPlainTextEdit()
+        rename_text.setPlaceholderText("林远 → 苏白\n林悦 → 苏雨\n天剑宗 → 玄霄宗")
+        rename_text.setMinimumHeight(150)
+        rename_text.setStyleSheet("font-family:monospace;font-size:13px;")
+        lay.addWidget(rename_text)
+
+        # 范围 checkbox
+        cb_outline = QCheckBox("替换大纲全部文本(简介/种子/世界观/LO/结构/章节大纲/特殊需求/角色设定)")
+        cb_outline.setChecked(True)
+        cb_chapters = QCheckBox(f"同时替换已生成章节正文({len(self.chapters)} 章)")
+        cb_chapters.setChecked(False)  # 默认不动章节,只动大纲(更安全)
+        cb_charlib = QCheckBox("同时替换 🎭 角色与世界 库的所有表(角色名/关系/物品持有人等)")
+        cb_charlib.setChecked(True)
+        for cb in (cb_outline, cb_chapters, cb_charlib):
+            lay.addWidget(cb)
+
+        # 按钮
+        btn_row = QHBoxLayout()
+        btn_preview = QPushButton("👁 预览替换数(不写盘)")
+        btn_preview.setStyleSheet("background:#3498db;color:white;padding:6px 14px;border-radius:3px;")
+        btn_apply = QPushButton("✓ 应用替换(写盘 + 自动保存)")
+        btn_apply.setStyleSheet(
+            "background:#27ae60;color:white;padding:6px 14px;border-radius:3px;font-weight:bold;")
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(dlg.reject)
+
+        def parse_pairs():
+            """从文本解析"旧名 → 新名"映射"""
+            pairs = []
+            for line in rename_text.toPlainText().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                # 支持 → / -> / = / \t / 多空格 作分隔
+                m = re.split(r'\s*(?:→|->|=>|=)\s*|\t+|\s{2,}', line, 1)
+                if len(m) == 2 and m[0].strip() and m[1].strip():
+                    pairs.append((m[0].strip(), m[1].strip()))
+            return pairs
+
+        def do_scan_and_apply(write):
+            pairs = parse_pairs()
+            if not pairs:
+                QMessageBox.warning(dlg, "提示",
+                    "没解析出有效对应关系。\n格式:旧名 → 新名,每行一个")
+                return
+            # 验证没重名
+            old_set = set()
+            for old, new in pairs:
+                if old in old_set:
+                    QMessageBox.warning(dlg, "重复",
+                        f"旧名 '{old}' 出现多次,只能定义一次。")
+                    return
+                old_set.add(old)
+
+            # 统计 & 替换
+            stats = []
+            total = 0
+            # 1) 大纲编辑器
+            if cb_outline.isChecked():
+                for label, widget in targets:
+                    txt = widget.toPlainText()
+                    n_changes = 0
+                    new_txt = txt
+                    for old, new in pairs:
+                        cnt = new_txt.count(old)
+                        if cnt > 0:
+                            new_txt = new_txt.replace(old, new)
+                            n_changes += cnt
+                    if n_changes > 0:
+                        stats.append(f"{label}: {n_changes} 处")
+                        total += n_changes
+                        if write:
+                            widget.setPlainText(new_txt)
+
+            # 2) 章节正文
+            if cb_chapters.isChecked() and self.chapters:
+                ch_changes = 0
+                for ch in self.chapters:
+                    c = ch.get("content", "")
+                    new_c = c
+                    for old, new in pairs:
+                        cnt = new_c.count(old)
+                        if cnt > 0:
+                            new_c = new_c.replace(old, new)
+                            ch_changes += cnt
+                    if write and new_c != c:
+                        ch["content"] = new_c
+                    # 章节标题也换
+                    t = ch.get("title", "")
+                    new_t = t
+                    for old, new in pairs:
+                        new_t = new_t.replace(old, new)
+                    if write and new_t != t:
+                        ch["title"] = new_t
+                if ch_changes > 0:
+                    stats.append(f"章节正文: {ch_changes} 处")
+                    total += ch_changes
+
+            # 3) 🎭 角色与世界库 — 遍历每张表的每个单元格
+            if cb_charlib.isChecked() and hasattr(self, "tab_charlib"):
+                cl = self.tab_charlib
+                tables = [
+                    ("角色档案", cl.tbl_chars),
+                    ("关系图谱", cl.tbl_relations),
+                    ("时间线", cl.tbl_timeline),
+                    ("物品法器", cl.tbl_items),
+                    ("战力等级", cl.tbl_power),
+                    ("伏笔追踪", cl.tbl_fore),
+                ]
+                # 钩子/爽点子页如果存在(用户已升级到 bf9f713 之后)
+                if hasattr(cl, "tbl_hooks"):
+                    tables.append(("钩子编年", cl.tbl_hooks))
+                if hasattr(cl, "tbl_cool"):
+                    tables.append(("爽点编年", cl.tbl_cool))
+                for tname, tbl in tables:
+                    t_changes = 0
+                    for r in range(tbl.rowCount()):
+                        for c in range(tbl.columnCount()):
+                            item = tbl.item(r, c)
+                            if not item:
+                                continue
+                            v = item.text()
+                            new_v = v
+                            for old, new in pairs:
+                                cnt = new_v.count(old)
+                                if cnt > 0:
+                                    new_v = new_v.replace(old, new)
+                                    t_changes += cnt
+                            if write and new_v != v:
+                                from PyQt5.QtWidgets import QTableWidgetItem
+                                tbl.setItem(r, c, QTableWidgetItem(new_v))
+                    if t_changes > 0:
+                        stats.append(f"{tname}: {t_changes} 处")
+                        total += t_changes
+
+            # 输出报告
+            if total == 0:
+                QMessageBox.information(dlg, "结果",
+                    f"扫描完成,没有匹配的内容。\n请检查旧名拼写是否正确。")
+                return
+
+            msg = (f"共 {len(pairs)} 个对应关系,"
+                   f"{'已替换' if write else '将替换'} {total} 处:\n\n"
+                   + "\n".join(f"  · {s}" for s in stats))
+            if write:
+                # 自动保存
+                try:
+                    self.save_project()
+                except Exception:
+                    try:
+                        self._autosave()
+                    except Exception:
+                        pass
+                # 刷新当前章节编辑器
+                try:
+                    ci = self.tab_editor.current_index
+                    if 0 <= ci < len(self.chapters):
+                        self.tab_editor.show_chapter(self.chapters[ci], ci)
+                except Exception:
+                    pass
+                self.tab_generation.log(f"🔄 改名应用:{total} 处替换,已自动保存", "success")
+                msg += "\n\n✓ 已自动保存项目(.backups 保留原版本,可菜单 → 🕓 恢复)"
+                QMessageBox.information(dlg, "✓ 完成", msg)
+                dlg.accept()
+            else:
+                QMessageBox.information(dlg, "👁 预览(未写盘)", msg)
+
+        btn_preview.clicked.connect(lambda: do_scan_and_apply(write=False))
+        btn_apply.clicked.connect(lambda: do_scan_and_apply(write=True))
+        btn_row.addWidget(btn_preview)
+        btn_row.addWidget(btn_apply)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_cancel)
+        lay.addLayout(btn_row)
+
+        dlg.exec_()
 
     def gen_first_chapter(self):
         """单独生成第一章（要求已有章节大纲）"""
