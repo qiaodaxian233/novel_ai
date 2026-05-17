@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.20"
+APP_VERSION = "v1.21"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -7335,12 +7335,16 @@ class MainWindow(QMainWindow):
         self.btn_theme_toggle.setToolTip(
             "切换 白天 ☀️ / 黑夜 🌙 主题(全局生效)\n"
             "编辑器单独的字色 / 背景色在章节编辑器顶部 🎨 / 🖌 按钮")
+        # v1.21:实色背景(避免 transparent 在 corner widget 上吞 click)
         self.btn_theme_toggle.setStyleSheet(
-            "QPushButton { background:transparent; border:1px solid #888; "
-            "border-radius:4px; font-size:14px; } "
-            "QPushButton:hover { background:#3c3c3c; }")
+            "QPushButton { background:#5d6d7e; color:white; border:1px solid #888; "
+            "border-radius:4px; font-size:14px; padding:2px; } "
+            "QPushButton:hover { background:#7f8c8d; } "
+            "QPushButton:pressed { background:#34495e; }")
         self.btn_theme_toggle.clicked.connect(self._on_toggle_theme)
         self.tabs.setCornerWidget(self.btn_theme_toggle)
+        # v1.21:强制 raise 到顶层,防止 corner 位置被 Tab 遮挡 click 事件
+        self.btn_theme_toggle.raise_()
         self.tab_settings = CreationSettings()
         self.tab_outline = StoryOutline()
         self.tab_memory = DialogMemory()
@@ -7514,6 +7518,11 @@ class MainWindow(QMainWindow):
         self.tab_editor.tts_stop_requested.connect(self._on_tts_stop)
         self.tab_editor.tts_speed_changed.connect(self._on_tts_speed_changed)
         self._init_tts()
+        # v1.21:加 视图 菜单 + Ctrl+Shift+D 快捷键(corner widget click bug 的兜底入口)
+        try:
+            self._setup_view_menu()
+        except Exception as _e:
+            print(f"[Theme] 视图菜单创建失败: {_e}", flush=True)
         self.tab_settings.btn_pangu_wl_apply.clicked.connect(self._on_pangu_apply_whitelist)
         # CreationSettings 盘古快捷工具
         self.tab_settings.btn_pangu_style.clicked.connect(self._on_pangu_style_match)
@@ -11104,14 +11113,43 @@ class MainWindow(QMainWindow):
     # ════════════════════════════════════════════════
     # v1.10 TTS 朗读 — Index-TTS / EdgeTTS 后端
     # ════════════════════════════════════════════════
+    def _setup_view_menu(self):
+        """v1.21:加 视图 菜单 + Ctrl+Shift+D 快捷键,作为 corner widget 按钮的兜底入口"""
+        from PyQt5.QtWidgets import QShortcut
+        from PyQt5.QtGui import QKeySequence
+        # 1. 主菜单栏加 视图(V) → 🌙 切换黑夜/白天
+        menubar = self.menuBar()
+        view_menu = menubar.addMenu("视图(&V)")
+        toggle_action = view_menu.addAction("🌙 切换 白天 / 黑夜 主题")
+        toggle_action.setShortcut("Ctrl+Shift+D")
+        toggle_action.triggered.connect(self._on_toggle_theme)
+        # 2. 全局快捷键 Ctrl+Shift+D(即使菜单被某些情况隐藏也能用)
+        sc = QShortcut(QKeySequence("Ctrl+Shift+D"), self)
+        sc.activated.connect(self._on_toggle_theme)
+        print("[Theme] 视图菜单 + Ctrl+Shift+D 快捷键已注册", flush=True)
+
     def _on_toggle_theme(self):
-        """v1.20:切换 light ↔ dark 主题,立即生效"""
+        """v1.20/v1.21:切换 light ↔ dark 主题,立即生效"""
+        print("[Theme] toggle clicked", flush=True)   # v1.21:诊断
         from PyQt5.QtWidgets import QApplication
-        new_name = ThemeManager.toggle(QApplication.instance())
+        app = QApplication.instance()
+        if app is None:
+            print("[Theme] ERROR: QApplication.instance() 返回 None", flush=True)
+            return
+        new_name = ThemeManager.toggle(app)
+        print(f"[Theme] 切换到 {new_name},QSS 已 apply", flush=True)
         # 切换按钮图标 — 新主题是 dark 则显示 ☀️(下一步切回 light)
         self.btn_theme_toggle.setText("☀️" if new_name == "dark" else "🌙")
-        # 切到 dark 时如果用户没自定义编辑器颜色,把默认 stylesheet 清空让全局 QSS 接管
-        # 切到 light 时也一样 — _apply_editor_colors 会读 QSettings(如果有自定义就保留)
+        # v1.21:强制刷新所有 widget 样式(setStyleSheet 不会自动 re-polish 现有 widget)
+        try:
+            for w in app.allWidgets():
+                w.style().unpolish(w)
+                w.style().polish(w)
+                w.update()
+            print(f"[Theme] 已 polish 刷新 {len(app.allWidgets())} 个 widget", flush=True)
+        except Exception as _e:
+            print(f"[Theme] polish 刷新失败: {_e}", flush=True)
+        # 应用编辑器自定义颜色(如果用户调过)
         try:
             self.tab_editor._apply_editor_colors()
         except Exception:
