@@ -946,6 +946,27 @@ class CreationSettings(QWidget):
         self.delay_check = QCheckBox("模拟人类操作延迟(非必要勿勾选)")
         ai_layout.addWidget(self.delay_check)
 
+        # DeepSeek 深度思考模式(R1)
+        self.chk_deep_think = QCheckBox(
+            "🧠 启用 DeepSeek 深度思考模式(质量更高,生成稍慢)")
+        # 持久化
+        from PyQt5.QtCore import QSettings as _QS_dt
+        self.chk_deep_think.setChecked(
+            _QS_dt("NovelAI", "UserPrefs").value("deepseek_deep_think", True, type=bool))
+        self.chk_deep_think.setStyleSheet("color:#7d3c98;font-weight:bold;")
+        self.chk_deep_think.setToolTip(
+            "勾选后,每次发送消息前自动点击 DeepSeek 的「深度思考」按钮(R1 模式)。\n"
+            "效果:\n"
+            "  ✓ 写作质量明显提升,逻辑更严谨\n"
+            "  ✓ 严格遵循盘古铁律和禁用词的能力增强\n"
+            "代价:\n"
+            "  · 生成时间增加 30%~50%(R1 需要思考过程)\n"
+            "  · 章节正文不变,但前置「思考过程」会在 DeepSeek 页面显示\n"
+            "仅 DeepSeek 站点生效,其他 AI 自动忽略。")
+        self.chk_deep_think.stateChanged.connect(
+            lambda v: _QS_dt("NovelAI", "UserPrefs").setValue("deepseek_deep_think", bool(v)))
+        ai_layout.addWidget(self.chk_deep_think)
+
         # ---- 盘古超级系统开关 ----
         self.pangu_check = QCheckBox(
             "启用【盘古超级系统】(禁用词过滤 + 感官铁律 + 压爆震 + 黄金三章公式)")
@@ -3746,6 +3767,8 @@ class BrowserWorker(QObject):
         # 用于"内容稳定即视为回复完成"的等待窗口(秒)
         self.stable_wait = 4
         self.max_wait = 240  # 单次最长等待 4 分钟
+        # DeepSeek 深度思考模式(主线程根据 UI 设置)
+        self._deep_think_enabled = False
 
     # ============ 主线程调用接口 ============
     def start(self, channel=None):
@@ -4648,8 +4671,53 @@ class BrowserWorker(QObject):
             except Exception:
                 pass
 
-            # stop 不可见(按钮恢复) + 抓到内容 + 内容跟上次相同 → 立即完成(最快路径)
+            # stop 不可见(按钮恢复) + 抓到内容 + 内容跟上次相同 → 立即完成
+            # ★★ 但要先检查 "继续生成" 按钮:DeepSeek 写到 token 上限会出现这个按钮
+            #    出现就自动点击 + 继续等(防止章节被截断 / 出现"继续生成"卡顿)
             if not stopping and cur and len(cur) > 30 and cur == last_text:
+                # 检查"继续生成"按钮(DeepSeek 特征)
+                continue_clicked = False
+                try:
+                    continue_clicked = self.driver.execute_script(r"""
+                        // 找所有按钮看内文是不是"继续生成"
+                        const btns = document.querySelectorAll(
+                            'div[role="button"], button, span[role="button"]');
+                        for (const b of btns) {
+                            if (b.offsetParent === null) continue;
+                            const t = (b.innerText || b.textContent || '').trim();
+                            if (t === '继续生成' || t === '继续') {
+                                b.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    """) or False
+                except Exception:
+                    pass
+                if continue_clicked:
+                    self.log_signal.emit(
+                        f"⚙ 检测到「继续生成」按钮 → 已自动点击,继续等待...", "info")
+                    # 重置稳定时间,让循环继续等 AI 接着写
+                    last_change = time.time()
+                    last_text = ""  # 强制重新匹配,因为接下来会有新内容
+                    no_change_streak = 0
+                    time.sleep(2)  # 给 DeepSeek 处理点击 + 重新开始生成的时间
+                    continue
+                # 没"继续生成"按钮 → 真完成
+                # ★★ 保险减速:写完后再等 0.8s,确认按钮快照没"延迟恢复"
+                #    (有些机器 DeepSeek 渲染慢,按钮变回纸飞机后 AI 还在写最后几句)
+                self.log_signal.emit(
+                    f"⏳ 按钮快照已恢复(可能写完),0.8s 保险确认...", "info")
+                time.sleep(0.8)
+                recheck = self._grab_last_response(prof)
+                if recheck and recheck != cur:
+                    # 还在写 → 内容继续增加,接着循环
+                    self.log_signal.emit(
+                        f"  (假警:0.8s 后内容从 {len(cur)} 涨到 {len(recheck)} 字符,接着等)",
+                        "info")
+                    last_text = recheck
+                    last_change = time.time()
+                    continue
                 self.log_signal.emit(
                     f"✓ 按钮快照已恢复(AI 写完)+ 内容稳定 → 完成 ({len(cur)} 字符)", "info")
                 break
@@ -4921,6 +4989,46 @@ class BrowserWorker(QObject):
         # React 把 value 控制锁住, 直接 .value=... 不触发 setState
         # 必须用 React 的内部 setter 才能让 state 更新
         try:
+            # ★ DeepSeek 深度思考模式:发送前检查并启用 R1 按钮
+            #   通过 _meta 字段传过来(send_to_ai 时传入)
+            if (prof.get("name", "").lower().startswith("deepseek")
+                    and self._deep_think_enabled):
+                try:
+                    dt_state = self.driver.execute_script(r"""
+                        // DeepSeek "深度思考" 按钮特征: 含 "深度思考" 文本
+                        const all = document.querySelectorAll(
+                            'div[role="button"], button, span[role="button"]');
+                        for (const b of all) {
+                            if (b.offsetParent === null) continue;
+                            const t = (b.innerText || b.textContent || '').trim();
+                            if (t === '深度思考' || t === '深度思考 (R1)' ||
+                                t.startsWith('深度思考')) {
+                                // 检查是否已激活 (含 aria-pressed 或样式高亮)
+                                const pressed = b.getAttribute('aria-pressed');
+                                const cls = b.className || '';
+                                // 启用条件:背景色变化 或 aria-pressed=true
+                                const isActive = (pressed === 'true') ||
+                                    cls.includes('active') ||
+                                    cls.includes('selected') ||
+                                    cls.includes('checked');
+                                if (!isActive) {
+                                    b.click();
+                                    return 'ACTIVATED';
+                                }
+                                return 'ALREADY_ON';
+                            }
+                        }
+                        return 'NOT_FOUND';
+                    """)
+                    if dt_state == 'ACTIVATED':
+                        self.log_signal.emit("🧠 已启用 DeepSeek 深度思考(R1)", "info")
+                        _t_inj.sleep(0.5)
+                    elif dt_state == 'NOT_FOUND':
+                        self.log_signal.emit(
+                            "🧠 深度思考按钮没找到(DeepSeek UI 可能改了),跳过", "warn")
+                except Exception as _e_dt:
+                    self.log_signal.emit(f"深度思考检测异常(忽略):{_e_dt}", "warn")
+
             result = self.driver.execute_script(f"""
                 const ta = document.querySelector('textarea');
                 if (!ta) return 'NO_TA';
@@ -6661,6 +6769,13 @@ class MainWindow(QMainWindow):
                 self, "请先启动浏览器",
                 "请先在『生成控制』页点『🚀 启动浏览器』,完成 AI 网站登录后再生成。")
             return
+        # 同步 UI 设置到 worker(每次发送前都同步,允许用户中途切换)
+        try:
+            self.worker._deep_think_enabled = (
+                self.tab_settings.chk_deep_think.isChecked()
+                if hasattr(self.tab_settings, "chk_deep_think") else False)
+        except Exception:
+            pass
         self.tabs.setCurrentWidget(self.tab_generation)
         self.tab_generation.log(f"准备发送:{label} ({len(prompt)} 字符)", "info")
         # 记录这次任务的目标位置(由 _on_response_received 处理回填)
