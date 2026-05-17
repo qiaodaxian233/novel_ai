@@ -9949,14 +9949,14 @@ class MainWindow(QMainWindow):
         dlg.setMinimumWidth(700)
         lay = QVBoxLayout(dlg)
         lay.addWidget(QLabel(
-            "<b>使用方法:</b>每行一个对应关系,格式 <code>旧名 → 新名</code> 或 "
-            "<code>旧名 = 新名</code>(中间用 → 或 = 或制表符或多个空格都行)<br>"
-            "支持一次替换多个,例如:<br>"
-            "&nbsp;&nbsp;<code>林远 → 苏白</code><br>"
-            "&nbsp;&nbsp;<code>林悦 → 苏雨</code><br>"
-            "&nbsp;&nbsp;<code>天剑宗 → 玄霄宗</code>"))
+            "<b>使用方法:</b>每行一个对应关系,<b>旧名 + 空格 + 新名</b><br>"
+            "例如:<br>"
+            "&nbsp;&nbsp;<code>林远 林麟</code>(中间一个空格就行)<br>"
+            "&nbsp;&nbsp;<code>林悦 林雨</code><br>"
+            "&nbsp;&nbsp;<code>天剑宗 玄霄宗</code><br>"
+            "<i>(箭头 → / = / 制表符 也支持,如果你想打)</i>"))
         rename_text = QPlainTextEdit()
-        rename_text.setPlaceholderText("林远 → 苏白\n林悦 → 苏雨\n天剑宗 → 玄霄宗")
+        rename_text.setPlaceholderText("林远 林麟\n林悦 林雨\n天剑宗 玄霄宗")
         rename_text.setMinimumHeight(150)
         rename_text.setStyleSheet("font-family:monospace;font-size:13px;")
         lay.addWidget(rename_text)
@@ -9982,16 +9982,23 @@ class MainWindow(QMainWindow):
         btn_cancel.clicked.connect(dlg.reject)
 
         def parse_pairs():
-            """从文本解析"旧名 → 新名"映射"""
+            """从文本解析"旧名 新名"映射。
+            优先用箭头/等号分隔(更精确);没有就用空白拆 2 段(任意空白,包括单空格)。"""
             pairs = []
             for line in rename_text.toPlainText().splitlines():
                 line = line.strip()
                 if not line:
                     continue
-                # 支持 → / -> / = / \t / 多空格 作分隔
-                m = re.split(r'\s*(?:→|->|=>|=)\s*|\t+|\s{2,}', line, 1)
+                # 1) 优先看有没有显式分隔符 → / -> / => / =
+                m = re.split(r'\s*(?:→|->|=>|=)\s*', line, 1)
                 if len(m) == 2 and m[0].strip() and m[1].strip():
                     pairs.append((m[0].strip(), m[1].strip()))
+                    continue
+                # 2) 没有显式分隔符 → 按任意空白(含单空格/制表符)拆成两段
+                #    .split(None, 1) 是 Python 推荐的"按任意空白拆"
+                parts = line.split(None, 1)
+                if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                    pairs.append((parts[0].strip(), parts[1].strip()))
             return pairs
 
         def do_scan_and_apply(write):
