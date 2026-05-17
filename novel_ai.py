@@ -1184,92 +1184,6 @@ class ChapterEditor(QWidget):
         QMessageBox.information(self, "盘古本地词扫结果", msg)
         self.pangu_quicklint_requested.emit(c)
 
-    def _on_dialogue_critic(self):
-        """v1.32:13 法对话诊断 — 静态扫描 + 可选 AI 深度评分"""
-        if not DIALOGUE_CRITIC_AVAILABLE:
-            QMessageBox.warning(
-                self, "诊断器不可用",
-                "dialogue_critic.py 没找到。\n请确认文件存在于程序目录。")
-            return
-
-        content = self.tab_editor.content_edit.toPlainText().strip()
-        if not content:
-            QMessageBox.information(self, "对话诊断", "本章为空,无内容可诊断")
-            return
-
-        critic = dialogue_critic.DialogueCritic(content)
-
-        # Step 1: 静态扫描(本地,瞬出)
-        static = critic.static_scan()
-        static_msg = static.summary()
-
-        # 询问是否跑 AI 深度评分
-        ret = QMessageBox.question(
-            self, "🔬 对话诊断 - 静态扫描完成",
-            f"{static_msg}\n\n──────────\n"
-            f"是否继续 AI 深度评分?\n"
-            f"  ✓ 是 → 发 AI,13 法逐条评分 + 改写建议(消耗 token)\n"
-            f"  ✗ 否 → 只看静态扫描结果",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-        if ret != QMessageBox.Yes:
-            # 把静态结果显示到对话框
-            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QDialogButtonBox
-            dlg = QDialog(self)
-            dlg.setWindowTitle("🔬 13 法对话诊断 (静态)")
-            dlg.resize(700, 500)
-            lay = QVBoxLayout(dlg)
-            te = QPlainTextEdit(static_msg)
-            te.setReadOnly(True)
-            lay.addWidget(te)
-            bb = QDialogButtonBox(QDialogButtonBox.Close)
-            bb.rejected.connect(dlg.reject)
-            bb.accepted.connect(dlg.accept)
-            lay.addWidget(bb)
-            dlg.exec_()
-            return
-
-        # Step 2: 发 AI(用现有 _send_to_ai 通道)
-        # 读老刀开关
-        from PyQt5.QtCore import QSettings
-        laodao = QSettings("NovelAI", "DialogueCritic").value(
-            "laodao_style", False, type=bool)
-        prompt = critic.build_ai_prompt(deep=True, laodao=laodao)
-        self._dialogue_critic_static = static    # 暂存静态结果供 received 用
-        self._send_to_ai(
-            prompt,
-            f"13 法对话诊断{'(老刀风格)' if laodao else ''}",
-            target="dialogue_critic")
-        self.tab_generation.log(
-            "🔬 13 法对话诊断已发送 AI(深度评分 + 改写建议)", "info")
-
-    def _on_dialogue_critic_received(self, content, meta):
-        """AI 返回诊断结果"""
-        ai_data = dialogue_critic.parse_ai_response(content)
-        static = getattr(self, "_dialogue_critic_static", None)
-        if static is None:
-            QMessageBox.warning(self, "诊断错误", "找不到静态扫描缓存")
-            return
-        report = dialogue_critic.format_report(static, ai_data)
-        # 用大对话框显示
-        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QDialogButtonBox
-        dlg = QDialog(self)
-        dlg.setWindowTitle("🔬 13 法对话诊断 - AI 深度结果")
-        dlg.resize(800, 600)
-        lay = QVBoxLayout(dlg)
-        te = QPlainTextEdit(report)
-        te.setReadOnly(True)
-        # 等宽字体让进度条对齐
-        from PyQt5.QtGui import QFont
-        f = QFont("Consolas", 10)
-        te.setFont(f)
-        lay.addWidget(te)
-        bb = QDialogButtonBox(QDialogButtonBox.Close)
-        bb.rejected.connect(dlg.reject)
-        bb.accepted.connect(dlg.accept)
-        lay.addWidget(bb)
-        dlg.exec_()
-        self.tab_generation.log("🔬 13 法对话诊断完成", "success")
-
     def _on_pangu_qcheck(self):
         # 发起 30 项质检(调 AI)
         c = self.content_edit.toPlainText()
@@ -8739,6 +8653,92 @@ class MainWindow(QMainWindow):
         self._send_to_ai(
             prompt, f"盘古模式切换-{names.get(mode_key, mode_key)}",
             target="pangu_mode")
+
+    def _on_dialogue_critic(self):
+        """v1.32:13 法对话诊断 — 静态扫描 + 可选 AI 深度评分"""
+        if not DIALOGUE_CRITIC_AVAILABLE:
+            QMessageBox.warning(
+                self, "诊断器不可用",
+                "dialogue_critic.py 没找到。\n请确认文件存在于程序目录。")
+            return
+
+        content = self.tab_editor.content_edit.toPlainText().strip()
+        if not content:
+            QMessageBox.information(self, "对话诊断", "本章为空,无内容可诊断")
+            return
+
+        critic = dialogue_critic.DialogueCritic(content)
+
+        # Step 1: 静态扫描(本地,瞬出)
+        static = critic.static_scan()
+        static_msg = static.summary()
+
+        # 询问是否跑 AI 深度评分
+        ret = QMessageBox.question(
+            self, "🔬 对话诊断 - 静态扫描完成",
+            f"{static_msg}\n\n──────────\n"
+            f"是否继续 AI 深度评分?\n"
+            f"  ✓ 是 → 发 AI,13 法逐条评分 + 改写建议(消耗 token)\n"
+            f"  ✗ 否 → 只看静态扫描结果",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ret != QMessageBox.Yes:
+            # 把静态结果显示到对话框
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QDialogButtonBox
+            dlg = QDialog(self)
+            dlg.setWindowTitle("🔬 13 法对话诊断 (静态)")
+            dlg.resize(700, 500)
+            lay = QVBoxLayout(dlg)
+            te = QPlainTextEdit(static_msg)
+            te.setReadOnly(True)
+            lay.addWidget(te)
+            bb = QDialogButtonBox(QDialogButtonBox.Close)
+            bb.rejected.connect(dlg.reject)
+            bb.accepted.connect(dlg.accept)
+            lay.addWidget(bb)
+            dlg.exec_()
+            return
+
+        # Step 2: 发 AI(用现有 _send_to_ai 通道)
+        # 读老刀开关
+        from PyQt5.QtCore import QSettings
+        laodao = QSettings("NovelAI", "DialogueCritic").value(
+            "laodao_style", False, type=bool)
+        prompt = critic.build_ai_prompt(deep=True, laodao=laodao)
+        self._dialogue_critic_static = static    # 暂存静态结果供 received 用
+        self._send_to_ai(
+            prompt,
+            f"13 法对话诊断{'(老刀风格)' if laodao else ''}",
+            target="dialogue_critic")
+        self.tab_generation.log(
+            "🔬 13 法对话诊断已发送 AI(深度评分 + 改写建议)", "info")
+
+    def _on_dialogue_critic_received(self, content, meta):
+        """AI 返回诊断结果"""
+        ai_data = dialogue_critic.parse_ai_response(content)
+        static = getattr(self, "_dialogue_critic_static", None)
+        if static is None:
+            QMessageBox.warning(self, "诊断错误", "找不到静态扫描缓存")
+            return
+        report = dialogue_critic.format_report(static, ai_data)
+        # 用大对话框显示
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🔬 13 法对话诊断 - AI 深度结果")
+        dlg.resize(800, 600)
+        lay = QVBoxLayout(dlg)
+        te = QPlainTextEdit(report)
+        te.setReadOnly(True)
+        # 等宽字体让进度条对齐
+        from PyQt5.QtGui import QFont
+        f = QFont("Consolas", 10)
+        te.setFont(f)
+        lay.addWidget(te)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        bb.accepted.connect(dlg.accept)
+        lay.addWidget(bb)
+        dlg.exec_()
+        self.tab_generation.log("🔬 13 法对话诊断完成", "success")
 
     def _on_pangu_qcheck(self, content):
         # 让 AI 按盘古 30 项质检规范深度审稿
