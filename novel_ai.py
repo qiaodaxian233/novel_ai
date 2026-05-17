@@ -405,6 +405,24 @@ PROMPTS = {
         "【原章节正文】\n{content}\n\n"
         "现在请直接输出修复后的完整章节正文(只输出小说正文,无任何前后缀):"
     ),
+
+    "laodao_autofix": (
+        "你是【老刀的执行徒弟】。老刀刚才点评了一章网文,挑出了一堆问题。\n"
+        "现在你的任务:**按老刀的批评和改法,直接重写这章**,把那些问题全部修掉。\n\n"
+        "重写规则:\n"
+        "1. **逐条对照老刀的【逐条开刀】问题清单**,每条都要在新版里改掉\n"
+        "2. **保留原章节的核心剧情走向**(人物/场景/关键事件不变),只动表达和细节\n"
+        "3. **字数控制在原章 ±10% 内**(不要大砍也不要疯狂扩写)\n"
+        "4. 严格遵循盘古铁律:\n"
+        "   - 禁用词清零(顿时/连忙/显然/似乎/知道/觉得/想/认为/嘴角勾起/眼中闪过等)\n"
+        "   - 对话只用「说」,不用「喊道/笑道/冷笑道」\n"
+        "   - 感官铁律:不用「仿佛/如同/像」,直接断言\n"
+        "5. **不要在末尾加任何元信息**(不加【断章钩子】【本章爽点】【伏笔状态】【下一章选项】【本章完】等)\n"
+        "6. 输出**整篇修复后的章节正文**,从第一句到最后一句,完整一篇,没有任何前后缀\n\n"
+        "【老刀的点评(就是问题清单+改法)】\n{critique}\n\n"
+        "【原章节正文(要被你重写的内容)】\n{content}\n\n"
+        "现在请直接输出按老刀建议重写后的完整章节正文(只输出小说正文,无任何前后缀,不要任何解释):"
+    ),
 }
 
 # ---- 盘古超级系统(零侵入集成,新增) ----
@@ -6584,6 +6602,14 @@ class MainWindow(QMainWindow):
                 self._on_laodao_critique_response(content, meta)
                 self._pending_task_target = None
                 return
+            if tgt == "laodao_autofix":
+                # 老刀按建议重写返回 → 回填章节
+                meta = self._pending_task_target or {}
+                ch_idx = meta.get("ch_idx", -1)
+                orig = meta.get("original_chapter", "")
+                self._on_laodao_autofix_response(content, ch_idx, orig)
+                self._pending_task_target = None
+                return
         except Exception:
             pass
         if not content or not content.strip():
@@ -7182,6 +7208,16 @@ class MainWindow(QMainWindow):
         lay.addWidget(txt, 1)
         # 按钮区
         btn_row = QHBoxLayout()
+        btn_autofix = QPushButton("🔧 按老刀建议重写本章")
+        btn_autofix.setStyleSheet(
+            "background:#e67e22;color:white;padding:8px 16px;border-radius:3px;"
+            "font-weight:bold;font-size:14px;")
+        btn_autofix.setToolTip(
+            "把老刀的整段点评 + 章节原文发给 AI,让它按老刀的批评和改法直接重写本章。\n"
+            "完成后修复版本自动覆盖当前章节(原版本通过 .backups 备份,菜单 → 🕓 恢复历史版本 找回)。")
+        btn_autofix.clicked.connect(
+            lambda: (dlg.accept(),
+                     self._on_laodao_autofix_request(content, original_content)))
         btn_recheck = QPushButton("🔁 再来一刀(让老刀再点评一次)")
         btn_recheck.setStyleSheet(
             "background:#c0392b;color:white;padding:6px 14px;border-radius:3px;")
@@ -7192,7 +7228,8 @@ class MainWindow(QMainWindow):
             lambda: QApplication.clipboard().setText(content))
         btn_close = QPushButton("关闭")
         btn_close.clicked.connect(dlg.accept)
-        btn_row.addWidget(btn_recheck)
+        btn_row.addWidget(btn_autofix, 2)
+        btn_row.addWidget(btn_recheck, 1)
         btn_row.addWidget(btn_copy)
         btn_row.addStretch()
         btn_row.addWidget(btn_close)
@@ -7200,6 +7237,88 @@ class MainWindow(QMainWindow):
         self.tab_generation.log(
             f"✓ 老刀第 {retry_round} 轮点评完成,{len(content)} 字", "success")
         dlg.exec_()
+
+    def _on_laodao_autofix_request(self, critique_text, original_chapter):
+        """🔧 按老刀建议重写 — 把点评 + 原文发 AI,让它按建议改"""
+        if not original_chapter or not original_chapter.strip():
+            QMessageBox.warning(self, "提示", "原章节内容为空,无法修复")
+            return
+        if not self.worker.is_ready():
+            QMessageBox.warning(
+                self, "请先启动浏览器",
+                "请先在『生成控制』页点『🚀 启动浏览器』并完成 AI 网站登录")
+            return
+        ch_idx = getattr(self.tab_editor, "current_index", -1)
+        if ch_idx < 0 or ch_idx >= len(self.chapters):
+            QMessageBox.warning(
+                self, "提示",
+                "请先在左侧章节列表里选中要修复的章节")
+            return
+        # 截断 — 老刀点评 + 原文都可能很长
+        critique_snip = critique_text[:5000] if len(critique_text) > 5000 else critique_text
+        content_snip = original_chapter[:8000] if len(original_chapter) > 8000 else original_chapter
+        prompt = PROMPTS["laodao_autofix"].format(
+            critique=critique_snip,
+            content=content_snip,
+        )
+        self.tab_generation.log(
+            f"▶ AI 按老刀建议重写第 {ch_idx+1} 章,约 1-2 分钟回填...", "info")
+        self._send_to_ai(
+            prompt, f"老刀修复-第{ch_idx+1}章",
+            target="laodao_autofix",
+            ch_idx=ch_idx,
+            original_chapter=original_chapter,
+        )
+
+    def _on_laodao_autofix_response(self, content, ch_idx, original_chapter):
+        """老刀修复返回 → 回填当前章节(原版本自动备份到 .backups)"""
+        if not content or not content.strip():
+            QMessageBox.warning(
+                self, "老刀修复失败",
+                "AI 没返回任何内容。可能 AI 没听懂指令,请重试或先关掉浏览器/网络问题。")
+            return
+        fixed = content.strip()
+        # 容错:去掉可能的元信息块
+        try:
+            from pangu_system import strip_chapter_meta
+            fixed = strip_chapter_meta(fixed)
+        except Exception:
+            pass
+        orig_len = len(original_chapter)
+        new_len = len(fixed)
+        ratio = new_len / orig_len if orig_len > 0 else 1.0
+        if ratio < 0.5 or ratio > 1.8:
+            ret = QMessageBox.question(
+                self, "⚠️ 修复结果异常",
+                f"AI 返回内容长度跟原章节差太多:\n"
+                f"  原章节:{orig_len} 字  →  AI 返回:{new_len} 字"
+                f"(变化 {(ratio-1)*100:+.1f}%)\n\n"
+                f"前 300 字预览:\n{fixed[:300]}...\n\n"
+                f"还要回填吗?\n"
+                f"  ✓ 是 → 覆盖当前章节(原内容已通过 .backups 备份)\n"
+                f"  ✗ 否 → 放弃这次修复",
+                QMessageBox.Yes | QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                self.tab_generation.log("已放弃 AI 修复结果(长度异常)", "warn")
+                return
+        if 0 <= ch_idx < len(self.chapters):
+            self.chapters[ch_idx]["content"] = fixed
+            if self.tab_editor.current_index == ch_idx:
+                self.tab_editor.content_edit.setPlainText(fixed)
+            try:
+                self.save_project()
+            except Exception:
+                self._autosave()
+            self.tab_generation.log(
+                f"✓ 老刀建议重写完成第 {ch_idx+1} 章:{orig_len}→{new_len} 字。"
+                f"原版本可通过菜单 → 🕓 恢复历史版本 找回",
+                "success")
+            QMessageBox.information(
+                self, "✓ 老刀修复完成",
+                f"第 {ch_idx+1} 章已按老刀建议重写 + 回填 + 保存。\n\n"
+                f"字数变化:{orig_len} → {new_len}\n"
+                f"想要旧版本?菜单 → 文件 → 🕓 恢复历史版本(最近 10 次)\n\n"
+                f"建议:再点一次「🔪 老刀毒舌点评」看新版评价 / 「📊 30项质检」看新得分。")
 
     def _on_pangu_spiral(self, content):
         # 让 AI 诊断当前章节处于 P1-P7 哪个螺旋阶段
