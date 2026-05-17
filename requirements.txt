@@ -8,3 +8,4 @@ webdriver-manager>=4.0.0
 # v1.10 TTS 朗读
 edge-tts>=6.1  # v1.10: TTS 默认后端 — 免费/在线/中文音质好
 gradio_client>=0.10  # v1.10: 接本地 Index-TTS Gradio 服务(可选,只在用 Index-TTS 时需要)
+pygame>=2.5  # v1.16: TTS 音频播放最稳后端(SDL2,支持任意 WAV 格式)

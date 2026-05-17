@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.15"
+APP_VERSION = "v1.16"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1827,15 +1827,48 @@ class CreationSettings(QWidget):
         if not ok:
             QMessageBox.warning(self, "TTS 测试失败", msg)
             return
-        # 播放 — v1.13 BUG-035:winsound 优先(Windows + WAV,标准库零依赖)
+        # 播放 — v1.16 BUG-038:pygame 优先(SDL2,无视 WAV 编码),winsound 次之
         played_by = None
         play_err = None
         import sys, os
         ext = os.path.splitext(out)[1].lower()
-        # 路径 1:Windows + WAV → winsound(标准库,几乎不会失败)
-        if sys.platform == "win32" and ext == ".wav":
+
+        # WAV 格式诊断 — 打到 console,帮助定位 winsound 不兼容问题
+        if ext == ".wav":
             try:
-                # v1.15:播前 print 调试信息(看不到声音时一目了然)
+                import wave
+                with wave.open(out, "rb") as _w:
+                    print(
+                        f"[TTS test] WAV 诊断: "
+                        f"{_w.getnchannels()}ch / "
+                        f"{_w.getsampwidth()*8}bit / "
+                        f"{_w.getframerate()}Hz / "
+                        f"{_w.getnframes()}帧 / "
+                        f"comptype={_w.getcomptype()}",
+                        flush=True)
+            except Exception as _we:
+                print(f"[TTS test] WAV header 解析失败({_we}) — 可能是非标准编码,winsound 大概率不认", flush=True)
+
+        # 路径 1(新增): pygame.mixer — SDL2 后端,绕过所有 WAV 格式坑
+        try:
+            import pygame
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            print(f"[TTS test] pygame 已 init,准备 load: {out}", flush=True)
+            pygame.mixer.music.load(out)
+            pygame.mixer.music.play()
+            played_by = "pygame.mixer(SDL2,最稳)"
+            print(f"[TTS test] pygame.mixer.music.play() 已调用", flush=True)
+        except ImportError:
+            print(f"[TTS test] 没装 pygame,尝试 winsound 兜底(建议 pip install pygame)", flush=True)
+            play_err = "pygame 未安装"
+        except Exception as e:
+            play_err = f"pygame 失败:{e}"
+            print(f"[TTS test] pygame 异常:{e}", flush=True)
+
+        # 路径 2:Windows + WAV → winsound(标准库兜底)
+        if played_by is None and sys.platform == "win32" and ext == ".wav":
+            try:
                 _exists = os.path.exists(out)
                 _size = os.path.getsize(out) if _exists else 0
                 print(f"[TTS test] 准备 winsound 播放: {out} exists={_exists} size={_size}", flush=True)
@@ -1845,11 +1878,11 @@ class CreationSettings(QWidget):
                     import winsound
                     winsound.PlaySound(out, winsound.SND_FILENAME | winsound.SND_ASYNC)
                     played_by = "winsound(标准库)"
-                    print(f"[TTS test] winsound.PlaySound 已调用,应该开始播放", flush=True)
+                    print(f"[TTS test] winsound.PlaySound 已调用", flush=True)
             except Exception as e:
-                play_err = f"winsound 失败:{e}"
+                play_err = (play_err or "") + f" / winsound:{e}"
                 print(f"[TTS test] winsound 异常: {e}", flush=True)
-        # 路径 2:QMediaPlayer 兜底(WAV 在 win 用 winsound 已经成功,这里主要给 MP3 用)
+        # 路径 3:QMediaPlayer 兜底
         if played_by is None:
             try:
                 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
@@ -10913,13 +10946,32 @@ class MainWindow(QMainWindow):
         self.tab_generation.log("🔊 TTS 全部段落合成完成,继续播放剩余队列", "info")
 
     def _play_next_chunk(self):
-        """v1.13:winsound 优先(Windows + WAV)→ QMediaPlayer 兜底。
-        winsound 没有'播完信号',用 wave 模块算 duration → QTimer 调度下一段。"""
+        """v1.16:pygame 优先 → winsound → QMediaPlayer。
+        pygame 有 get_busy() 可轮询,winsound 没'播完信号'用 wave duration 调度。"""
         if not self._tts_queue:
             return
         path = self._tts_queue.pop(0)
         import sys, os
         ext = os.path.splitext(path)[1].lower()
+
+        # 路径 0:pygame.mixer — SDL2 后端,最稳
+        try:
+            import pygame
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.play()
+            self._tts_currently_winsound = False
+            self._tts_currently_pygame = True
+            # 用 QTimer 轮询 pygame.mixer.music.get_busy()
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(200, self._pygame_check_done)
+            return
+        except ImportError:
+            pass
+        except Exception as _e:
+            self.tab_generation.log(f"⚠ pygame 播放失败({_e}),退到 winsound", "warn")
+
         # 路径 1:Windows + WAV → winsound
         if sys.platform == "win32" and ext == ".wav":
             try:
@@ -10948,6 +11000,29 @@ class MainWindow(QMainWindow):
             self._tts_player.play()
         except Exception as e:
             self.tab_generation.log(f"⚠ TTS 播放失败:{e}", "warn")
+
+    def _pygame_check_done(self):
+        """v1.16:轮询 pygame.mixer 是否播完,完了接下一段"""
+        try:
+            import pygame
+            if pygame.mixer.music.get_busy():
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(200, self._pygame_check_done)
+                return
+        except Exception:
+            pass
+        # 播完了
+        if self._tts_queue:
+            self._play_next_chunk()
+            return
+        if self._tts_worker is not None and self._tts_worker.isRunning():
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(1000, self._pygame_check_done)
+            return
+        # 全完
+        self.tab_editor.btn_tts_play.setText("🔊 朗读本章")
+        self.tab_editor.btn_tts_stop.setEnabled(False)
+        self.tab_editor.lbl_tts_status.setText("✓ 播放完成")
 
     def _get_wav_duration_ms(self, path):
         """读 WAV header 算时长(毫秒)。失败时给个保守默认 5 秒。"""
@@ -10995,10 +11070,20 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_tts_pause(self):
-        """暂停 / 继续
-        winsound 没有真暂停,只能停 → 重新点 🔊 接着播。
-        QMediaPlayer 走标准 pause/play。
-        """
+        """暂停 / 继续。pygame 真暂停;winsound 不支持;QMediaPlayer 标准 pause/play"""
+        # pygame 真暂停
+        if getattr(self, "_tts_currently_pygame", False):
+            try:
+                import pygame
+                if pygame.mixer.music.get_busy():
+                    pygame.mixer.music.pause()
+                    self.tab_editor.btn_tts_play.setText("▶ 继续")
+                else:
+                    pygame.mixer.music.unpause()
+                    self.tab_editor.btn_tts_play.setText("⏸ 暂停")
+            except Exception:
+                pass
+            return
         if getattr(self, "_tts_currently_winsound", False):
             self.tab_generation.log(
                 "ℹ winsound 不支持真暂停,只能停。要继续请重点 🔊 朗读本章", "info")
@@ -11019,6 +11104,13 @@ class MainWindow(QMainWindow):
 
     def _on_tts_stop(self):
         """停止播放 + 清队列 + 终止合成"""
+        # 停 pygame
+        try:
+            import pygame
+            if pygame.mixer.get_init():
+                pygame.mixer.music.stop()
+        except Exception:
+            pass
         # 停 winsound(如果正在用)
         try:
             import sys
