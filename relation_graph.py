@@ -219,8 +219,8 @@ def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
 <head>
 <meta charset="utf-8"/>
 <style>
-  html, body {{ margin:0; padding:0; height:100%; background:#fafafa; font-family: 'Microsoft YaHei', sans-serif; }}
-  #network {{ width:100%; height:100vh; }}
+  html, body {{ margin:0; padding:0; height:100%; background:#fafafa; font-family: 'Microsoft YaHei', sans-serif; overflow:hidden; }}
+  #network {{ position:absolute; top:0; left:0; right:0; bottom:0; }}
   #empty {{
     position:absolute; top:50%; left:50%; transform:translate(-50%, -50%);
     color:#999; font-size:14px; text-align:center; line-height:1.8;
@@ -290,13 +290,13 @@ def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
         enabled: true,
         solver: 'forceAtlas2Based',
         forceAtlas2Based: {{
-          gravitationalConstant: -60,
-          centralGravity: 0.012,
-          springLength: 150,
-          springConstant: 0.08,
-          damping: 0.5,
+          gravitationalConstant: -45,
+          centralGravity: 0.06,
+          springLength: 110,
+          springConstant: 0.10,
+          damping: 0.55,
         }},
-        stabilization: {{ iterations: 200, fit: true }},
+        stabilization: {{ iterations: 250, fit: true }},
       }},
       interaction: {{
         hover: true,
@@ -308,9 +308,18 @@ def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
       }},
     }};
     var network = new vis.Network(container, data, options);
-    // 稳定后关物理(节点拖完不再抖动)
+    // 稳定后:关物理 + 显式 fit 一次,保证节点居中铺满
     network.once('stabilizationIterationsDone', function () {{
       network.setOptions({{ physics: {{ enabled: false }} }});
+      network.fit({{ animation: false }});
+    }});
+    // QWebEngineView 尺寸变化时(用户拉宽窗口/切 Tab 等),重新 fit
+    var _fitTimer = null;
+    window.addEventListener('resize', function () {{
+      if (_fitTimer) clearTimeout(_fitTimer);
+      _fitTimer = setTimeout(function () {{
+        try {{ network.redraw(); network.fit({{ animation: false }}); }} catch (e) {{}}
+      }}, 120);
     }});
   }}
 </script>

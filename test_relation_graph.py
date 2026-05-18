@@ -162,12 +162,13 @@ def test_import_in_novel_ai():
     assert "RELATION_GRAPH_AVAILABLE" in src
 
 
-def test_app_version_bumped():
-    """v1.70:大改动(新模块+新 sub_tab+新依赖)十位+1 末位归零"""
+def test_app_version_at_least_v1_70():
+    """v1.70 是关系网功能引入的版本,之后版本号必须 ≥ v1.70(后续 bug fix 末位+1 都通过)"""
     src = _read_src()
-    m = re.search(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']', src)
+    m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)["\']', src)
     assert m, "找不到 APP_VERSION 声明"
-    assert m.group(1) == "v1.70", f"APP_VERSION 应为 v1.70,实际 {m.group(1)}"
+    major, minor = int(m.group(1)), int(m.group(2))
+    assert (major, minor) >= (1, 70), f"APP_VERSION 应 ≥ v1.70,实际 v{major}.{minor}"
 
 
 def test_new_methods_in_CharacterLibrary():
@@ -245,3 +246,40 @@ def test_relation_colors_cover_user_examples():
         color = relation_graph._pick_edge_color(rel)
         assert color != relation_graph.DEFAULT_EDGE_COLOR, \
             f"关系类型 '{rel}' 没在 RELATION_COLORS 命中,会用默认灰色"
+
+
+# ── 6. v1.71 修复回归守护 ───────────────────────────────
+def test_html_uses_absolute_fill_not_vh():
+    """v1.71 A 修复:HTML 模板 #network 用 absolute fill 替代 100vh,确保铺满 view"""
+    import relation_graph
+    html_text = relation_graph._build_html(
+        [{"id": "A", "label": "A"}], [], "vis-network.min.js")
+    # #network 必须用 absolute 定位
+    assert "position:absolute" in html_text or "position: absolute" in html_text, \
+        "#network 应使用 absolute 定位"
+    # 不能再用 100vh(它在 QWebEngineView 里会出问题)
+    assert "100vh" not in html_text, "不应再使用 100vh,改用 absolute fill"
+
+
+def test_html_calls_fit_after_stabilization():
+    """v1.71 A 修复:stabilization 后必须显式调用 network.fit() 把节点居中"""
+    import relation_graph
+    html_text = relation_graph._build_html(
+        [{"id": "A", "label": "A"}], [], "vis-network.min.js")
+    assert "network.fit(" in html_text, "stabilization 后应显式调 network.fit() 居中"
+    assert "stabilizationIterationsDone" in html_text
+
+
+def test_widget_has_max_height_constraint():
+    """v1.71 B 修复:RelationGraphWidget 在 _build_relation_graph_tab 里被
+    setMaximumHeight 限制,避免画布把整个 sub_tab 撑爆。"""
+    src = _read_src()
+    # 找到 _build_relation_graph_tab 函数体
+    m = re.search(
+        r"def _build_relation_graph_tab\(self\):(.*?)def \w",
+        src, re.DOTALL,
+    )
+    assert m, "找不到 _build_relation_graph_tab"
+    body = m.group(1)
+    assert "setMaximumHeight" in body, "应该给 relation_graph_widget 设 setMaximumHeight"
+    assert "setMinimumHeight" in body, "应该给 relation_graph_widget 设 setMinimumHeight"
