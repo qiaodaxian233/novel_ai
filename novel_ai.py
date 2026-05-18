@@ -12866,6 +12866,7 @@ class MainWindow(QMainWindow):
                     "summary_len": self.tab_memory.summary_len.value(),
                 },
                 "canon": self.tab_canon.serialize_for_save(),
+                "charlib": self.tab_charlib.serialize() if hasattr(self, "tab_charlib") else {},
                 "skills": self.tab_skills.serialize_for_save(),
                 "critique": self.tab_generation.critique_config(),
                 "conv_slots": self.tab_generation.conv_switcher.serialize_for_save(),
@@ -12920,12 +12921,50 @@ class MainWindow(QMainWindow):
             print(f"[autosave] 失败: {e}\n{traceback.format_exc()}", flush=True)
 
     def _autoload(self):
-        """启动时自动加载上次的项目"""
-        autosave = self.project_dir / "autosave.json"
-        if not autosave.exists():
+        """启动时自动加载上次的项目
+        v1.36 BUG-049:加载顺序
+          1. 上次主动保存的项目(QSettings 'UI/last_project_path')
+          2. autosave 文件夹(v1.30+ 格式)
+          3. autosave.json(老格式兜底)
+        """
+        d = None
+        loaded_path = None
+        # 1. 上次主动保存的项目路径(QSettings 持久化)
+        try:
+            from PyQt5.QtCore import QSettings
+            last_path = QSettings("NovelAI", "UI").value("last_project_path", "", type=str)
+            if last_path and PROJECT_IO_AVAILABLE:
+                from pathlib import Path as _P
+                lp = _P(last_path)
+                if lp.is_dir() and (lp / "project.json").exists():
+                    d = project_io.load_project_folder(lp)
+                    loaded_path = str(lp)
+                    self.current_project_file = loaded_path
+                    print(f"[autoload] ✓ 加载上次项目文件夹: {lp}", flush=True)
+        except Exception as _e:
+            print(f"[autoload] last_project_path 加载失败: {_e}", flush=True)
+        # 2. autosave 文件夹(v1.30+ 格式)
+        if d is None:
+            autosave_dir = self.project_dir / "autosave"
+            if autosave_dir.is_dir() and (autosave_dir / "project.json").exists() and PROJECT_IO_AVAILABLE:
+                try:
+                    d = project_io.load_project_folder(autosave_dir)
+                    loaded_path = str(autosave_dir)
+                    print(f"[autoload] ✓ 加载 autosave 文件夹: {autosave_dir}", flush=True)
+                except Exception as _e:
+                    print(f"[autoload] autosave 文件夹加载失败: {_e}", flush=True)
+        # 3. autosave.json(老格式兜底)
+        if d is None:
+            autosave_json = self.project_dir / "autosave.json"
+            if autosave_json.exists():
+                try:
+                    d = json.loads(autosave_json.read_text(encoding="utf-8"))
+                    print(f"[autoload] ✓ 加载老 autosave.json (兜底)", flush=True)
+                except Exception as _e:
+                    print(f"[autoload] autosave.json 加载失败: {_e}", flush=True)
+        if d is None:
             return
         try:
-            d = json.loads(autosave.read_text(encoding="utf-8"))
             self.chapters = d.get("chapters", [])
             self.tab_settings.title_input.setText(d.get("title", ""))
             self.tab_settings.inspiration_edit.setPlainText(d.get("inspiration", ""))
@@ -13028,6 +13067,13 @@ class MainWindow(QMainWindow):
                 if fmt == "folder":
                     d = project_io.load_project_folder(path)
                     self.current_project_file = str(Path(path).resolve())
+                    # v1.36 BUG-049:存到 QSettings 让下次启动能自动加载
+                    try:
+                        from PyQt5.QtCore import QSettings
+                        QSettings("NovelAI", "UI").setValue(
+                            "last_project_path", self.current_project_file)
+                    except Exception:
+                        pass
                     self.tab_generation.log(
                         f"📂 已打开项目文件夹: {path}", "success")
                 elif fmt == "legacy_json":
@@ -13050,6 +13096,12 @@ class MainWindow(QMainWindow):
                         project_io.migrate_legacy_json(json_p, target)
                         d = project_io.load_project_folder(target)
                         self.current_project_file = str(target.resolve())
+                        try:
+                            from PyQt5.QtCore import QSettings
+                            QSettings("NovelAI", "UI").setValue(
+                                "last_project_path", self.current_project_file)
+                        except Exception:
+                            pass
                         self.tab_generation.log(
                             f"📂 旧 .json 已升级为文件夹: {target}", "success")
                         QMessageBox.information(
@@ -13276,6 +13328,13 @@ class MainWindow(QMainWindow):
                     except Exception as _be:
                         print(f"[backup] zip 失败: {_be}", flush=True)
                 project_io.save_project_folder(target, d)
+                # v1.36 BUG-049: 保存成功后把路径存 QSettings
+                try:
+                    from PyQt5.QtCore import QSettings
+                    QSettings("NovelAI", "UI").setValue(
+                        "last_project_path", str(target.resolve()))
+                except Exception:
+                    pass
                 self.statusBar().showMessage(
                     f"已保存(文件夹):{target}", 3000)
                 self.tab_generation.log(
