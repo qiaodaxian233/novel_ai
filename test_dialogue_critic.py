@@ -96,3 +96,32 @@ def test_format_report():
     assert "整体评分" in report
     assert "80/100" in report
     assert "L1" in report
+
+
+def test_dash_dialogue_detection():
+    """v1.35 BUG-048: 段落以 ── 或 —— 开头作为对话(欧美风格,中文网文禁用)"""
+    import dialogue_critic as dc
+    content = """林远把血滴进凹槽。
+
+——跟我走，内门录取。
+
+——我哥呢？
+
+——凡人，领路费回家。"""
+    r = dc.DialogueCritic(content).static_scan()
+    dashes = [i for i in r.issues if i.kind == "dash_dialogue"]
+    # 3 句对话以破折号开头
+    assert len(dashes) >= 3, f"应该命中 ≥3 个破折号开头,实际 {len(dashes)}"
+
+
+def test_dash_dialogue_normal_passes():
+    """正常引号对话不命中破折号检测"""
+    import dialogue_critic as dc
+    content = '''林远把血滴进凹槽。
+
+"跟我走，内门录取。"
+"我哥呢？"
+"凡人，领路费回家。"'''
+    r = dc.DialogueCritic(content).static_scan()
+    dashes = [i for i in r.issues if i.kind == "dash_dialogue"]
+    assert len(dashes) == 0

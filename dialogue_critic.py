@@ -28,6 +28,9 @@ BAN_PATTERNS = [
     r"惊讶地说", r"开心地说", r"难过地说",
 ]
 
+# v1.35 BUG-048: 段落以破折号开头作为对话(欧美风格,中文网文禁用)
+# 用专门的正则放在 static_scan 里(行级检测,不放 BAN_PATTERNS)
+
 
 @dataclass
 class DialogueIssue:
@@ -144,6 +147,19 @@ class DialogueCritic:
                 suggestion="替换为 L1-L13 任一手法",
             ))
 
+                # v1.35 BUG-048: 段落以 ── 或 — 开头作为对话(欧美风格,中文网文禁用)
+        # 破折号检测:U+2014 (—) 单个或两个连写,或 -- / -- / ── 等变体,后接汉字或引号
+        for m in re.finditer(r"(?:^|\n)\s*[—\u2013\u2014\u2015─━]+\s*[\u4e00-\u9fa5\"「『]", self.content):
+            snippet = self.content[max(0, m.start()-3):min(len(self.content), m.end()+15)]
+            r.issues.append(DialogueIssue(
+                kind="dash_dialogue",
+                severity="red",
+                location=m.start(),
+                snippet=snippet.replace("\n", " "),
+                msg="段落以破折号开头作为对话 — 这是欧美风格,中文网文禁用",
+                suggestion="改用中文引号「」或英文引号 \"\" 包裹对话",
+            ))
+
         return r
 
     # ────────────── AI 深度诊断 prompt ──────────────
@@ -163,11 +179,11 @@ class DialogueCritic:
             "L3 情境穿插:对话间插环境/物/天气\n"
             "L4 语感辨识:角色专属语气/口头禅\n"
             "L5 语义衔接:对话直接回应前句的物/事,跳过提示语\n"
-            "L6 标点替代:短促交锋用换行+标点\n"
+            "L6 标点替代:短促交锋用换行 + 中文引号(必须用引号包裹,不准用破折号开头)\n"
             "L7 内心独白回切:对话后接主角预判反应\n"
             "L8 群体反应衬托:用反应阵列定位说话人\n"
             "L9 重复词锚定:角色刻意重复词/句式(全章 ≥ 2 次)\n"
-            "L10 空格断句:对话顶格 + 空行\n"
+            "L10 空格断句:对话独立段落 + 空行(不是前面加破折号!)\n"
             "L11 通感法:用甲感官写乙感官(如「嘴里全是铁锈味」写疲惫)\n"
             "L12 信息差:读者与角色信息不对称的张力\n"
             "L13 节奏开关:急-慢-急-慢脉冲,不能全急/全慢")
