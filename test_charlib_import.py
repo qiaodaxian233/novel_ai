@@ -143,7 +143,8 @@ def test_load_timeline_fallback_to_events_key(charlib):
 
 def test_merge_dicts_returns_counts(charlib):
     added = charlib.merge_dicts(DEEPSEEK_SAMPLE)
-    assert added == {"ch": 2, "rel": 2, "it": 1, "ev": 1, "fo": 1}
+    # v1.74:added 字典从 5 字段扩到 6(加 pw)。用子集断言而不是完全相等。
+    assert {"ch": 2, "rel": 2, "it": 1, "ev": 1, "fo": 1}.items() <= added.items()
 
 
 def test_merge_dicts_deduplicates_by_name(charlib):
@@ -172,7 +173,9 @@ def test_merge_dicts_preserves_existing(charlib):
 
 def test_merge_dicts_empty_safe(charlib):
     added = charlib.merge_dicts({})
-    assert added == {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0}
+    # v1.74:added 字典从 5 字段扩到 6(加 pw)。检查所有值都是 0。
+    assert all(v == 0 for v in added.values())
+    assert {"ch", "rel", "it", "ev", "fo"} <= set(added.keys())
 
 
 # ─────── 真实用户上传文件 ───────

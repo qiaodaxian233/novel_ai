@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.73"
+APP_VERSION = "v1.74"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -288,7 +288,10 @@ PROMPTS = {
         '  "foreshadows": [\n'
         '    {{"ch": "{ch_num}", "content": "本章埋下的伏笔(神秘物品/隐藏身份/可疑话语)", "plan_pay_at": "建议第几章回收(如:30)"}}\n'
         "  ],\n"
-        '  "hero_state": {{"age": "本章主角年龄(如有变更,数字字符串,无变化填空字符串)", "realm": "本章末主角修为/境界(如:金丹中期)", "location": "本章末主角所在地", "faction": "本章末主角所属势力/门派", "mood": "本章末主角心境(如:愤怒/决绝/平静)"}}\n'
+        '  "power_levels": [\n'
+        '    {{"realm": "境界大段(如:练气期/筑基期/金丹期/元婴期)", "level": "细分层级(如:一层/初期/中期/后期/巅峰)", "power": "该层级实力表现(可一战之敌/可破何境界)", "note": "突破条件或备注"}}\n'
+        "  ],\n"
+        '  "hero_state": {{"age": "本章末主角年龄(数字字符串)", "realm": "本章末主角修为/境界(如:金丹中期)", "location": "本章末主角所在地", "faction": "本章末主角所属势力/门派", "mood": "本章末主角心境(如:愤怒/决绝/平静)"}}\n'
         "}}\n\n"
         "提取规则:\n"
         "1. characters 只列【本章新出场】或【信息有更新】的角色,普通配角可省略\n"
@@ -297,8 +300,9 @@ PROMPTS = {
         "4. events 只列影响主线的重大事件,日常对话不算\n"
         "5. foreshadows 必须是【作者埋下、读者会记住的悬念】,不是普通铺垫\n"
         "6. plan_pay_at 根据伏笔重要性给出合理回收章节,无法判断填 '0'\n"
-        "7. hero_state 5 字段必须全部输出 — 本章无变化的字段填 \"\"(空字符串),不要省略整个字段\n"
-        "8. 若某类无内容,对应数组留空 [] 即可,不要省略整个字段\n\n"
+        "7. power_levels 只列【本章首次出现】或【有新解释】的修炼层级,普通对战不算\n"
+        "8. hero_state 5 字段必须全部输出【本章末的当前快照】 — 即使本章未变化也要重复填入上一章的值,不要留空字符串。这是快照而非 diff。\n"
+        "9. 若某类列表无内容,对应数组留空 [] 即可,不要省略整个字段\n\n"
         "已有数据(避免重复提取):\n{existing}\n\n"
         "本章是第 {ch_num} 章,正文:\n{content}"
     ),
@@ -4463,11 +4467,12 @@ class CharacterLibrary(QWidget):
     def merge_dicts(self, data):
         """把外部 JSON(list-of-dict 格式)合并进当前表(去重,不清空)。
         
-        返回 dict: {"ch": N, "rel": N, "it": N, "ev": N, "fo": N} —— 各类新增条目数。
+        返回 dict: {"ch": N, "rel": N, "it": N, "ev": N, "fo": N, "pw": N} —— 各类新增条目数。
         与 MainWindow._merge_into_charlib 等价,供 CharacterLib 自己的导入路径调用。
+        v1.74:加 power_levels(战力体系)合并。
         """
         from PyQt5.QtWidgets import QTableWidgetItem
-        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0}
+        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0}
         if not data:
             return added
         
@@ -4484,6 +4489,7 @@ class CharacterLibrary(QWidget):
                 "timeline":    ["ch", "event", "state_change"],
                 "items":       ["name", "type", "owner", "source_ch", "ability"],
                 "foreshadows": ["ch", "content", "plan_pay_at", "paid", "pay_ch"],
+                "power_levels":["realm", "level", "power", "note"],
             }
             keys = DICT_KEY_MAPS_LOCAL.get(schema_key, [])
             out = []
@@ -4592,6 +4598,28 @@ class CharacterLibrary(QWidget):
                 self.tbl_fore.setItem(row, col, QTableWidgetItem(str(v)))
             added["fo"] += 1
             ex_fos.add(k)
+        
+        # v1.74:战力体系 power_levels(去重 key=realm+level)
+        ex_pws = set()
+        for r in range(self.tbl_power.rowCount()):
+            rl = self.tbl_power.item(r, 0).text() if self.tbl_power.item(r, 0) else ""
+            lv = self.tbl_power.item(r, 1).text() if self.tbl_power.item(r, 1) else ""
+            ex_pws.add(f"{rl}|{lv}")
+        for pw in _as_dict_list(data.get("power_levels"), "power_levels"):
+            rl = str(pw.get("realm", "")).strip()
+            lv = str(pw.get("level", "")).strip()
+            if not rl:
+                continue
+            k = f"{rl}|{lv}"
+            if k in ex_pws:
+                continue
+            row = self.tbl_power.rowCount()
+            self.tbl_power.insertRow(row)
+            vals = [rl, lv, pw.get("power", ""), pw.get("note", "")]
+            for col, v in enumerate(vals):
+                self.tbl_power.setItem(row, col, QTableWidgetItem(str(v)))
+            added["pw"] += 1
+            ex_pws.add(k)
         
         return added
     
@@ -11684,10 +11712,11 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(500, self._run_next_charlib_extract)
             return
 
-        # v1.02:检测"AI 返回了合法 JSON 但 5 个数组全空" — 也算抓取串/AI 没识别
+        # v1.02:检测"AI 返回了合法 JSON 但全部数组全空" — 也算抓取串/AI 没识别
+        # v1.74:加上 power_levels(战力体系)一起算
         all_empty = not any(
             (data.get(k) or []) for k in
-            ("characters", "relations", "items", "events", "foreshadows")
+            ("characters", "relations", "items", "events", "foreshadows", "power_levels")
         )
         if all_empty:
             retry_n = getattr(self, "_world_extract_retry", {}).get(ch_num, 0)
@@ -11706,9 +11735,11 @@ class MainWindow(QMainWindow):
 
         added = self._merge_into_charlib(data)
         hero_n = added.get("hero", 0)
+        pw_n = added.get("pw", 0)
         self.tab_generation.log(
             f"✓ 第{ch_num}章 6 库提取完成: 角色+{added['ch']} 关系+{added['rel']} "
             f"物品+{added['it']} 时间线+{added['ev']} 伏笔+{added['fo']}"
+            + (f" 战力+{pw_n}" if pw_n else "")
             + (f" 主角状态+{hero_n}" if hero_n else ""),
             "success")
         # 触发下一章
@@ -11718,7 +11749,7 @@ class MainWindow(QMainWindow):
         """把提取的数据合并进 charlib UI 表格(去重)"""
         from PyQt5.QtWidgets import QTableWidgetItem
         cl = self.tab_charlib
-        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0}
+        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "hero": 0}
 
         def existing_names(tbl, col=0):
             return set((tbl.item(r, col).text() if tbl.item(r, col) else "")
@@ -11824,8 +11855,32 @@ class MainWindow(QMainWindow):
             added["fo"] += 1
             ex_fos.add(k)
         
-        # v1.64:hero_state 字段(B 方案 — AI 写完每章后自动同步主角状态)
+        # v1.74:战力体系 power_levels(去重 key=realm+level)
+        ex_pws = set()
+        for r in range(cl.tbl_power.rowCount()):
+            rl = cl.tbl_power.item(r, 0).text() if cl.tbl_power.item(r, 0) else ""
+            lv = cl.tbl_power.item(r, 1).text() if cl.tbl_power.item(r, 1) else ""
+            ex_pws.add(f"{rl}|{lv}")
+        for pw in (data.get("power_levels") or []):
+            rl = str(pw.get("realm", "")).strip()
+            lv = str(pw.get("level", "")).strip()
+            if not rl:  # 至少要有大段
+                continue
+            k = f"{rl}|{lv}"
+            if k in ex_pws:
+                continue
+            row = cl.tbl_power.rowCount()
+            cl.tbl_power.insertRow(row)
+            vals = [rl, lv, pw.get("power", ""), pw.get("note", "")]
+            for col, v in enumerate(vals):
+                cl.tbl_power.setItem(row, col, QTableWidgetItem(str(v)))
+            added["pw"] += 1
+            ex_pws.add(k)
+        
+        # v1.64+v1.74:hero_state 字段(B 方案 — AI 写完每章后自动同步主角状态)
         # 由 QSettings 开关控制,默认开启
+        # v1.74:prompt 已改成快照模式(每次都输出完整状态),根因修复;
+        #         同时 n_filled=0 时也更新 label 表示"已同步但本章无变化"
         try:
             from PyQt5.QtCore import QSettings
             auto_sync = QSettings("NovelAI", "CreationSettings").value(
@@ -11835,21 +11890,41 @@ class MainWindow(QMainWindow):
         
         if auto_sync:
             hs = data.get("hero_state") or {}
+            # 诊断日志:打印 AI 实际返回的 hero_state(关键 5 字段),便于排查
+            try:
+                hs_repr = {k: hs.get(k, "") for k in
+                           ("age", "realm", "location", "faction", "mood")}
+                print(f"[hero_state v1.74] ch={data.get('_ch', '?')} AI 返回: {hs_repr}",
+                      flush=True)
+            except Exception:
+                pass
             if isinstance(hs, dict) and hs:
                 try:
                     n = cl.apply_hero_state_dict(hs)
-                    if n > 0:
-                        try:
+                    added["hero"] = n
+                    # 即使 n=0 也更新 label,表示"AI 已同步但本章无变化"
+                    try:
+                        if n > 0:
                             cl.lbl_hero_source.setText(
                                 f"📌 数据来源:AI 自动同步({n}/5 字段更新)")
                             cl.lbl_hero_source.setStyleSheet(
                                 "color: #1a4480; font-size: 11px; "
                                 "padding: 2px 4px; font-weight:bold;")
-                        except Exception:
-                            pass
-                        added["hero"] = n
+                        else:
+                            # AI 返回了 hero_state 字典但 5 字段全空 → 仍算同步过
+                            cl.lbl_hero_source.setText(
+                                "📌 数据来源:AI 已同步(本章主角状态无变化)")
+                            cl.lbl_hero_source.setStyleSheet(
+                                "color: #666; font-size: 11px; "
+                                "padding: 2px 4px;")
+                    except Exception:
+                        pass
                 except Exception as _e:
                     print(f"[hero_state] apply 失败: {_e}", flush=True)
+            else:
+                # AI 完全没返回 hero_state 字段 — 这是 prompt 没生效或 AI 输出格式不对
+                print(f"[hero_state v1.74] AI 没返回 hero_state 字段,跳过同步",
+                      flush=True)
 
         return added
 
