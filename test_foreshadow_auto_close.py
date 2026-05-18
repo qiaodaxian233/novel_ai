@@ -373,6 +373,10 @@ def test_X2_on_foreshadow_check_guards_non_dict_item(src):
     assert "isinstance(it, dict)" in block
 
 
-def test_X3_version_bumped_to_1_76(src):
-    """APP_VERSION 必须 v1.76"""
-    assert 'APP_VERSION = "v1.76"' in src
+def test_X3_version_bumped_to_1_76_or_higher(src):
+    """APP_VERSION 必须 ≥ v1.76(v1.76 引入了 foreshadow auto close)"""
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    assert m, "APP_VERSION 未找到"
+    major, minor = int(m.group(1)), int(m.group(2))
+    assert (major, minor) >= (1, 76), \
+        f"v1.76 的 foreshadow 闭环不应被低版本退回,当前 v{major}.{minor}"

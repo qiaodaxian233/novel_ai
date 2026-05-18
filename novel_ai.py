@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.76"
+APP_VERSION = "v1.77"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -291,6 +291,9 @@ PROMPTS = {
         '  "power_levels": [\n'
         '    {{"realm": "境界大段(如:练气期/筑基期/金丹期/元婴期)", "level": "细分层级(如:一层/初期/中期/后期/巅峰)", "power": "该层级实力表现(可一战之敌/可破何境界)", "note": "突破条件或备注"}}\n'
         "  ],\n"
+        '  "promises": [\n'
+        '    {{"ch": "{ch_num}", "kind": "承诺/威胁/约定", "from": "发起者(谁说的)", "to": "对象(对谁说的)", "content": "具体内容(20-40字)", "deadline": "建议第几章兑现/到期(如:20)"}}\n'
+        "  ],\n"
         '  "hero_state": {{"age": "本章末主角年龄(数字字符串)", "realm": "本章末主角修为/境界(如:金丹中期)", "location": "本章末主角所在地", "faction": "本章末主角所属势力/门派", "mood": "本章末主角心境(如:愤怒/决绝/平静)"}}\n'
         "}}\n\n"
         "提取规则:\n"
@@ -306,7 +309,18 @@ PROMPTS = {
         "   - 实在判断不出 → 默认填 当前章+30 的保守值。0 是无效值,会导致系统误报超期。\n"
         "7. power_levels 只列【本章首次出现】或【有新解释】的修炼层级,普通对战不算\n"
         "8. hero_state 5 字段必须全部输出【本章末的当前快照】 — 即使本章未变化也要重复填入上一章的值,不要留空字符串。这是快照而非 diff。\n"
-        "9. 若某类列表无内容,对应数组留空 [] 即可,不要省略整个字段\n\n"
+        "9. promises 只列【本章新出现】的承诺/威胁/约定,且必须是【人物明确说出口或定下来】的:\n"
+        "   - 承诺(promise):甲对乙许下的承诺(如:三年后我必来娶你)\n"
+        "   - 威胁(threat):甲威胁乙的后果(如:三日内不交出秘籍,屠你满门)\n"
+        "   - 约定(appointment):双方约定的会面/行动(如:七日后比武台见)\n"
+        "   - 模糊的『以后再说』『再见』不算,必须有【对象】+【内容】+【时间窗】\n"
+        "10. deadline 必须给一个【大于本章号】的具体章节号,绝对不要填 0:\n"
+        "    - 即时兑现型(本章/下章就要做的事)→ 当前章+1 到 +3\n"
+        "    - 短期约定(几日/几周内)→ 当前章+5 到 +15\n"
+        "    - 中期承诺(几月/一年内)→ 当前章+20 到 +60\n"
+        "    - 长期誓言(三年后/几年后)→ 当前章+80 到 +200\n"
+        "    - 实在判断不出 → 默认填 当前章+15 的保守值。0 是无效值。\n"
+        "11. 若某类列表无内容,对应数组留空 [] 即可,不要省略整个字段\n\n"
         "已有数据(避免重复提取):\n{existing}\n\n"
         "本章是第 {ch_num} 章,正文:\n{content}"
     ),
@@ -505,6 +519,44 @@ PROMPTS = {
         "4. 主线伏笔(身世真相/最终对决/最大秘密)→ 埋设章+50 到 +150\n"
         "5. 实在判断不出 → 默认填 {current_ch} + 30 的保守值\n"
         "6. 绝对不要返回 0,id 必须从清单取,只输出 JSON"
+    ),
+
+    # ─────────────────────────────────────────────────────────────
+    # v1.77 BUG-057:威胁承诺自动闭环
+    # ─────────────────────────────────────────────────────────────
+
+    "promise_check": (
+        "请检查【本章正文】是否兑现/触发/到期了下列【未兑现的承诺/威胁/约定】。\n"
+        "兑现 = 承诺被履行 / 威胁被执行(或被化解) / 约定被赴约(或被违约)。\n"
+        "顺带提一句、模糊推进、没有实质了断 → 不算兑现。\n\n"
+        "【未兑现的承诺/威胁/约定清单】(每条带 id):\n{promise_list}\n\n"
+        "【本章正文】(第 {ch_num} 章):\n{content}\n\n"
+        "请严格输出 JSON 数组,只列【确认本章兑现/触发/到期】的条目:\n"
+        '[{{"id": 1, "outcome": "履行/执行/赴约/违约/化解", "how": "本章具体怎么发生的(30 字内)"}}]\n\n'
+        "硬规则:\n"
+        "1. 没有任何兑现 → 返回 []\n"
+        "2. id 必须从上面清单里取(整数),不要凭空造\n"
+        "3. outcome 必须是【履行 / 执行 / 赴约 / 违约 / 化解】中的一个\n"
+        "4. 只看本章正文,不要联系未发生章节臆测\n"
+        "5. 必须【实质了断】,模糊提及不算\n"
+        "6. 只输出 JSON,不加任何说明文字"
+    ),
+
+    "promise_reeval": (
+        "请为下列【需重新评估】的承诺/威胁/约定评估合理的【建议截止章节】。\n"
+        "这些条目原 deadline=0(评估失败),需要你重新判断。\n\n"
+        "【当前已写到】第 {current_ch} 章\n\n"
+        "【待评估的承诺/威胁/约定】(每条带 id、类型、埋设章号):\n{promise_list}\n\n"
+        "请输出 JSON 数组:\n"
+        '[{{"id": 0, "deadline": 35, "reason": "中期承诺(20字内理由)"}}]\n\n'
+        "评估规则:\n"
+        "1. deadline 必须 > {current_ch}(在未来到期,不能填过去的章节)\n"
+        "2. 即时兑现(本章/下章就要做)→ 埋设章+1 到 +3\n"
+        "3. 短期约定(几日/几周内)→ 埋设章+5 到 +15\n"
+        "4. 中期承诺(几月/一年内)→ 埋设章+20 到 +60\n"
+        "5. 长期誓言(三年后/几年后)→ 埋设章+80 到 +200\n"
+        "6. 实在判断不出 → 默认填 {current_ch} + 15 的保守值\n"
+        "7. 绝对不要返回 0,id 必须从清单取,只输出 JSON"
     ),
 }
 
@@ -3698,6 +3750,7 @@ class CharacterLibrary(QWidget):
         self._build_items_tab()
         self._build_power_tab()
         self._build_foreshadows_tab()
+        self._build_promises_tab()   # v1.77 新增:⚡ 威胁承诺
         self._build_hooks_tab()      # 新增:钩子编年
         self._build_coolpts_tab()    # 新增:爽点编年
 
@@ -4241,6 +4294,78 @@ class CharacterLibrary(QWidget):
         for r in rows:
             self.tbl_fore.removeRow(r)
 
+    # ── 5b. 威胁承诺子页(v1.77 BUG-057)────────────────────
+    def _build_promises_tab(self):
+        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        
+        # v1.77:顶部状态 label(同 v1.76 五态模式)
+        self.lbl_last_promise_check = QLabel(
+            "📌 自动兑现检查:尚未运行(写完下一章后查看)"
+        )
+        self.lbl_last_promise_check.setStyleSheet(
+            "color: #555; font-size: 11px; padding: 4px 6px; "
+            "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
+        self.lbl_last_promise_check.setWordWrap(True)
+        lay.addWidget(self.lbl_last_promise_check)
+        
+        top = QHBoxLayout()
+        btn_add = QPushButton("➕ 新增承诺/威胁/约定")
+        btn_add.clicked.connect(self._add_promise)
+        btn_del = QPushButton("➖ 删除选中")
+        btn_del.clicked.connect(self._del_promise)
+        # v1.77:AI 重评估按钮(同 v1.76 模式)
+        self.btn_reeval_promise = QPushButton("🤖 AI 重评估未设截止期")
+        self.btn_reeval_promise.setToolTip(
+            "把所有 deadline=0 的承诺/威胁/约定交给 AI 评估合理截止章节,自动回填")
+        self.btn_reeval_promise.setStyleSheet(
+            "QPushButton { background:#fff3e0; border:1px solid #ffa726; }")
+        top.addWidget(btn_add); top.addWidget(btn_del)
+        top.addWidget(self.btn_reeval_promise); top.addStretch()
+        lay.addLayout(top)
+        
+        self.tbl_promises = QTableWidget(0, 7)
+        self.tbl_promises.setHorizontalHeaderLabels([
+            "埋设章", "类型", "发起者", "对象", "内容", "截止章", "已兑现?"
+        ])
+        self.tbl_promises.horizontalHeader().setStretchLastSection(False)
+        self.tbl_promises.verticalHeader().setVisible(False)
+        self.tbl_promises.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_promises.setColumnWidth(0, 60)
+        self.tbl_promises.setColumnWidth(1, 60)
+        self.tbl_promises.setColumnWidth(2, 80)
+        self.tbl_promises.setColumnWidth(3, 80)
+        self.tbl_promises.setColumnWidth(4, 280)
+        self.tbl_promises.setColumnWidth(5, 60)
+        self.tbl_promises.setColumnWidth(6, 70)
+        lay.addWidget(self.tbl_promises)
+        
+        tip = QLabel(
+            "💡 跟踪人物明确说出口的【承诺 / 威胁 / 约定】,与伏笔不同 — 这是【人对人的契约】,违背即失信。\n"
+            "    每章生成后,AI 自动检查本章正文是否兑现/触发/到期了清单中的条目。\n"
+            "    类型:承诺(许诺) / 威胁(下最后通牒) / 约定(双方约赴某事)。\n"
+            "    已兑现? 填 是/否;到期未兑现会触发【本章硬性必须兑现】强约束注入。")
+        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+        
+        self.sub_tabs.addTab(w, "⚡ 威胁承诺")
+    
+    def _add_promise(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_promises.rowCount()
+        self.tbl_promises.insertRow(r)
+        defaults = ["1", "承诺", "", "", "新承诺/威胁/约定", "15", "否"]
+        for c, v in enumerate(defaults):
+            self.tbl_promises.setItem(r, c, QTableWidgetItem(v))
+    
+    def _del_promise(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_promises.selectedIndexes()),
+                      reverse=True)
+        for r in rows:
+            self.tbl_promises.removeRow(r)
+
     # ── 6. 钩子编年子页 ────────────────────────────────────
     def _build_hooks_tab(self):
         from PyQt5.QtWidgets import QTableWidget
@@ -4437,6 +4562,7 @@ class CharacterLibrary(QWidget):
             "items":      tbl_to_list(self.tbl_items, 5),
             "power_levels": tbl_to_list(self.tbl_power, 4),
             "foreshadows":tbl_to_list(self.tbl_fore, 5),
+            "promises":   tbl_to_list(self.tbl_promises, 7),  # v1.77
             "hooks":      tbl_to_list(self.tbl_hooks, 4),  # 新增
             "cool_pts":   tbl_to_list(self.tbl_cool, 3),   # 新增
             "hero_state": {
@@ -4471,6 +4597,7 @@ class CharacterLibrary(QWidget):
             "items":       ["name", "type", "owner", "source_ch", "ability"],
             "power_levels":["realm", "level", "power", "note"],
             "foreshadows": ["ch", "content", "plan_pay_at", "paid", "pay_ch"],
+            "promises":    ["ch", "kind", "from", "to", "content", "deadline", "fulfilled"],
             "hooks":       ["ch", "hook", "type", "resolved"],
             "cool_pts":    ["ch", "scene", "score"],
         }
@@ -4511,6 +4638,7 @@ class CharacterLibrary(QWidget):
         list_to_tbl(self.tbl_items,     normalize(data.get("items", []), "items"), 5)
         list_to_tbl(self.tbl_power,     normalize(data.get("power_levels", []), "power_levels"), 4)
         list_to_tbl(self.tbl_fore,      normalize(data.get("foreshadows", []), "foreshadows"), 5)
+        list_to_tbl(self.tbl_promises,  normalize(data.get("promises", []), "promises"), 7)  # v1.77
         list_to_tbl(self.tbl_hooks,     normalize(data.get("hooks", []), "hooks"), 4)
         list_to_tbl(self.tbl_cool,      normalize(data.get("cool_pts", []), "cool_pts"), 3)
         
@@ -4531,7 +4659,7 @@ class CharacterLibrary(QWidget):
         v1.74:加 power_levels(战力体系)合并。
         """
         from PyQt5.QtWidgets import QTableWidgetItem
-        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0}
+        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "pr": 0}
         if not data:
             return added
         
@@ -4549,6 +4677,7 @@ class CharacterLibrary(QWidget):
                 "items":       ["name", "type", "owner", "source_ch", "ability"],
                 "foreshadows": ["ch", "content", "plan_pay_at", "paid", "pay_ch"],
                 "power_levels":["realm", "level", "power", "note"],
+                "promises":    ["ch", "kind", "from", "to", "content", "deadline", "fulfilled"],
             }
             keys = DICT_KEY_MAPS_LOCAL.get(schema_key, [])
             out = []
@@ -4680,6 +4809,38 @@ class CharacterLibrary(QWidget):
             added["pw"] += 1
             ex_pws.add(k)
         
+        # v1.77:威胁承诺 promises(去重 key=ch + content[:30] + from + to)
+        if not hasattr(self, "tbl_promises"):
+            return added
+        ex_prs = set()
+        for r in range(self.tbl_promises.rowCount()):
+            ch = self.tbl_promises.item(r, 0).text() if self.tbl_promises.item(r, 0) else ""
+            fr = self.tbl_promises.item(r, 2).text() if self.tbl_promises.item(r, 2) else ""
+            to = self.tbl_promises.item(r, 3).text() if self.tbl_promises.item(r, 3) else ""
+            ct = self.tbl_promises.item(r, 4).text() if self.tbl_promises.item(r, 4) else ""
+            ex_prs.add(f"{ch}|{fr}|{to}|{ct[:30]}")
+        for pr in _as_dict_list(data.get("promises"), "promises"):
+            ch = str(pr.get("ch", "")).strip()
+            kind = str(pr.get("kind", "承诺")).strip() or "承诺"
+            fr = str(pr.get("from", "")).strip()
+            to = str(pr.get("to", "")).strip()
+            ct = str(pr.get("content", "")).strip()
+            if not ct:
+                continue
+            k = f"{ch}|{fr}|{to}|{ct[:30]}"
+            if k in ex_prs:
+                continue
+            row = self.tbl_promises.rowCount()
+            self.tbl_promises.insertRow(row)
+            # 兼容 fulfilled 字段(导入 JSON 可能用 paid/done 等),默认"否"
+            fulfilled = str(pr.get("fulfilled", pr.get("paid", "否"))) or "否"
+            vals = [ch, kind, fr, to, ct,
+                    str(pr.get("deadline", "0")), fulfilled]
+            for col, v in enumerate(vals):
+                self.tbl_promises.setItem(row, col, QTableWidgetItem(str(v)))
+            added["pr"] = added.get("pr", 0) + 1
+            ex_prs.add(k)
+        
         return added
     
     # ── 注入到提示词 ───────────────────────────────────────
@@ -4809,6 +4970,63 @@ class CharacterLibrary(QWidget):
                 strict_lines.append(
                     "回收方式:写到这条伏笔涉及的人物、物品、地点、谜题时,给出确切答案或下一步进展。\n"
                     "    禁止用『以后再说』『暂且不表』等敷衍话术绕过。")
+                parts.append("\n".join(strict_lines))
+        
+        # 5b. 威胁承诺(v1.77 BUG-057)— 与伏笔同模式,但语义是"人对人的契约"
+        if current_chapter is not None and hasattr(self, "tbl_promises"):
+            pr_pending = []
+            pr_must_pay = []
+            for r in range(self.tbl_promises.rowCount()):
+                ch_set = self.tbl_promises.item(r, 0).text() if self.tbl_promises.item(r, 0) else "0"
+                kind = self.tbl_promises.item(r, 1).text() if self.tbl_promises.item(r, 1) else "承诺"
+                fr = self.tbl_promises.item(r, 2).text() if self.tbl_promises.item(r, 2) else ""
+                to = self.tbl_promises.item(r, 3).text() if self.tbl_promises.item(r, 3) else ""
+                ct = self.tbl_promises.item(r, 4).text() if self.tbl_promises.item(r, 4) else ""
+                dl = self.tbl_promises.item(r, 5).text() if self.tbl_promises.item(r, 5) else "0"
+                fulfilled = self.tbl_promises.item(r, 6).text() if self.tbl_promises.item(r, 6) else "否"
+                if fulfilled == "是" or not ct:
+                    continue
+                try:
+                    dl_int = int(dl)
+                    # ch_pay=0 同 v1.76 模式:走"待AI评估"分支
+                    if dl_int == 0:
+                        pr_pending.append((999, ch_set, kind, fr, to, ct, "未评估"))
+                        continue
+                    distance = dl_int - current_chapter
+                    if -5 <= distance <= 10:
+                        pr_pending.append((distance, ch_set, kind, fr, to, ct, dl))
+                        if distance <= 0:
+                            pr_must_pay.append((ch_set, kind, fr, to, ct, dl, distance))
+                except ValueError:
+                    pr_pending.append((999, ch_set, kind, fr, to, ct, dl))
+            pr_pending.sort(key=lambda x: x[0])
+            if pr_pending:
+                lines = []
+                for dist, cs, kd, fr, to, ct, dl in pr_pending[:5]:
+                    if dl == "未评估":
+                        flag = "📝待AI评估"
+                    elif dist < 0:
+                        flag = "⚠️超期"
+                    elif dist <= 2:
+                        flag = "🎯本章可兑现"
+                    else:
+                        flag = f"还有{dist}章"
+                    parties = f"{fr}→{to}" if (fr or to) else ""
+                    lines.append(
+                        f"  • [{kd}] 第{cs}章 {parties}: {ct} → 第{dl}章截止[{flag}]")
+                parts.append("【待兑现承诺/威胁/约定(优先考虑)】\n" + "\n".join(lines))
+            if pr_must_pay:
+                strict_lines = ["⚠️ 【本章硬性必须兑现的承诺/威胁/约定 — 不允许跳过】"]
+                strict_lines.append(
+                    "本章正文必须明确处理下列条目(履行/执行/赴约/违约/化解,五选一,不能只字未提):")
+                for cs, kd, fr, to, ct, dl, dist in pr_must_pay[:10]:
+                    overdue_tag = f"已超期 {abs(dist)} 章" if dist < 0 else "本章到期"
+                    parties = f"{fr}→{to}" if (fr or to) else ""
+                    strict_lines.append(
+                        f"  • [{kd},第{cs}章定下,{overdue_tag}] {parties}: {ct}")
+                strict_lines.append(
+                    "处理方式:写到涉及的人物时,要让承诺被兑现 / 威胁被执行(或化解) / 约定被赴约(或违约)。\n"
+                    "    禁止用『以后再算』『改日再说』敷衍。违背 = 失信,必须有读者可见的结果。")
                 parts.append("\n".join(strict_lines))
         
         # 6. 战力等级体系(防止跨级混乱)
@@ -9363,6 +9581,10 @@ class MainWindow(QMainWindow):
         # v1.76 BUG-056:伏笔追踪 Tab 的 AI 重评估按钮
         if hasattr(self.tab_charlib, "btn_reeval_fore"):
             self.tab_charlib.btn_reeval_fore.clicked.connect(self._reeval_zero_pay_at)
+        # v1.77 BUG-057:威胁承诺 Tab 的 AI 重评估按钮
+        if hasattr(self.tab_charlib, "btn_reeval_promise"):
+            self.tab_charlib.btn_reeval_promise.clicked.connect(
+                self._reeval_zero_deadline_promise)
 
         # 章节编辑器: 风格检测 + 备选版本
         self.tab_editor.btn_style_check.clicked.connect(self._on_style_check)
@@ -9976,6 +10198,14 @@ class MainWindow(QMainWindow):
         elif target == "foreshadow_reeval":
             # v1.76 BUG-056:plan_pay_at=0 批量重评估(按钮触发,不挂 pipeline)
             self._on_foreshadow_reeval_response(content, meta)
+        elif target == "promise_check":
+            # v1.77 BUG-057:章末承诺兑现自动检查
+            self._on_promise_check_response(content, meta)
+            if getattr(self, "_post_chapter_pipeline", None):
+                QTimer.singleShot(500, self._run_next_post_chapter_step)
+        elif target == "promise_reeval":
+            # v1.77 BUG-057:deadline=0 批量重评估(按钮触发)
+            self._on_promise_reeval_response(content, meta)
         elif target == "critique_rhythm":
             ch_num = meta.get("ch_num", 0)
             self._on_critique_score_response(content, "rhythm", ch_num)
@@ -11818,9 +12048,11 @@ class MainWindow(QMainWindow):
 
         # v1.02:检测"AI 返回了合法 JSON 但全部数组全空" — 也算抓取串/AI 没识别
         # v1.74:加上 power_levels(战力体系)一起算
+        # v1.77:加上 promises(威胁承诺)一起算
         all_empty = not any(
             (data.get(k) or []) for k in
-            ("characters", "relations", "items", "events", "foreshadows", "power_levels")
+            ("characters", "relations", "items", "events", "foreshadows",
+             "power_levels", "promises")
         )
         if all_empty:
             retry_n = getattr(self, "_world_extract_retry", {}).get(ch_num, 0)
@@ -11840,10 +12072,12 @@ class MainWindow(QMainWindow):
         added = self._merge_into_charlib(data)
         hero_n = added.get("hero", 0)
         pw_n = added.get("pw", 0)
+        pr_n = added.get("pr", 0)
         self.tab_generation.log(
             f"✓ 第{ch_num}章 6 库提取完成: 角色+{added['ch']} 关系+{added['rel']} "
             f"物品+{added['it']} 时间线+{added['ev']} 伏笔+{added['fo']}"
             + (f" 战力+{pw_n}" if pw_n else "")
+            + (f" 承诺+{pr_n}" if pr_n else "")
             + (f" 主角状态+{hero_n}" if hero_n else ""),
             "success")
         # 触发下一章
@@ -11853,7 +12087,7 @@ class MainWindow(QMainWindow):
         """把提取的数据合并进 charlib UI 表格(去重)"""
         from PyQt5.QtWidgets import QTableWidgetItem
         cl = self.tab_charlib
-        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "hero": 0}
+        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "pr": 0, "hero": 0}
 
         def existing_names(tbl, col=0):
             return set((tbl.item(r, col).text() if tbl.item(r, col) else "")
@@ -11980,6 +12214,37 @@ class MainWindow(QMainWindow):
                 cl.tbl_power.setItem(row, col, QTableWidgetItem(str(v)))
             added["pw"] += 1
             ex_pws.add(k)
+        
+        # v1.77:威胁承诺 promises(去重 key=ch + from + to + content[:30])
+        if hasattr(cl, "tbl_promises"):
+            ex_prs = set()
+            for r in range(cl.tbl_promises.rowCount()):
+                ch = cl.tbl_promises.item(r, 0).text() if cl.tbl_promises.item(r, 0) else ""
+                fr = cl.tbl_promises.item(r, 2).text() if cl.tbl_promises.item(r, 2) else ""
+                to = cl.tbl_promises.item(r, 3).text() if cl.tbl_promises.item(r, 3) else ""
+                ct = cl.tbl_promises.item(r, 4).text() if cl.tbl_promises.item(r, 4) else ""
+                ex_prs.add(f"{ch}|{fr}|{to}|{ct[:30]}")
+            for pr in (data.get("promises") or []):
+                if not isinstance(pr, dict):
+                    continue
+                ch = str(pr.get("ch", "")).strip()
+                kind = str(pr.get("kind", "承诺")).strip() or "承诺"
+                fr = str(pr.get("from", "")).strip()
+                to = str(pr.get("to", "")).strip()
+                ct = str(pr.get("content", "")).strip()
+                if not ct:
+                    continue
+                k = f"{ch}|{fr}|{to}|{ct[:30]}"
+                if k in ex_prs:
+                    continue
+                row = cl.tbl_promises.rowCount()
+                cl.tbl_promises.insertRow(row)
+                vals = [ch, kind, fr, to, ct,
+                        str(pr.get("deadline", "0")), "否"]
+                for col, v in enumerate(vals):
+                    cl.tbl_promises.setItem(row, col, QTableWidgetItem(str(v)))
+                added["pr"] = added.get("pr", 0) + 1
+                ex_prs.add(k)
         
         # v1.64+v1.74:hero_state 字段(B 方案 — AI 写完每章后自动同步主角状态)
         # 由 QSettings 开关控制,默认开启
@@ -13819,6 +14084,221 @@ class MainWindow(QMainWindow):
                 self, "AI 重评估失败",
                 f"JSON 解析失败:{e}\n原始前 300 字:\n{(content or '')[:300]}")
 
+    # ──────────────────────────────────────────────────────────
+    # v1.77 BUG-057:威胁承诺自动闭环(与 v1.76 伏笔闭环同模式)
+    # ──────────────────────────────────────────────────────────
+    def _run_promise_check(self, content, ch_num):
+        """章节生成后,把未兑现承诺/威胁/约定交给 AI 检查本章兑现了哪些"""
+        if not hasattr(self.tab_charlib, "tbl_promises"):
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        pending = []
+        tbl = self.tab_charlib.tbl_promises
+        for r in range(tbl.rowCount()):
+            ch_set = tbl.item(r, 0).text() if tbl.item(r, 0) else "0"
+            kind = tbl.item(r, 1).text() if tbl.item(r, 1) else "承诺"
+            fr = tbl.item(r, 2).text() if tbl.item(r, 2) else ""
+            to = tbl.item(r, 3).text() if tbl.item(r, 3) else ""
+            ct = tbl.item(r, 4).text() if tbl.item(r, 4) else ""
+            dl = tbl.item(r, 5).text() if tbl.item(r, 5) else "0"
+            fulfilled = tbl.item(r, 6).text() if tbl.item(r, 6) else "否"
+            if fulfilled == "是" or not ct:
+                continue
+            pending.append({
+                "id": r, "ch_set": ch_set, "kind": kind,
+                "from": fr, "to": to,
+                "content": ct[:120], "deadline": dl,
+            })
+        if not pending:
+            print(f"[promise-check v1.77] ch={ch_num} 无未兑现承诺,跳过", flush=True)
+            self.tab_generation.log(
+                f"⚡ 第{ch_num}章承诺兑现检查:无未兑现承诺,跳过", "info")
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        pl = json.dumps(pending, ensure_ascii=False)
+        prompt = PROMPTS["promise_check"].format(
+            promise_list=pl, ch_num=ch_num, content=content[:6000])
+        print(f"[promise-check v1.77] ch={ch_num} 检查 {len(pending)} 条承诺, "
+              f"prompt {len(prompt)} 字", flush=True)
+        self.tab_generation.log(
+            f"⚡ 承诺兑现检查-第{ch_num}章 → AI({len(pending)} 条未兑现, "
+            f"{len(prompt)} 字 prompt)", "info")
+        self._send_to_ai(prompt, f"承诺兑现检查-第{ch_num}章",
+                         target="promise_check", ch_num=ch_num)
+
+    def _on_promise_check_response(self, content, meta):
+        """AI 检查回复 → 把命中的承诺在 tbl_promises 标记已兑现"""
+        from datetime import datetime as _dt
+        from PyQt5.QtWidgets import QTableWidgetItem
+        ch_num = meta.get("ch_num", 0)
+        print(f"[promise-check v1.77] ch={ch_num} AI 原始回复({len(content or '')} 字) "
+              f"前 200: {(content or '')[:200]!r}", flush=True)
+        try:
+            text = self._extract_json_blob(content)
+            arr = json.loads(text)
+            if not isinstance(arr, list):
+                self.tab_generation.log(
+                    f"⚠️ 承诺兑现检查:AI 返回的不是 JSON 数组(是 {type(arr).__name__}),"
+                    f"已忽略。原始前 200 字:{(content or '')[:200]}", "warn")
+                try:
+                    self.tab_charlib.lbl_last_promise_check.setText(
+                        f"⚠ 最近检查:第{ch_num}章 AI 输出格式错误(非数组) "
+                        f"@ {_dt.now().strftime('%H:%M:%S')}")
+                    self.tab_charlib.lbl_last_promise_check.setStyleSheet(
+                        "color: #c00; font-size: 11px; padding: 4px 6px; "
+                        "background: #fff5f5; border: 1px solid #fcc; border-radius: 3px;")
+                except Exception:
+                    pass
+                return
+            count = 0
+            tbl = self.tab_charlib.tbl_promises
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                try:
+                    rid = int(it.get("id", -1))
+                except (TypeError, ValueError):
+                    continue
+                if not (0 <= rid < tbl.rowCount()):
+                    continue
+                paid_now = tbl.item(rid, 6)
+                if paid_now and paid_now.text() == "是":
+                    continue
+                tbl.setItem(rid, 6, QTableWidgetItem("是"))
+                outcome = str(it.get("outcome", ""))[:20]
+                how = str(it.get("how", ""))[:50]
+                self.tab_generation.log(
+                    f"  ✓ 承诺兑现:[{rid}] @第{ch_num}章 {outcome} — {how}", "info")
+                count += 1
+            ts = _dt.now().strftime("%H:%M:%S")
+            try:
+                if count > 0:
+                    self.tab_charlib.lbl_last_promise_check.setText(
+                        f"✅ 最近检查:第{ch_num}章 +{count} 条承诺已兑现 @ {ts}")
+                    self.tab_charlib.lbl_last_promise_check.setStyleSheet(
+                        "color: #06f; font-weight: bold; font-size: 11px; "
+                        "padding: 4px 6px; background: #eef6ff; "
+                        "border: 1px solid #aac; border-radius: 3px;")
+                else:
+                    self.tab_charlib.lbl_last_promise_check.setText(
+                        f"📭 最近检查:第{ch_num}章 本章未兑现任何承诺 @ {ts}")
+                    self.tab_charlib.lbl_last_promise_check.setStyleSheet(
+                        "color: #777; font-size: 11px; padding: 4px 6px; "
+                        "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
+            except Exception:
+                pass
+            self.tab_generation.log(
+                f"✓ 承诺兑现检查完成:第{ch_num}章 共 {count} 条兑现", "info")
+        except Exception as e:
+            self.tab_generation.log(f"⚠️ 承诺兑现检查解析失败:{e}", "warn")
+            try:
+                self.tab_charlib.lbl_last_promise_check.setText(
+                    f"⚠ 最近检查:第{ch_num}章 JSON 解析失败({e}) "
+                    f"@ {_dt.now().strftime('%H:%M:%S')}")
+                self.tab_charlib.lbl_last_promise_check.setStyleSheet(
+                    "color: #c00; font-size: 11px; padding: 4px 6px; "
+                    "background: #fff5f5; border: 1px solid #fcc; border-radius: 3px;")
+            except Exception:
+                pass
+
+    def _reeval_zero_deadline_promise(self):
+        """🤖 AI 重评估 deadline=0 的承诺 — 由按钮触发"""
+        if not hasattr(self.tab_charlib, "tbl_promises"):
+            return
+        items = []
+        tbl = self.tab_charlib.tbl_promises
+        for r in range(tbl.rowCount()):
+            ch_set = tbl.item(r, 0).text() if tbl.item(r, 0) else "0"
+            kind = tbl.item(r, 1).text() if tbl.item(r, 1) else "承诺"
+            fr = tbl.item(r, 2).text() if tbl.item(r, 2) else ""
+            to = tbl.item(r, 3).text() if tbl.item(r, 3) else ""
+            ct = tbl.item(r, 4).text() if tbl.item(r, 4) else ""
+            dl = tbl.item(r, 5).text() if tbl.item(r, 5) else "0"
+            fulfilled = tbl.item(r, 6).text() if tbl.item(r, 6) else "否"
+            if fulfilled == "是" or not ct:
+                continue
+            try:
+                if int(dl) != 0:
+                    continue
+            except ValueError:
+                continue
+            items.append({"id": r, "ch_set": ch_set, "kind": kind,
+                          "from": fr, "to": to, "content": ct[:120]})
+        if not items:
+            QMessageBox.information(
+                self, "AI 重评估",
+                "没有需要重评估的承诺(所有未兑现条目的 deadline 都非 0)")
+            return
+        current_ch = len(self.chapters) if hasattr(self, "chapters") else 1
+        ret = QMessageBox.question(
+            self, "AI 重评估确认",
+            f"将把 {len(items)} 条 deadline=0 的承诺/威胁/约定交给 AI 评估合理截止章节"
+            f"(基于当前已写到第 {current_ch} 章)。\n\n继续吗?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ret != QMessageBox.Yes:
+            return
+        pl = json.dumps(items, ensure_ascii=False)
+        prompt = PROMPTS["promise_reeval"].format(
+            current_ch=current_ch, promise_list=pl)
+        print(f"[promise-reeval v1.77] 评估 {len(items)} 条, "
+              f"prompt {len(prompt)} 字", flush=True)
+        self.tab_generation.log(
+            f"🤖 AI 重评估承诺 → 发送 {len(items)} 条({len(prompt)} 字 prompt)", "info")
+        self._send_to_ai(prompt, f"承诺重评估-{len(items)}条",
+                         target="promise_reeval", count=len(items))
+
+    def _on_promise_reeval_response(self, content, meta):
+        """AI 重评估回复 → 把 deadline 回填到 tbl_promises"""
+        from datetime import datetime as _dt
+        from PyQt5.QtWidgets import QTableWidgetItem
+        count_req = meta.get("count", 0)
+        print(f"[promise-reeval v1.77] AI 原始回复({len(content or '')} 字) "
+              f"前 200: {(content or '')[:200]!r}", flush=True)
+        try:
+            text = self._extract_json_blob(content)
+            arr = json.loads(text)
+            if not isinstance(arr, list):
+                self.tab_generation.log(
+                    f"⚠️ 承诺重评估:AI 返回的不是 JSON 数组(是 {type(arr).__name__}),"
+                    f"已忽略", "warn")
+                QMessageBox.warning(self, "AI 重评估失败",
+                                    f"AI 输出不是 JSON 数组,本次未更新。\n原始前 200 字:\n"
+                                    f"{(content or '')[:200]}")
+                return
+            count = 0
+            current_ch = len(self.chapters) if hasattr(self, "chapters") else 1
+            tbl = self.tab_charlib.tbl_promises
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                try:
+                    rid = int(it.get("id", -1))
+                    new_dl = int(it.get("deadline", 0))
+                except (TypeError, ValueError):
+                    continue
+                if not (0 <= rid < tbl.rowCount()):
+                    continue
+                # 守:AI 又返回 0 或过去章节时强制 +15 fallback
+                if new_dl <= current_ch:
+                    new_dl = current_ch + 15
+                tbl.setItem(rid, 5, QTableWidgetItem(str(new_dl)))
+                reason = str(it.get("reason", ""))[:30]
+                self.tab_generation.log(
+                    f"  ✓ 承诺重评估:[{rid}] deadline → 第{new_dl}章 ({reason})", "info")
+                count += 1
+            ts = _dt.now().strftime("%H:%M:%S")
+            self.tab_generation.log(
+                f"✓ AI 重评估完成:更新 {count}/{count_req} 条承诺", "info")
+            QMessageBox.information(
+                self, "AI 重评估完成",
+                f"AI 评估完成,已自动回填 {count}/{count_req} 条承诺的 deadline。\n\n"
+                f"完成时间:{ts}")
+        except Exception as e:
+            self.tab_generation.log(f"⚠️ 承诺重评估解析失败:{e}", "warn")
+            QMessageBox.warning(
+                self, "AI 重评估失败",
+                f"JSON 解析失败:{e}\n原始前 300 字:\n{(content or '')[:300]}")
+
     def _post_chapter_chain(self, ch_num):
         """章节通过后的链式处理:Canon 抽取 → 6库抽取 → 章末技能 → 摘要 → 下一章"""
         if ch_num <= 0:
@@ -13857,6 +14337,19 @@ class MainWindow(QMainWindow):
                     break
             if _has_pending:
                 pipeline.append(("foreshadow_check", ch_num))
+
+        # v1.77 BUG-057:承诺/威胁/约定自动兑现检查(只有库里有未兑现条目时才挂)
+        # 注意:在 foreshadow_check 之后 — 同样让新抽的承诺先入库
+        if hasattr(self.tab_charlib, "tbl_promises"):
+            _has_pending_pr = False
+            for r in range(self.tab_charlib.tbl_promises.rowCount()):
+                ful = self.tab_charlib.tbl_promises.item(r, 6)
+                ct = self.tab_charlib.tbl_promises.item(r, 4)
+                if ct and ct.text().strip() and (not ful or ful.text() != "是"):
+                    _has_pending_pr = True
+                    break
+            if _has_pending_pr:
+                pipeline.append(("promise_check", ch_num))
 
         # after_chapter_generation 技能(固定自动触发)
         for s in self.tab_skills.get_after_chapter_skills():
@@ -13917,6 +14410,14 @@ class MainWindow(QMainWindow):
             ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
             if ch and ch.get("content"):
                 self._run_foreshadow_check(ch["content"], ch_num)
+            else:
+                QTimer.singleShot(100, self._run_next_post_chapter_step)
+        elif step[0] == "promise_check":
+            # v1.77 BUG-057:承诺/威胁/约定自动兑现检查
+            ch_num = step[1]
+            ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
+            if ch and ch.get("content"):
+                self._run_promise_check(ch["content"], ch_num)
             else:
                 QTimer.singleShot(100, self._run_next_post_chapter_step)
         elif step[0] == "skill_after":
