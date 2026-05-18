@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.62"
+APP_VERSION = "v1.63"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1814,6 +1814,9 @@ class ChapterEditor(QWidget):
 # 四、创作设置页
 # =====================================================================
 class CreationSettings(QWidget):
+    # v1.63:上下文设置变更时上抛,MainWindow 用来重算字数预估
+    ctx_settings_changed = pyqtSignal()
+    
     def __init__(self):
         super().__init__()
         outer = QVBoxLayout(self)
@@ -2308,20 +2311,45 @@ class CreationSettings(QWidget):
         layout.addWidget(wp_box)
 
         # v1.22:上一章末尾注入字数(一致性关键 — 默认 2500)
+        # v1.63:扩展 — 可调注入章数 + 早期摘要开关 + 实时字数预估
         ctx_box = QGroupBox("📖 一致性上下文(注入到下章 prompt)")
         ctx_box.setStyleSheet("QGroupBox { font-weight: bold; }")
         ctx_lay = QVBoxLayout(ctx_box)
+        
+        from PyQt5.QtCore import QSettings as _QS_ctx
+        _qs_ctx = _QS_ctx("NovelAI", "CreationSettings")
+        
+        # ── 行 1:完整正文注入章数(新) ──
+        ctx_r0 = QHBoxLayout()
+        ctx_r0.addWidget(QLabel("完整正文注入【最近几章】:"))
+        self.prev_chapters_n = QSpinBox()
+        self.prev_chapters_n.setRange(1, 10)
+        self.prev_chapters_n.setSingleStep(1)
+        self.prev_chapters_n.setValue(
+            max(1, min(10, _qs_ctx.value("prev_chapters_n", 1, type=int))))
+        self.prev_chapters_n.setToolTip(
+            "生成下一章时,把倒数最近【N 章】的正文塞进 prompt。\n"
+            "默认 1 章(只塞上一章)。\n\n"
+            "推荐值:\n"
+            "  · 短篇 / 内存小:1 章\n"
+            "  · 一般网文:1~2 章\n"
+            "  · 多线索 / 复杂剧情:3~5 章\n"
+            "  · 注意:章数 × 每章字数太大会爆 AI 上下文")
+        ctx_r0.addWidget(self.prev_chapters_n)
+        ctx_r0.addWidget(QLabel("章"))
+        ctx_r0.addStretch()
+        ctx_lay.addLayout(ctx_r0)
+        
+        # ── 行 2:单章末尾字数(老,改了 label)──
         ctx_r1 = QHBoxLayout()
-        ctx_r1.addWidget(QLabel("上一章正文末尾注入字数:"))
+        ctx_r1.addWidget(QLabel("每章最多保留末尾:"))
         self.prev_tail_chars = QSpinBox()
         self.prev_tail_chars.setRange(500, 8000)
         self.prev_tail_chars.setSingleStep(500)
-        from PyQt5.QtCore import QSettings as _QS_ctx
-        _saved = _QS_ctx("NovelAI", "CreationSettings").value(
-            "prev_chapter_tail_chars", 2500, type=int)
+        _saved = _qs_ctx.value("prev_chapter_tail_chars", 2500, type=int)
         self.prev_tail_chars.setValue(max(500, min(8000, _saved)))
         self.prev_tail_chars.setToolTip(
-            "生成下一章时,把上一章正文的末尾这么多字注入到 prompt 里,\n"
+            "每章注入时,若超过这么多字则只保留末尾 N 字(节省 token)。\n"
             "让 AI 看到人物语气 / 动作惯性 / 情节细节,保持一致性。\n\n"
             "推荐值:2500 字(主流大模型 context 够用,内容也够)\n"
             "字数越大 → 一致性越好 / token 消耗越多")
@@ -2329,12 +2357,47 @@ class CreationSettings(QWidget):
             lambda v: _QS_ctx("NovelAI", "CreationSettings").setValue(
                 "prev_chapter_tail_chars", v))
         ctx_r1.addWidget(self.prev_tail_chars)
-        ctx_r1.addWidget(QLabel("字"))
+        ctx_r1.addWidget(QLabel("字 / 章"))
         ctx_r1.addStretch()
         ctx_lay.addLayout(ctx_r1)
+        
+        # ── 行 3:再往前用摘要开关 ──
+        ctx_r2 = QHBoxLayout()
+        self.prev_use_summaries = QCheckBox(
+            "再往前的章节用【摘要】注入(每章 ≤200 字,有摘要才注入)")
+        self.prev_use_summaries.setChecked(
+            _qs_ctx.value("prev_use_summaries", True, type=bool))
+        self.prev_use_summaries.setToolTip(
+            "✓ 勾选:N 章之前的所有章节,各取 summary 字段前 200 字注入,串起主线脉络\n"
+            "✗ 取消:N 章之前完全不注入(节省 token,但容易忘早期设定)\n\n"
+            "提示:章节没有 summary 字段也不会注入,可在编辑器里手动加 / AI 生成。")
+        self.prev_use_summaries.stateChanged.connect(
+            lambda s: _QS_ctx("NovelAI", "CreationSettings").setValue(
+                "prev_use_summaries", bool(s)))
+        ctx_r2.addWidget(self.prev_use_summaries)
+        ctx_r2.addStretch()
+        ctx_lay.addLayout(ctx_r2)
+        
+        # ── 字数预估 label(实时随 spin 变化)──
+        self.prev_ctx_estimate = QLabel("📊 预估注入字数:—(写完第 1 章后实时显示)")
+        self.prev_ctx_estimate.setStyleSheet(
+            "color: #1a4480; font-weight: bold; "
+            "padding: 4px 8px; background: #eef4fb; border-radius: 3px;")
+        self.prev_ctx_estimate.setWordWrap(True)
+        ctx_lay.addWidget(self.prev_ctx_estimate)
+        
+        # 联动:任一控件改变 → 持久化 + 触发预估更新(通过信号上抛 MainWindow)
+        self.prev_chapters_n.valueChanged.connect(
+            lambda v: _QS_ctx("NovelAI", "CreationSettings").setValue(
+                "prev_chapters_n", v))
+        self.prev_chapters_n.valueChanged.connect(self._emit_ctx_changed)
+        self.prev_tail_chars.valueChanged.connect(self._emit_ctx_changed)
+        self.prev_use_summaries.stateChanged.connect(self._emit_ctx_changed)
+        
         _hint = QLabel(
-            "ℹ 默认 2500 字。如果发现下章跟上章衔接不上 / 人物语气变了 → 加大此值。\n"
-            "  如果发现 AI 经常 token 溢出 / 章节质量下降 → 减小此值。")
+            "ℹ 默认配置:最近 1 章完整 + 每章 2500 字上限 + 早期摘要。\n"
+            "  · 衔接不上 / 语气漂移 → 加大『最近几章』或『字数上限』\n"
+            "  · AI 报错 token 溢出 / 章节质量下降 → 减小这两项")
         _hint.setStyleSheet("color: #888; font-size: 11px;")
         _hint.setWordWrap(True)
         ctx_lay.addWidget(_hint)
@@ -3119,6 +3182,25 @@ class CreationSettings(QWidget):
             cur.layout().addWidget(btn)
             # 按钮也归到 inner list:折叠时一起隐藏(只剩标题条)
             box_inner[id(cur)].append(btn)
+    
+    # ── v1.63:上下文设置 helper ────────────────────────────
+    def _emit_ctx_changed(self, *args):
+        """3 个上下文相关控件变化时,上抛信号给 MainWindow 重算预估字数。"""
+        try:
+            self.ctx_settings_changed.emit()
+        except Exception:
+            pass
+    
+    def get_ctx_config(self):
+        """返回当前上下文注入配置 dict,供 _build_prev_context 使用。"""
+        return {
+            "chapters_n": int(self.prev_chapters_n.value())
+                if hasattr(self, "prev_chapters_n") else 1,
+            "tail_chars": int(self.prev_tail_chars.value())
+                if hasattr(self, "prev_tail_chars") else 2500,
+            "use_summaries": bool(self.prev_use_summaries.isChecked())
+                if hasattr(self, "prev_use_summaries") else True,
+        }
 
 
 # =====================================================================
@@ -3616,11 +3698,17 @@ class CharacterLibrary(QWidget):
         btn_row.addWidget(self.btn_export)
         self.btn_import = QPushButton("📤 导入库")
         btn_row.addWidget(self.btn_import)
+        self.btn_copy_extract_prompt = QPushButton("📋 复制提取 Prompt")
+        self.btn_copy_extract_prompt.setToolTip(
+            "把一份完整 prompt 复制到剪贴板,贴给 DeepSeek/ChatGPT。\n"
+            "AI 返回的 JSON 直接保存为 .json,用『导入库』即可一键合并。")
+        btn_row.addWidget(self.btn_copy_extract_prompt)
         
         layout.addLayout(btn_row)
         
         self.btn_export.clicked.connect(self._export_lib)
         self.btn_import.clicked.connect(self._import_lib)
+        self.btn_copy_extract_prompt.clicked.connect(self._copy_extract_prompt)
     
     # ── 1. 角色库子页 ──────────────────────────────────────
     def _build_characters_tab(self):
@@ -4145,10 +4233,46 @@ class CharacterLibrary(QWidget):
         }
     
     def load(self, data):
-        """从 dict 加载数据"""
+        """从 dict 加载数据。
+        
+        兼容两种条目格式:
+          (a) list-of-list: [[col0, col1, ...], ...] — 老格式,导出/存档用
+          (b) list-of-dict: [{字段名: 值}, ...]      — AI 抽取 / 外部工具(如 DeepSeek)输出
+        
+        外部 JSON 顶层 key `events` 自动归并到 `timeline`(同义)。
+        """
         from PyQt5.QtWidgets import QTableWidgetItem
         if not data:
             return
+        
+        # ── dict → row 字段映射(列序对齐 _build_*_tab 的 setHorizontalHeaderLabels)──
+        DICT_KEY_MAPS = {
+            "characters":  ["name", "role", "appearance", "personality",
+                            "mark", "ability", "state", "first_ch"],
+            "relations":   ["a", "type", "b", "note"],
+            "timeline":    ["ch", "event", "state_change"],
+            "items":       ["name", "type", "owner", "source_ch", "ability"],
+            "power_levels":["realm", "level", "power", "note"],
+            "foreshadows": ["ch", "content", "plan_pay_at", "paid", "pay_ch"],
+            "hooks":       ["ch", "hook", "type", "resolved"],
+            "cool_pts":    ["ch", "scene", "score"],
+        }
+        
+        def normalize(entries, schema_key):
+            """把任意 entries 标准化成 list-of-list。dict 项按字段名映射,list 项原样。"""
+            if not entries:
+                return []
+            keys = DICT_KEY_MAPS.get(schema_key, [])
+            out = []
+            for e in entries:
+                if isinstance(e, dict):
+                    out.append([str(e.get(k, "")) for k in keys])
+                elif isinstance(e, (list, tuple)):
+                    out.append(list(e))
+                else:
+                    # 单值字符串等,丢一列
+                    out.append([str(e)])
+            return out
         
         def list_to_tbl(tbl, rows, ncol):
             tbl.setRowCount(0)
@@ -4159,14 +4283,19 @@ class CharacterLibrary(QWidget):
                     val = row[c] if c < len(row) else ""
                     tbl.setItem(r, c, QTableWidgetItem(str(val)))
         
-        list_to_tbl(self.tbl_chars,     data.get("characters", []), 8)
-        list_to_tbl(self.tbl_relations, data.get("relations", []), 4)
-        list_to_tbl(self.tbl_timeline,  data.get("timeline", []), 3)
-        list_to_tbl(self.tbl_items,     data.get("items", []), 5)
-        list_to_tbl(self.tbl_power,     data.get("power_levels", []), 4)
-        list_to_tbl(self.tbl_fore,      data.get("foreshadows", []), 5)
-        list_to_tbl(self.tbl_hooks,     data.get("hooks", []), 4)      # 新增
-        list_to_tbl(self.tbl_cool,      data.get("cool_pts", []), 3)   # 新增
+        # timeline 容忍 events 同义
+        timeline_raw = data.get("timeline")
+        if not timeline_raw:
+            timeline_raw = data.get("events", [])
+        
+        list_to_tbl(self.tbl_chars,     normalize(data.get("characters", []), "characters"), 8)
+        list_to_tbl(self.tbl_relations, normalize(data.get("relations", []), "relations"), 4)
+        list_to_tbl(self.tbl_timeline,  normalize(timeline_raw, "timeline"), 3)
+        list_to_tbl(self.tbl_items,     normalize(data.get("items", []), "items"), 5)
+        list_to_tbl(self.tbl_power,     normalize(data.get("power_levels", []), "power_levels"), 4)
+        list_to_tbl(self.tbl_fore,      normalize(data.get("foreshadows", []), "foreshadows"), 5)
+        list_to_tbl(self.tbl_hooks,     normalize(data.get("hooks", []), "hooks"), 4)
+        list_to_tbl(self.tbl_cool,      normalize(data.get("cool_pts", []), "cool_pts"), 3)
         
         hs = data.get("hero_state", {})
         self.hero_age.setText(hs.get("age", "18"))
@@ -4176,6 +4305,141 @@ class CharacterLibrary(QWidget):
         self.hero_mood.setText(hs.get("mood", "平静"))
         
         self.chk_inject.setChecked(data.get("auto_inject", True))
+    
+    def merge_dicts(self, data):
+        """把外部 JSON(list-of-dict 格式)合并进当前表(去重,不清空)。
+        
+        返回 dict: {"ch": N, "rel": N, "it": N, "ev": N, "fo": N} —— 各类新增条目数。
+        与 MainWindow._merge_into_charlib 等价,供 CharacterLib 自己的导入路径调用。
+        """
+        from PyQt5.QtWidgets import QTableWidgetItem
+        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0}
+        if not data:
+            return added
+        
+        def existing_names(tbl, col=0):
+            return set((tbl.item(r, col).text() if tbl.item(r, col) else "")
+                       for r in range(tbl.rowCount()))
+        
+        def _as_dict_list(entries, schema_key):
+            """容忍 list-of-list 也喂进来。"""
+            DICT_KEY_MAPS_LOCAL = {
+                "characters":  ["name", "role", "appearance", "personality",
+                                "mark", "ability", "state", "first_ch"],
+                "relations":   ["a", "type", "b", "note"],
+                "timeline":    ["ch", "event", "state_change"],
+                "items":       ["name", "type", "owner", "source_ch", "ability"],
+                "foreshadows": ["ch", "content", "plan_pay_at", "paid", "pay_ch"],
+            }
+            keys = DICT_KEY_MAPS_LOCAL.get(schema_key, [])
+            out = []
+            for e in (entries or []):
+                if isinstance(e, dict):
+                    out.append(e)
+                elif isinstance(e, (list, tuple)):
+                    out.append({keys[i]: e[i] for i in range(min(len(keys), len(e)))})
+            return out
+        
+        # 角色
+        ex_chars = existing_names(self.tbl_chars)
+        for c in _as_dict_list(data.get("characters"), "characters"):
+            name = str(c.get("name", "")).strip()
+            if not name or name in ex_chars:
+                continue
+            row = self.tbl_chars.rowCount()
+            self.tbl_chars.insertRow(row)
+            vals = [name, c.get("role", "配角"), c.get("appearance", ""),
+                    c.get("personality", ""), c.get("mark", ""),
+                    c.get("ability", ""), c.get("state", ""),
+                    str(c.get("first_ch", ""))]
+            for col, v in enumerate(vals):
+                self.tbl_chars.setItem(row, col, QTableWidgetItem(str(v)))
+            added["ch"] += 1
+            ex_chars.add(name)
+        
+        # 关系
+        ex_rels = set()
+        for r in range(self.tbl_relations.rowCount()):
+            a = self.tbl_relations.item(r, 0).text() if self.tbl_relations.item(r, 0) else ""
+            t = self.tbl_relations.item(r, 1).text() if self.tbl_relations.item(r, 1) else ""
+            b = self.tbl_relations.item(r, 2).text() if self.tbl_relations.item(r, 2) else ""
+            ex_rels.add(f"{a}|{t}|{b}")
+        for rel in _as_dict_list(data.get("relations"), "relations"):
+            a = str(rel.get("a", "")).strip()
+            t = str(rel.get("type", "")).strip()
+            b = str(rel.get("b", "")).strip()
+            if not (a and t and b):
+                continue
+            k = f"{a}|{t}|{b}"
+            if k in ex_rels:
+                continue
+            row = self.tbl_relations.rowCount()
+            self.tbl_relations.insertRow(row)
+            for col, v in enumerate([a, t, b, rel.get("note", "")]):
+                self.tbl_relations.setItem(row, col, QTableWidgetItem(str(v)))
+            added["rel"] += 1
+            ex_rels.add(k)
+        
+        # 物品
+        ex_items = existing_names(self.tbl_items)
+        for it in _as_dict_list(data.get("items"), "items"):
+            name = str(it.get("name", "")).strip()
+            if not name or name in ex_items:
+                continue
+            row = self.tbl_items.rowCount()
+            self.tbl_items.insertRow(row)
+            vals = [name, it.get("type", "法器"), it.get("owner", ""),
+                    str(it.get("source_ch", "")), it.get("ability", "")]
+            for col, v in enumerate(vals):
+                self.tbl_items.setItem(row, col, QTableWidgetItem(str(v)))
+            added["it"] += 1
+            ex_items.add(name)
+        
+        # 事件 / timeline(容忍两种 key)
+        ev_raw = data.get("events") or data.get("timeline")
+        ex_evs = set()
+        for r in range(self.tbl_timeline.rowCount()):
+            ch = self.tbl_timeline.item(r, 0).text() if self.tbl_timeline.item(r, 0) else ""
+            ev = self.tbl_timeline.item(r, 1).text() if self.tbl_timeline.item(r, 1) else ""
+            ex_evs.add(f"{ch}|{ev[:20]}")
+        for ev in _as_dict_list(ev_raw, "timeline"):
+            ch = str(ev.get("ch", ""))
+            evt = str(ev.get("event", "")).strip()
+            if not evt:
+                continue
+            k = f"{ch}|{evt[:20]}"
+            if k in ex_evs:
+                continue
+            row = self.tbl_timeline.rowCount()
+            self.tbl_timeline.insertRow(row)
+            for col, v in enumerate([ch, evt, ev.get("state_change", "")]):
+                self.tbl_timeline.setItem(row, col, QTableWidgetItem(str(v)))
+            added["ev"] += 1
+            ex_evs.add(k)
+        
+        # 伏笔
+        ex_fos = set()
+        for r in range(self.tbl_fore.rowCount()):
+            ch = self.tbl_fore.item(r, 0).text() if self.tbl_fore.item(r, 0) else ""
+            ct = self.tbl_fore.item(r, 1).text() if self.tbl_fore.item(r, 1) else ""
+            ex_fos.add(f"{ch}|{ct[:30]}")
+        for fo in _as_dict_list(data.get("foreshadows"), "foreshadows"):
+            ch = str(fo.get("ch", ""))
+            ct = str(fo.get("content", "")).strip()
+            if not ct:
+                continue
+            k = f"{ch}|{ct[:30]}"
+            if k in ex_fos:
+                continue
+            row = self.tbl_fore.rowCount()
+            self.tbl_fore.insertRow(row)
+            vals = [ch, ct, str(fo.get("plan_pay_at", "0")), "否", ""]
+            for col, v in enumerate(vals):
+                self.tbl_fore.setItem(row, col, QTableWidgetItem(str(v)))
+            added["fo"] += 1
+            ex_fos.add(k)
+        
+        return added
     
     # ── 注入到提示词 ───────────────────────────────────────
     def build_inject_block(self, current_chapter=None, mentioned_names=None):
@@ -4327,7 +4591,7 @@ class CharacterLibrary(QWidget):
             QMessageBox.warning(self, "失败", str(e))
     
     def _import_lib(self):
-        from PyQt5.QtWidgets import QFileDialog
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
         path, _ = QFileDialog.getOpenFileName(
             self, "导入角色库", "", "JSON (*.json)")
         if not path:
@@ -4335,10 +4599,290 @@ class CharacterLibrary(QWidget):
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            self.load(data)
-            QMessageBox.information(self, "成功", "导入完成")
         except Exception as e:
-            QMessageBox.warning(self, "失败", str(e))
+            QMessageBox.warning(self, "失败", f"JSON 解析失败:\n{e}")
+            return
+        
+        # 检测格式 — 任一表的第一项是 dict ⇒ 外部格式(如 DeepSeek 提取),适合追加
+        is_dict_format = False
+        for key in ("characters", "relations", "items", "events", "timeline", "foreshadows"):
+            seq = data.get(key)
+            if seq and isinstance(seq, list) and isinstance(seq[0], dict):
+                is_dict_format = True
+                break
+        
+        # 当前表格非空就要问;若 dict 格式默认提示"追加",老格式默认"覆盖"
+        any_existing = any(t.rowCount() > 0 for t in (
+            self.tbl_chars, self.tbl_relations, self.tbl_timeline,
+            self.tbl_items, self.tbl_fore))
+        
+        if any_existing:
+            mb = QMessageBox(self)
+            mb.setWindowTitle("导入方式")
+            mb.setIcon(QMessageBox.Question)
+            mb.setText("当前已有数据,选择导入方式:")
+            mb.setInformativeText(
+                "• 追加合并:保留现有,只加入新条目(去重)\n"
+                "• 覆盖全部:清空现有后用新数据替换"
+            )
+            btn_merge = mb.addButton("追加合并", QMessageBox.AcceptRole)
+            btn_replace = mb.addButton("覆盖全部", QMessageBox.DestructiveRole)
+            btn_cancel = mb.addButton("取消", QMessageBox.RejectRole)
+            mb.setDefaultButton(btn_merge if is_dict_format else btn_replace)
+            mb.exec_()
+            clicked = mb.clickedButton()
+            if clicked is btn_cancel:
+                return
+            mode = "merge" if clicked is btn_merge else "replace"
+        else:
+            # 空表 — 直接走相应路径
+            mode = "merge" if is_dict_format else "replace"
+        
+        try:
+            if mode == "merge":
+                added = self.merge_dicts(data)
+                QMessageBox.information(
+                    self, "成功",
+                    f"已追加合并:\n"
+                    f"  • 角色 +{added['ch']}\n"
+                    f"  • 关系 +{added['rel']}\n"
+                    f"  • 物品 +{added['it']}\n"
+                    f"  • 事件 +{added['ev']}\n"
+                    f"  • 伏笔 +{added['fo']}")
+            else:
+                self.load(data)
+                QMessageBox.information(self, "成功", "已覆盖导入完成")
+        except Exception as e:
+            QMessageBox.warning(self, "失败", f"导入过程出错:\n{e}")
+    
+    # ── 章节范围 / Prompt 拼装(抽出来便于复用 + 测试)──────────────
+    
+    _EXTRACT_PROMPT_TEMPLATE = (
+        "请从下面的小说正文中,提取结构化设定信息,以便归档到角色与世界库中。\n"
+        "**严格按 JSON 格式输出,不要任何前后缀说明,不要 markdown 代码块标记**。\n\n"
+        "输出格式(顶层 5 个字段,缺失类别给空数组 []):\n"
+        "{\n"
+        '  "characters": [\n'
+        '    {"name": "角色名", "role": "主角/女主/配角/导师/反派/路人",\n'
+        '     "appearance": "外貌简述", "personality": "性格特征",\n'
+        '     "mark": "口头禅或标志性细节", "ability": "能力/职业/修为",\n'
+        '     "state": "当前状态(剧情结束时)", "first_ch": "首次出场章节号"}\n'
+        "  ],\n"
+        '  "relations": [\n'
+        '    {"a": "角色A名", "type": "师徒/恋人/血缘/敌对/同伴",\n'
+        '     "b": "角色B名", "note": "备注或起因"}\n'
+        "  ],\n"
+        '  "items": [\n'
+        '    {"name": "物品名", "type": "法器/丹药/秘籍/材料/信物",\n'
+        '     "owner": "持有者", "source_ch": "来源章节", "ability": "能力或状态"}\n'
+        "  ],\n"
+        '  "events": [\n'
+        '    {"ch": "章节号", "event": "重大事件简述",\n'
+        '     "state_change": "主角状态变化(如:晋升金丹/获得XX)"}\n'
+        "  ],\n"
+        '  "foreshadows": [\n'
+        '    {"ch": "埋设章节", "content": "伏笔内容(神秘物品/隐藏身份/可疑话语)",\n'
+        '     "plan_pay_at": "建议第几章回收(如:30,无法判断填 0)"}\n'
+        "  ]\n"
+        "}\n\n"
+        "提取规则:\n"
+        "1. characters:列所有【有名字、有性格、对剧情有影响】的角色,普通路人省略\n"
+        "2. relations:列对主线有意义的关系,泛泛之交不列\n"
+        "3. items:列主角【获得/失去/重要使用】的物品,敌人物品和一次性消耗品不列\n"
+        "4. events:列影响主线的重大事件,日常对话不算\n"
+        "5. foreshadows:必须是【作者埋下、读者会记住的悬念】,不是普通铺垫\n"
+        "6. first_ch / ch / source_ch 字段尽量按【真实首次出现章节】填,不是文本里这章的章节号\n"
+        "7. JSON 必须严格合法 — 引号闭合、逗号位置正确、最外层是 {}\n"
+        "8. 字符串内的双引号要转义(\\\"),不要用中文引号\n\n"
+        "==================== 小说正文 ====================\n"
+        "__BODY_PLACEHOLDER__\n"
+    )
+    
+    @staticmethod
+    def _chapters_to_body(chapters, start_idx=None, end_idx=None):
+        """把 chapters 列表(MainWindow.chapters)切片转成 prompt 正文段。
+        
+        参数:
+          chapters: list[dict],每项至少有 title/content
+          start_idx, end_idx: **1-based** 闭区间;None 表示首/尾
+        
+        返回:
+          str — 拼好的正文(没有可用章节时返回空串)
+        """
+        if not chapters:
+            return ""
+        total = len(chapters)
+        s = 1 if start_idx is None else max(1, int(start_idx))
+        e = total if end_idx is None else min(total, int(end_idx))
+        if s > e:
+            return ""
+        lines = []
+        for i in range(s, e + 1):
+            ch = chapters[i - 1]
+            title = ch.get("title", f"第 {i} 章")
+            content = (ch.get("content") or "").strip()
+            if content:
+                lines.append(f"【{title}】\n{content}")
+        return "\n\n".join(lines)
+    
+    def _build_extract_prompt(self, body=""):
+        """拼出完整 prompt;body 为空时保留占位符提示用户手动贴。
+        
+        用 str.replace 而不是 .format,因为模板内含 JSON 示例的 {} 字符。
+        """
+        body = body.strip() if body else "（在这里粘贴你的小说全文或章节正文）"
+        return self._EXTRACT_PROMPT_TEMPLATE.replace("__BODY_PLACEHOLDER__", body)
+    
+    def _copy_extract_prompt(self):
+        """生成一份完整 prompt 复制到剪贴板,用户贴给 DeepSeek/ChatGPT 提取设定。
+        
+        弹对话框让用户选章节范围 — 全部 / 最近 N 章 / 指定区间 / 不附带正文。
+        AI 返回的 JSON 直接保存为 .json 文件后,用『导入库』就能一键合并到当前 6 库。
+        """
+        from PyQt5.QtWidgets import QApplication, QMessageBox
+        
+        # 取当前项目的章节
+        chapters = []
+        try:
+            mw = self.window()
+            chapters = list(getattr(mw, "chapters", None) or [])
+        except Exception:
+            pass
+        
+        # 没有章节 — 直接复制空模板
+        if not chapters:
+            prompt = self._build_extract_prompt("")
+            QApplication.clipboard().setText(prompt)
+            QMessageBox.information(
+                self, "已复制(空模板)",
+                "当前项目没有可用章节内容,已复制【空模板】到剪贴板。\n\n"
+                "操作步骤:\n"
+                "1. 打开 DeepSeek / ChatGPT,粘贴(Ctrl+V)\n"
+                "2. 把『==小说正文==』下方的占位符替换为你要分析的内容\n"
+                "3. 发送 → 拿到 JSON 后保存为 .json 文件\n"
+                "4. 回到本工具,点『📤 导入库』→ 选『追加合并』")
+            return
+        
+        # 有章节 — 弹范围选择
+        s, e = self._ask_chapter_range(len(chapters))
+        if s is None:  # 用户取消
+            return
+        
+        # s == 0 表示用户选了"不附带正文",生成空模板
+        if s == 0:
+            body = ""
+            range_desc = "未附带正文(模板模式)"
+        else:
+            body = self._chapters_to_body(chapters, s, e)
+            range_desc = f"已附带第 {s}~{e} 章(共 {e - s + 1} 章, {len(body)} 字)"
+        
+        prompt = self._build_extract_prompt(body)
+        QApplication.clipboard().setText(prompt)
+        
+        QMessageBox.information(
+            self, "已复制",
+            f"✓ 提取 prompt 已复制到剪贴板。\n"
+            f"  范围:{range_desc}\n"
+            f"  总长度:{len(prompt)} 字符\n\n"
+            f"操作步骤:\n"
+            f"1. 打开 DeepSeek / ChatGPT,粘贴(Ctrl+V)发送\n"
+            f"2. AI 返回 JSON 后,全选复制保存为 .json 文件\n"
+            f"3. 回到本工具,点『📤 导入库』选中那个文件\n"
+            f"4. 选『追加合并』即可")
+    
+    def _ask_chapter_range(self, total):
+        """弹对话框让用户选章节范围。
+        
+        参数:
+          total: 当前项目总章节数(int, >= 1)
+        
+        返回:
+          (start, end) 1-based 闭区间;用户取消返回 (None, None);
+          选『不附带正文』返回 (0, 0)
+        """
+        from PyQt5.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QLabel, QRadioButton,
+            QButtonGroup, QSpinBox, QPushButton, QWidget)
+        
+        dlg = QDialog(self)
+        dlg.setWindowTitle("选择要附带的章节范围")
+        dlg.setMinimumWidth(380)
+        lay = QVBoxLayout(dlg)
+        
+        lay.addWidget(QLabel(f"当前项目共 <b>{total}</b> 章。选择要塞进 prompt 的范围:"))
+        
+        grp = QButtonGroup(dlg)
+        
+        # 选项 1:全部
+        rb_all = QRadioButton(f"📚 全部章节(1 ~ {total})")
+        rb_all.setChecked(True)
+        grp.addButton(rb_all, 1)
+        lay.addWidget(rb_all)
+        
+        # 选项 2:最近 N 章
+        row2 = QHBoxLayout()
+        rb_recent = QRadioButton("🕒 最近")
+        spin_recent = QSpinBox()
+        spin_recent.setRange(1, total)
+        spin_recent.setValue(min(10, total))
+        spin_recent.setSuffix(" 章")
+        row2.addWidget(rb_recent)
+        row2.addWidget(spin_recent)
+        row2.addStretch()
+        w2 = QWidget(); w2.setLayout(row2); lay.addWidget(w2)
+        grp.addButton(rb_recent, 2)
+        
+        # 选项 3:指定区间
+        row3 = QHBoxLayout()
+        rb_range = QRadioButton("🎯 第")
+        spin_from = QSpinBox(); spin_from.setRange(1, total); spin_from.setValue(1)
+        spin_to = QSpinBox(); spin_to.setRange(1, total); spin_to.setValue(total)
+        row3.addWidget(rb_range)
+        row3.addWidget(spin_from)
+        row3.addWidget(QLabel(" ~ 第 "))
+        row3.addWidget(spin_to)
+        row3.addWidget(QLabel(" 章"))
+        row3.addStretch()
+        w3 = QWidget(); w3.setLayout(row3); lay.addWidget(w3)
+        grp.addButton(rb_range, 3)
+        
+        # 选项 4:不附带
+        rb_none = QRadioButton("⬜ 不附带正文(只复制空模板,自己手动贴内容)")
+        grp.addButton(rb_none, 4)
+        lay.addWidget(rb_none)
+        
+        # 选中 spin 联动 — 操作 spin 时自动激活对应单选
+        spin_recent.valueChanged.connect(lambda _: rb_recent.setChecked(True))
+        spin_from.valueChanged.connect(lambda _: rb_range.setChecked(True))
+        spin_to.valueChanged.connect(lambda _: rb_range.setChecked(True))
+        
+        # 按钮
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_ok = QPushButton("✓ 复制 Prompt")
+        btn_ok.setDefault(True)
+        btn_cancel = QPushButton("取消")
+        btn_ok.clicked.connect(dlg.accept)
+        btn_cancel.clicked.connect(dlg.reject)
+        btn_row.addWidget(btn_ok); btn_row.addWidget(btn_cancel)
+        lay.addLayout(btn_row)
+        
+        if dlg.exec_() != QDialog.Accepted:
+            return (None, None)
+        
+        choice = grp.checkedId()
+        if choice == 1:
+            return (1, total)
+        elif choice == 2:
+            n = spin_recent.value()
+            return (max(1, total - n + 1), total)
+        elif choice == 3:
+            s, e = spin_from.value(), spin_to.value()
+            if s > e:
+                s, e = e, s
+            return (s, e)
+        else:  # 4 — 不附带
+            return (0, 0)
 
 
 class CanonGuard(QWidget):
@@ -8206,6 +8750,12 @@ class MainWindow(QMainWindow):
             lambda: self._import_to(self.tab_settings.inspiration_edit))
         self.tab_settings.btn_prelogin.clicked.connect(self.prelogin_ai)
         self.tab_settings.ai_group.buttonClicked.connect(self._on_ai_changed)
+        # v1.63:上下文设置变化 → 重算字数预估
+        try:
+            self.tab_settings.ctx_settings_changed.connect(
+                self._update_ctx_estimate)
+        except Exception:
+            pass
 
         # 大纲
         self.tab_outline.btn_gen_all.clicked.connect(self.gen_outline_all)
@@ -8446,6 +8996,11 @@ class MainWindow(QMainWindow):
             else:
                 self.lbl_chapter_count.setText(
                     f"章节列表 (共 {n} 章 · 按 Ctrl 多选)")
+        # v1.63: 章节数变了 → 重算上下文注入字数预估
+        try:
+            self._update_ctx_estimate()
+        except Exception:
+            pass
 
     def _on_chapter_clicked(self, item):
         idx = self.chapter_list.row(item)
@@ -11089,66 +11644,205 @@ class MainWindow(QMainWindow):
             self.tab_generation.log("用户取消,批量生成已停止", "warn")
 
     def _build_prev_context(self, ch_num):
-        """v1.22 BUG-040:构造【前情提要】块,注入到 chapter prompt
+        """v1.22 BUG-040 / v1.63 多章注入:构造【前情提要】块,注入到 chapter prompt
 
-        组成:
-          1. 早期章节摘要(第 1 章到第 ch_num-2 章,如有 summary 字段)
-          2. 上一章正文末尾 N 字(N 默认 2500,可在创作设置里调)
+        组成(按用户配置):
+          1. 早期章节摘要(第 1 章到第 ch_num-N-1 章,如有 summary 字段)
+             — 仅当 use_summaries=True 才注入
+          2. 最近 N 章正文(N = chapters_n 设置,默认 1)
+             每章超过 tail_chars 字时截尾
 
         若没有上一章 / 第 1 章 → 返回空字符串(prompt 模板 {prev_context} 不显示)
         """
         if not self.chapters or ch_num <= 1:
             return ""
-
+        
+        # 读取配置(找 CreationSettings,失败用默认值)
+        try:
+            cfg = self.tab_settings.get_ctx_config()
+        except Exception:
+            from PyQt5.QtCore import QSettings
+            qs = QSettings("NovelAI", "CreationSettings")
+            cfg = {
+                "chapters_n":    qs.value("prev_chapters_n", 1, type=int),
+                "tail_chars":    qs.value("prev_chapter_tail_chars", 2500, type=int),
+                "use_summaries": qs.value("prev_use_summaries", True, type=bool),
+            }
+        
+        # 边界 clamp
+        n_full = max(1, min(10, cfg["chapters_n"]))
+        tail_n = max(500, min(8000, cfg["tail_chars"]))
+        use_summaries = bool(cfg["use_summaries"])
+        
+        # 实际能拿到的章数 = min(配置, 已有章数)
+        # 第 ch_num 章未生成时,self.chapters 含 ch_num-1 章
+        avail = len(self.chapters)  # 已有章数
+        n_full = min(n_full, avail)
+        
         sections = []
-
-        # 1. 早期章节摘要(第 1 章 ~ 第 ch_num-2 章)
-        early_summaries = []
-        if ch_num >= 3:
-            for i, c in enumerate(self.chapters[:-1]):
-                s = (c.get("summary") or "").strip()
-                if s:
-                    early_summaries.append(f"  · 第 {i+1} 章:{s[:200]}")
-        if early_summaries:
-            sections.append(
-                "▼ 早期章节摘要(主线脉络)\n" + "\n".join(early_summaries))
-
-        # 2. 上一章正文末尾(默认 2500 字,QSettings 可调)
-        prev_ch = self.chapters[-1]
-        prev_content = (prev_ch.get("content") or "").strip()
-        if prev_content:
-            try:
-                from PyQt5.QtCore import QSettings
-                tail_n = QSettings("NovelAI", "CreationSettings").value(
-                    "prev_chapter_tail_chars", 2500, type=int)
-            except Exception:
-                tail_n = 2500
-            tail_n = max(500, min(8000, tail_n))   # 安全边界
-            tail = (prev_content[-tail_n:]
-                    if len(prev_content) > tail_n
-                    else prev_content)
-            prev_title = (prev_ch.get("title") or "").strip()
-            header = "▼ 上一章正文末尾(直接承接,语气/动作/情节请连续)"
-            if prev_title:
-                header += f"\n  上一章标题:《{prev_title}》"
-            sections.append(f"{header}\n\n{tail}")
-            # 诊断 log
-            try:
-                self.tab_generation.log(
-                    f"📖 已注入上一章末尾 {len(tail)} 字" +
-                    (f" + {len(early_summaries)} 章摘要" if early_summaries else ""),
-                    "info")
-            except Exception:
-                pass
-
+        injected_summary_n = 0
+        injected_full_n = 0
+        total_chars = 0
+        
+        # 1. 早期章节摘要(第 1 章 ~ 第 avail-n_full 章)
+        if use_summaries:
+            summary_end = avail - n_full   # exclusive
+            if summary_end > 0:
+                early_summaries = []
+                for i in range(summary_end):
+                    c = self.chapters[i]
+                    s = (c.get("summary") or "").strip()
+                    if s:
+                        snippet = s[:200]
+                        early_summaries.append(f"  · 第 {i+1} 章:{snippet}")
+                        injected_summary_n += 1
+                        total_chars += len(snippet)
+                if early_summaries:
+                    sections.append(
+                        "▼ 早期章节摘要(主线脉络)\n"
+                        + "\n".join(early_summaries))
+        
+        # 2. 最近 N 章完整正文(每章超 tail_chars 截尾)
+        full_chapters_block_lines = []
+        # 倒数 n_full 章 = chapters[avail-n_full : avail]
+        for offset in range(n_full):
+            idx = avail - n_full + offset   # 0-based
+            ch = self.chapters[idx]
+            content = (ch.get("content") or "").strip()
+            if not content:
+                continue
+            
+            # 截尾
+            if len(content) > tail_n:
+                content_block = content[-tail_n:]
+                truncated = True
+            else:
+                content_block = content
+                truncated = False
+            
+            title = (ch.get("title") or "").strip() or f"第 {idx+1} 章"
+            
+            # 多章时:加章节分隔标记;单章时:保持原 v1.22 格式不变
+            if n_full == 1:
+                header = "▼ 上一章正文末尾(直接承接,语气/动作/情节请连续)"
+                header += f"\n  上一章标题:《{title}》"
+                if truncated:
+                    header += f"(全文 {len(content)} 字,只取末尾 {tail_n} 字)"
+                full_chapters_block_lines.append(f"{header}\n\n{content_block}")
+            else:
+                marker = "末尾" if truncated else "完整"
+                full_chapters_block_lines.append(
+                    f"━━━━ 第 {idx+1} 章《{title}》({marker} {len(content_block)} 字)━━━━\n"
+                    f"{content_block}")
+            
+            injected_full_n += 1
+            total_chars += len(content_block)
+        
+        if full_chapters_block_lines:
+            if n_full == 1:
+                sections.extend(full_chapters_block_lines)
+            else:
+                # 多章 — 加个总标题
+                sections.append(
+                    "▼ 最近 {n} 章正文(直接承接,语气/动作/情节请连续)\n\n".format(
+                        n=injected_full_n)
+                    + "\n\n".join(full_chapters_block_lines))
+        
+        # 诊断 log
+        try:
+            self.tab_generation.log(
+                f"📖 已注入前情:{injected_full_n} 章正文"
+                + (f" + {injected_summary_n} 章摘要" if injected_summary_n else "")
+                + f"({total_chars} 字)",
+                "info")
+        except Exception:
+            pass
+        
         if not sections:
             return ""
-
+        
         return (
             "【前情提要 — 保持一致性的关键】\n"
             + "\n\n".join(sections)
             + "\n\n"
         )
+    
+    def _update_ctx_estimate(self):
+        """v1.63:根据当前 chapters + ctx 设置,实时算预估注入字数并显示。
+        
+        触发点:
+          · CreationSettings 三个控件变化(信号)
+          · 章节列表变更(可在 update_chapter_list 末尾调一次)
+        """
+        try:
+            cfg = self.tab_settings.get_ctx_config()
+        except Exception:
+            return
+        
+        lbl = getattr(self.tab_settings, "prev_ctx_estimate", None)
+        if lbl is None:
+            return
+        
+        chapters = self.chapters or []
+        n_full_req = cfg["chapters_n"]
+        tail_n = cfg["tail_chars"]
+        use_summaries = cfg["use_summaries"]
+        avail = len(chapters)
+        
+        # 没有任何章节
+        if avail == 0:
+            lbl.setText(
+                f"📊 预估注入字数:0(还没有章节,生成第 1 章时不注入前情)\n"
+                f"   配置:最近 {n_full_req} 章 × 最多 {tail_n} 字/章" +
+                (" + 早期摘要" if use_summaries else ""))
+            return
+        
+        # 实际注入章数 = min(配置, 已有)
+        n_full = min(n_full_req, avail)
+        
+        # 完整正文字数
+        full_chars = 0
+        for offset in range(n_full):
+            idx = avail - n_full + offset
+            content = (chapters[idx].get("content") or "").strip()
+            full_chars += min(len(content), tail_n)
+        
+        # 摘要字数(每章 ≤200 字)
+        summary_chars = 0
+        summary_count = 0
+        if use_summaries:
+            for i in range(avail - n_full):
+                s = (chapters[i].get("summary") or "").strip()
+                if s:
+                    summary_chars += min(len(s), 200)
+                    summary_count += 1
+        
+        total = full_chars + summary_chars
+        
+        # 警示色:>15000 字开始警示,>30000 字爆红
+        if total > 30000:
+            color = "#cc3333"
+            warning = "  ⚠ 偏大,小心 AI 上下文溢出"
+        elif total > 15000:
+            color = "#cc8800"
+            warning = "  ⚠ 较多,留意 token 消耗"
+        else:
+            color = "#1a4480"
+            warning = ""
+        
+        next_ch = avail + 1
+        msg = (
+            f"📊 写第 {next_ch} 章时预估注入:<b>{total:,}</b> 字{warning}\n"
+            f"   ├ 最近 {n_full} 章正文:{full_chars:,} 字"
+            + (f"(配置要 {n_full_req} 章,但只有 {avail} 章)"
+               if n_full < n_full_req else "")
+            + (f"\n   └ 早期 {summary_count} 章摘要:{summary_chars:,} 字"
+               if use_summaries and summary_count else "")
+        )
+        lbl.setText(msg)
+        lbl.setStyleSheet(
+            f"color: {color}; font-weight: bold; "
+            "padding: 4px 8px; background: #eef4fb; border-radius: 3px;")
 
     def _send_next_chapter(self):
         """批量生成里发下一章(自动注入对话记忆+伏笔提醒)"""
