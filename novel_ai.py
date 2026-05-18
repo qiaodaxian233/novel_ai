@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.63"
+APP_VERSION = "v1.64"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -282,7 +282,8 @@ PROMPTS = {
         "  ],\n"
         '  "foreshadows": [\n'
         '    {{"ch": "{ch_num}", "content": "本章埋下的伏笔(神秘物品/隐藏身份/可疑话语)", "plan_pay_at": "建议第几章回收(如:30)"}}\n'
-        "  ]\n"
+        "  ],\n"
+        '  "hero_state": {{"age": "本章主角年龄(如有变更,数字字符串,无变化填空字符串)", "realm": "本章末主角修为/境界(如:金丹中期)", "location": "本章末主角所在地", "faction": "本章末主角所属势力/门派", "mood": "本章末主角心境(如:愤怒/决绝/平静)"}}\n'
         "}}\n\n"
         "提取规则:\n"
         "1. characters 只列【本章新出场】或【信息有更新】的角色,普通配角可省略\n"
@@ -291,7 +292,8 @@ PROMPTS = {
         "4. events 只列影响主线的重大事件,日常对话不算\n"
         "5. foreshadows 必须是【作者埋下、读者会记住的悬念】,不是普通铺垫\n"
         "6. plan_pay_at 根据伏笔重要性给出合理回收章节,无法判断填 '0'\n"
-        "7. 若某类无内容,对应数组留空 [] 即可,不要省略整个字段\n\n"
+        "7. hero_state 5 字段必须全部输出 — 本章无变化的字段填 \"\"(空字符串),不要省略整个字段\n"
+        "8. 若某类无内容,对应数组留空 [] 即可,不要省略整个字段\n\n"
         "已有数据(避免重复提取):\n{existing}\n\n"
         "本章是第 {ch_num} 章,正文:\n{content}"
     ),
@@ -3686,6 +3688,23 @@ class CharacterLibrary(QWidget):
             lambda s: _QS("NovelAI", "UserPrefs").setValue(
                 "auto_extract_6lib", bool(s)))
         btn_row.addWidget(self.chk_auto_extract)
+        
+        # v1.64:B 方案 — AI 抽 6 库时同步主角状态字段
+        self.chk_auto_sync_hero = QCheckBox("🎯 同步主角状态")
+        _cs = _QS("NovelAI", "CreationSettings")
+        self.chk_auto_sync_hero.setChecked(
+            _cs.value("auto_sync_hero_state", True, type=bool))
+        self.chk_auto_sync_hero.setToolTip(
+            "勾选后,AI 抽 6 库时顺便提取本章末主角的 5 个状态字段\n"
+            "  (年龄/修为/位置/势力/心境),自动填到上方表单。\n\n"
+            "✗ 取消:AI 不抽,你可以点上方『🔄 从时间线同步』按钮手动同步\n"
+            "       (本地正则,不烧 token)\n\n"
+            "提示:用户切到『✏️ 手动改』模式时,自动同步会被跳过,保护手填值。")
+        self.chk_auto_sync_hero.setStyleSheet("QCheckBox { color:#666; }")
+        self.chk_auto_sync_hero.stateChanged.connect(
+            lambda s: _QS("NovelAI", "CreationSettings").setValue(
+                "auto_sync_hero_state", bool(s)))
+        btn_row.addWidget(self.chk_auto_sync_hero)
 
         btn_row.addStretch()
         
@@ -3818,9 +3837,51 @@ class CharacterLibrary(QWidget):
         lay = QVBoxLayout(w)
         
         # 主角当前状态总览
+        # v1.64:从手填字段改造为派生数据展示
+        #   · 默认只读(防止误以为是待填表单)
+        #   · "🔄 从时间线同步"按钮 — 从 timeline state_change 自动抽取填充
+        #   · "✏️ 解锁手动改" 按钮 — 用户想覆盖时再开
+        #   · 来源 label — 显示数据从哪一章来
         from PyQt5.QtWidgets import QFormLayout
         state_box = QGroupBox("📊 主角当前状态(写章节时自动注入)")
-        sf = QFormLayout(state_box)
+        state_box_lay = QVBoxLayout(state_box)
+        
+        # 顶部:同步按钮行 + 来源 label
+        sync_row = QHBoxLayout()
+        self.btn_sync_hero = QPushButton("🔄 从时间线同步")
+        self.btn_sync_hero.setToolTip(
+            "从下方【重大事件时间线】的『状态变化』列里,\n"
+            "按章节倒序自动抽取 修为/位置/势力/年龄/心境 关键词,\n"
+            "填到 5 个字段里。\n\n"
+            "适合写了若干章后,一键把主角状态推到最新。\n"
+            "(纯本地正则,不调 AI 不烧 token)")
+        self.btn_sync_hero.setStyleSheet(
+            "QPushButton { background:#3498db; color:white; padding:5px 10px; "
+            "border-radius:3px; font-weight:bold; }"
+            "QPushButton:hover { background:#2980b9; }")
+        sync_row.addWidget(self.btn_sync_hero)
+        
+        self.btn_unlock_hero = QPushButton("✏️ 手动改")
+        self.btn_unlock_hero.setCheckable(True)
+        self.btn_unlock_hero.setToolTip(
+            "✓ 切到手动模式:5 个字段变可编辑,你随便填\n"
+            "✗ 切回派生模式:字段重新只读,由同步功能自动填\n\n"
+            "默认只读避免手填值被覆盖;想长期手填就按一下保持手动模式")
+        sync_row.addWidget(self.btn_unlock_hero)
+        sync_row.addStretch()
+        state_box_lay.addLayout(sync_row)
+        
+        # 来源 label
+        self.lbl_hero_source = QLabel("📌 数据来源:未同步(可点🔄按钮自动抽取,或✏️手动填)")
+        self.lbl_hero_source.setStyleSheet(
+            "color: #888; font-size: 11px; padding: 2px 4px;")
+        self.lbl_hero_source.setWordWrap(True)
+        state_box_lay.addWidget(self.lbl_hero_source)
+        
+        # 5 个字段(form 布局)
+        from PyQt5.QtWidgets import QWidget as _QW_state
+        form_holder = _QW_state()
+        sf = QFormLayout(form_holder)
         self.hero_age = QLineEdit("18")
         self.hero_realm = QLineEdit("练气期一层")
         self.hero_location = QLineEdit("青云山·李家村")
@@ -3831,6 +3892,19 @@ class CharacterLibrary(QWidget):
         sf.addRow("当前位置:", self.hero_location)
         sf.addRow("所属势力:", self.hero_faction)
         sf.addRow("近期心境:", self.hero_mood)
+        state_box_lay.addWidget(form_holder)
+        
+        # 收集 5 个 QLineEdit 到一个列表,便于批量设置只读状态
+        self._hero_edits = [self.hero_age, self.hero_realm,
+                            self.hero_location, self.hero_faction,
+                            self.hero_mood]
+        # 默认进入只读模式
+        self._set_hero_readonly(True)
+        
+        # 信号绑定
+        self.btn_sync_hero.clicked.connect(self._sync_hero_from_timeline)
+        self.btn_unlock_hero.toggled.connect(self._on_hero_unlock_toggled)
+        
         lay.addWidget(state_box)
         
         # 重大事件时间线
@@ -4575,6 +4649,254 @@ class CharacterLibrary(QWidget):
             return ""
         
         return "\n\n" + "═" * 30 + "\n📚 角色与世界状态(必须严格遵守):\n" + "═" * 30 + "\n\n" + "\n\n".join(parts)
+    
+    # ── v1.64:主角状态自动同步 ───────────────────────────────
+    
+    def _set_hero_readonly(self, readonly):
+        """切换 5 个 hero_* 字段的只读状态(D 方案 — UI 派生数据展示)"""
+        for ed in getattr(self, "_hero_edits", []):
+            ed.setReadOnly(readonly)
+            if readonly:
+                ed.setStyleSheet(
+                    "QLineEdit { background:#f5f5f5; color:#444; "
+                    "border:1px solid #ccc; padding:3px; }")
+            else:
+                ed.setStyleSheet(
+                    "QLineEdit { background:white; color:#000; "
+                    "border:1px solid #1a4480; padding:3px; }")
+    
+    def _on_hero_unlock_toggled(self, checked):
+        """『✏️ 手动改』按钮 toggled — 切换只读/可编辑"""
+        self._set_hero_readonly(not checked)
+        if checked:
+            self.btn_unlock_hero.setText("🔒 切回只读")
+            self.lbl_hero_source.setText(
+                "✏️ 手动编辑模式 — 你的修改不会被自动同步覆盖,"
+                "切回只读后,下次同步才会再次自动填")
+            self.lbl_hero_source.setStyleSheet(
+                "color: #b4884e; font-weight: bold; font-size: 11px; "
+                "padding: 2px 4px;")
+        else:
+            self.btn_unlock_hero.setText("✏️ 手动改")
+            self.lbl_hero_source.setText(
+                "📌 数据来源:派生模式(可点🔄按钮自动抽取)")
+            self.lbl_hero_source.setStyleSheet(
+                "color: #888; font-size: 11px; padding: 2px 4px;")
+    
+    # 关键词正则(类属性,便于测试访问)
+    # 5 个字段各自的"识别 + 提取"正则
+    # 每条:在 state_change 文本里命中关键词 + 截取关键值
+    _HERO_PATTERNS = {
+        "realm": [
+            # 直接说"晋升 / 突破到 XX"
+            r"(?:晋升|突破|进阶|跃升|提升)(?:到|至)?\s*([^,，。;；\s]{1,20}(?:期|境|层|阶|段|境界))",
+            # "修为达到 XX"
+            r"修为(?:达到|为|提升至?)\s*([^,，。;；\s]{1,20}(?:期|境|层|阶|段))",
+            # 主流修仙体系白名单:筑基/金丹/元婴/化神/合体/大乘/渡劫 + 期/初中后
+            # (避免之前广义 [汉]{1,4}+期|境 匹配"心境"/"环境"等)
+            r"((?:练气|筑基|金丹|元婴|化神|合体|大乘|渡劫|真仙)(?:[初中后晚]?期|境|[一二三四五六七八九十]+层)?)",
+        ],
+        "location": [
+            # "抵达/到达 XX / 进入 XX"
+            r"(?:抵达|到达|进入|来到|前往)\s*([^,，。;；\s]{1,15}(?:山|城|宗|府|地|境|窟|府邸|岛|界|村|镇|国))",
+        ],
+        "faction": [
+            # "加入/拜入 XX 宗/门/派/盟"
+            r"(?:加入|拜入|进入)\s*([^,，。;；\s]{1,15}(?:宗|门|派|盟|会|阁|教|帮|府))",
+        ],
+        "age": [
+            # "年龄 XX 岁" / "XX 岁那年"
+            r"年龄\s*(\d{1,3})\s*岁",
+            r"(\d{1,3})\s*岁",
+        ],
+        "mood": [
+            # "心境 XX / 心情 XX"
+            r"(?:心境|心情|心绪|状态)(?:为|变得|转为|进入)?\s*([\u4e00-\u9fa5]{1,8})",
+        ],
+    }
+    
+    def _extract_hero_from_timeline(self, timeline_rows):
+        """从 timeline rows 抽取主角状态字段。
+        
+        参数:
+          timeline_rows: list[(ch_num_str, event, state_change)]
+                         — 按章节顺序(可乱序,内部会按 ch 降序处理)
+        
+        返回:
+          dict 形如 {"realm": (值, 章节号), "location": (值, 章节号), ...}
+          — 章节号:从哪一章抽到的;命中不到的字段不出现在 dict
+        """
+        import re
+        # 按章节号降序排(取最新)— ch 可能不是数字,容错
+        def _ch_int(row):
+            try:
+                return int(re.search(r"\d+", str(row[0] or "")).group())
+            except Exception:
+                return 0
+        rows_sorted = sorted(timeline_rows, key=_ch_int, reverse=True)
+        
+        result = {}
+        for ch_str, _evt, state_change in rows_sorted:
+            text = str(state_change or "").strip()
+            if not text:
+                continue
+            ch_num = _ch_int((ch_str,))
+            for field, patterns in self._HERO_PATTERNS.items():
+                if field in result:
+                    continue  # 已命中过最新章节,不覆盖
+                for pat in patterns:
+                    m = re.search(pat, text)
+                    if m:
+                        val = m.group(1).strip()
+                        # 净化:去标点
+                        val = val.rstrip("，。;；,.").strip()
+                        if val:
+                            result[field] = (val, ch_num)
+                            break
+        return result
+    
+    def _sync_hero_from_timeline(self):
+        """🔄 从时间线同步 — 按钮 handler。
+        
+        扫描 timeline 表所有 state_change,自动填到 5 个字段。
+        手动模式下提示用户切回只读才能同步(避免覆盖手填值)。
+        """
+        # 手动模式下警告(避免覆盖用户的手填值)
+        if self.btn_unlock_hero.isChecked():
+            from PyQt5.QtWidgets import QMessageBox
+            ret = QMessageBox.question(
+                self, "确认同步",
+                "当前在手动编辑模式,同步会覆盖你已经手填的值。\n是否继续?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                return
+        
+        # 收集 timeline rows
+        rows = []
+        for r in range(self.tbl_timeline.rowCount()):
+            row = []
+            for c in range(3):
+                it = self.tbl_timeline.item(r, c)
+                row.append(it.text() if it else "")
+            rows.append(tuple(row))
+        
+        if not rows:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self, "提示",
+                "时间线为空,无法同步。\n\n"
+                "可以:\n"
+                "  • 手动在下方时间线添加事件 + 状态变化\n"
+                "  • 写完章节后点『6 库提取』让 AI 自动抽取时间线\n"
+                "  • 在创作设置打开『AI 写完每章自动同步主角状态』")
+            return
+        
+        extracted = self._extract_hero_from_timeline(rows)
+        
+        if not extracted:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self, "未匹配",
+                "扫了 {} 条时间线事件,但没识别到任何"
+                "修为/位置/势力/年龄/心境关键词。\n\n"
+                "建议时间线的『状态变化』列写成:\n"
+                "  • 晋升金丹中期\n"
+                "  • 抵达青云山\n"
+                "  • 加入天剑宗\n"
+                "  • 年龄 22 岁\n"
+                "  • 心境 决绝".format(len(rows)))
+            return
+        
+        # 填字段(切只读时不要被 readonly 拦住:先解锁、setText、再恢复)
+        was_readonly = self._hero_edits[0].isReadOnly()
+        if was_readonly:
+            for ed in self._hero_edits:
+                ed.setReadOnly(False)
+        
+        field_map = {
+            "age":      self.hero_age,
+            "realm":    self.hero_realm,
+            "location": self.hero_location,
+            "faction":  self.hero_faction,
+            "mood":     self.hero_mood,
+        }
+        filled_summary = []
+        max_ch = 0
+        for field, (val, ch_num) in extracted.items():
+            edit = field_map.get(field)
+            if edit:
+                edit.setText(val)
+                filled_summary.append(f"{field}={val} (第{ch_num}章)")
+                max_ch = max(max_ch, ch_num)
+        
+        # 恢复只读
+        if was_readonly:
+            for ed in self._hero_edits:
+                ed.setReadOnly(True)
+        
+        # 更新来源 label
+        if max_ch > 0:
+            self.lbl_hero_source.setText(
+                f"📌 数据来源:从时间线同步({len(extracted)}/5 字段命中,"
+                f"最新数据来自第 {max_ch} 章)")
+        else:
+            self.lbl_hero_source.setText(
+                f"📌 数据来源:从时间线同步({len(extracted)}/5 字段命中)")
+        self.lbl_hero_source.setStyleSheet(
+            "color: #1a4480; font-size: 11px; padding: 2px 4px; font-weight:bold;")
+        
+        from PyQt5.QtWidgets import QMessageBox
+        QMessageBox.information(
+            self, "同步完成",
+            f"已从时间线抽取 {len(extracted)}/5 个字段:\n\n"
+            + "\n".join(f"  • {s}" for s in filled_summary)
+            + ("\n\n(未匹配的字段保持原值)"
+               if len(extracted) < 5 else ""))
+    
+    def apply_hero_state_dict(self, hero_state):
+        """B 方案:AI 抽取回的 hero_state dict 直接填入字段。
+        
+        在 MainWindow._on_world_extract_received → _merge_into_charlib 里调用。
+        手动模式下不覆盖(保护用户手填值)。
+        
+        参数 hero_state: dict,字段可包含 age/realm/location/faction/mood
+        
+        返回:int — 实际写入的字段数(0 = 没匹配 / 在手动模式下跳过)
+        """
+        if not hero_state or not isinstance(hero_state, dict):
+            return 0
+        # 手动模式 → 跳过(用户手填值优先)
+        if hasattr(self, "btn_unlock_hero") and self.btn_unlock_hero.isChecked():
+            return 0
+        
+        field_map = {
+            "age":      self.hero_age,
+            "realm":    self.hero_realm,
+            "location": self.hero_location,
+            "faction":  self.hero_faction,
+            "mood":     self.hero_mood,
+        }
+        
+        # 先解锁
+        was_readonly = self._hero_edits[0].isReadOnly() if self._hero_edits else False
+        if was_readonly:
+            for ed in self._hero_edits:
+                ed.setReadOnly(False)
+        
+        n_filled = 0
+        for k, edit in field_map.items():
+            v = hero_state.get(k)
+            if v is None or str(v).strip() == "":
+                continue
+            edit.setText(str(v).strip())
+            n_filled += 1
+        
+        # 恢复只读
+        if was_readonly:
+            for ed in self._hero_edits:
+                ed.setReadOnly(True)
+        
+        return n_filled
     
     # ── 导入/导出 ──────────────────────────────────────────
     def _export_lib(self):
@@ -11303,9 +11625,11 @@ class MainWindow(QMainWindow):
                 return
 
         added = self._merge_into_charlib(data)
+        hero_n = added.get("hero", 0)
         self.tab_generation.log(
             f"✓ 第{ch_num}章 6 库提取完成: 角色+{added['ch']} 关系+{added['rel']} "
-            f"物品+{added['it']} 时间线+{added['ev']} 伏笔+{added['fo']}",
+            f"物品+{added['it']} 时间线+{added['ev']} 伏笔+{added['fo']}"
+            + (f" 主角状态+{hero_n}" if hero_n else ""),
             "success")
         # 触发下一章
         QTimer.singleShot(800, self._run_next_charlib_extract)
@@ -11419,6 +11743,33 @@ class MainWindow(QMainWindow):
                 cl.tbl_fore.setItem(row, col, QTableWidgetItem(v))
             added["fo"] += 1
             ex_fos.add(k)
+        
+        # v1.64:hero_state 字段(B 方案 — AI 写完每章后自动同步主角状态)
+        # 由 QSettings 开关控制,默认开启
+        try:
+            from PyQt5.QtCore import QSettings
+            auto_sync = QSettings("NovelAI", "CreationSettings").value(
+                "auto_sync_hero_state", True, type=bool)
+        except Exception:
+            auto_sync = True
+        
+        if auto_sync:
+            hs = data.get("hero_state") or {}
+            if isinstance(hs, dict) and hs:
+                try:
+                    n = cl.apply_hero_state_dict(hs)
+                    if n > 0:
+                        try:
+                            cl.lbl_hero_source.setText(
+                                f"📌 数据来源:AI 自动同步({n}/5 字段更新)")
+                            cl.lbl_hero_source.setStyleSheet(
+                                "color: #1a4480; font-size: 11px; "
+                                "padding: 2px 4px; font-weight:bold;")
+                        except Exception:
+                            pass
+                        added["hero"] = n
+                except Exception as _e:
+                    print(f"[hero_state] apply 失败: {_e}", flush=True)
 
         return added
 
