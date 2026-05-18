@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.61"
+APP_VERSION = "v1.62"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -8082,7 +8082,10 @@ class MainWindow(QMainWindow):
         left = QWidget()
         left.setMaximumWidth(220); left.setMinimumWidth(180)
         ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(QLabel("章节列表 (按Ctrl多选)"))
+        # v1.61: 动态显示章节总数(导入后用户能立刻看到导入了多少章)
+        self.lbl_chapter_count = QLabel("章节列表 (按 Ctrl 多选)")
+        self.lbl_chapter_count.setStyleSheet("font-weight:bold; padding:2px;")
+        ll.addWidget(self.lbl_chapter_count)
         self.chapter_list = QListWidget()
         self.chapter_list.itemClicked.connect(self._on_chapter_clicked)
         ll.addWidget(self.chapter_list, 1)
@@ -8435,6 +8438,14 @@ class MainWindow(QMainWindow):
             self.chapter_list.addItem(QListWidgetItem(ch["title"]))
         if 0 <= self.current_chapter_index < len(self.chapters):
             self.chapter_list.setCurrentRow(self.current_chapter_index)
+        # v1.61: 同步更新章节计数 label(导入/删除后立刻反馈)
+        n = len(self.chapters)
+        if hasattr(self, "lbl_chapter_count"):
+            if n == 0:
+                self.lbl_chapter_count.setText("章节列表 (空)")
+            else:
+                self.lbl_chapter_count.setText(
+                    f"章节列表 (共 {n} 章 · 按 Ctrl 多选)")
 
     def _on_chapter_clicked(self, item):
         idx = self.chapter_list.row(item)
