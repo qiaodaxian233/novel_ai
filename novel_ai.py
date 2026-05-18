@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.50"
+APP_VERSION = "v1.51"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -8010,6 +8010,10 @@ class MainWindow(QMainWindow):
         a_diag = QAction("🔬 诊断当前 AI 网页 DOM(看选择器命中)", self)
         a_diag.triggered.connect(self.show_dom_diagnostics)
         tm.addAction(a_diag)
+        # v1.50: 老 .json 导入(罕用,从 open_project 主流程剥离)
+        a_import_json = QAction("📦 导入旧 .json 项目(v1.29 及之前)", self)
+        a_import_json.triggered.connect(self._import_legacy_json)
+        tm.addAction(a_import_json)
         a_pick = QAction("🎯 现场拾取选择器(点页面元素自动生成)", self)
         a_pick.triggered.connect(self.start_dom_picker)
         tm.addAction(a_pick)
@@ -12537,6 +12541,53 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "打开失败", f"加载项目失败:\n{e}")
 
+    def _import_legacy_json(self):
+        """v1.50: 导入老 .json 项目(罕用,从工具菜单触发)
+        会自动升级为文件夹格式,原 .json 保留为 .legacy-original.json"""
+        if not PROJECT_IO_AVAILABLE:
+            QMessageBox.warning(self, "缺少模块", "需要 project_io.py")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择旧版 .json 项目文件",
+            str(self.project_dir), "项目 (*.json)")
+        if not path:
+            return
+        try:
+            fmt = project_io.detect_format(path)
+            if fmt != "legacy_json":
+                QMessageBox.warning(
+                    self, "不是旧 .json 格式",
+                    f"这个文件不是旧版项目 .json:\n{path}")
+                return
+            # 自动升级到同名文件夹
+            json_p = Path(path)
+            target = json_p.parent / json_p.stem
+            if target.exists() and target.is_dir():
+                target = json_p.parent / (json_p.stem + "_migrated")
+            ret = QMessageBox.question(
+                self, "升级旧项目?",
+                f"将把旧 .json 升级为文件夹结构:\n  {target}\n\n"
+                f"原 .json 会保留为 .legacy-original.json 作为备份。",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if ret != QMessageBox.Yes:
+                return
+            project_io.migrate_legacy_json(json_p, target)
+            d = project_io.load_project_folder(target)
+            self.current_project_file = str(target.resolve())
+            self._load_payload_into_ui(d)
+            self._push_to_recent(self.current_project_file)
+            try:
+                from PyQt5.QtCore import QSettings
+                QSettings("NovelAI", "UI").setValue(
+                    "last_project_path", self.current_project_file)
+            except Exception:
+                pass
+            QMessageBox.information(
+                self, "✓ 升级完成",
+                f"已升级到文件夹结构:\n{target}")
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", f"加载旧 .json 失败:\n{e}")
+
     def _push_to_recent(self, path):
         """把项目路径推到最近项目列表头部(去重,保留最近 10 个)"""
         if not path:
@@ -13711,27 +13762,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("新项目已创建", 3000)
 
     def open_project(self):
-        """v1.30:支持文件夹格式 + 旧 .json 自动升级"""
-        # 让用户选 — 优先文件夹,但也接受 .json
-        # 用 QFileDialog.Directory 模式;不够灵活,所以两步:
-        # 1. 弹一个文件对话框,过滤器 = "项目文件夹/(选其目录)" 或 ".json 文件"
-        choice = QMessageBox.question(
-            self, "打开项目",
-            "选择项目类型:\n\n"
-            "• 是 → 打开【项目文件夹】(v1.30 新格式,推荐)\n"
-            "• 否 → 打开【旧 .json 文件】(v1.29 及以前,会自动升级到新格式)",
-            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            QMessageBox.Yes)
-        if choice == QMessageBox.Cancel:
-            return
-        if choice == QMessageBox.Yes:
-            # 选文件夹
-            path = QFileDialog.getExistingDirectory(
-                self, "选择项目文件夹", str(self.project_dir))
-        else:
-            # 选 .json
-            path, _ = QFileDialog.getOpenFileName(
-                self, "打开旧 .json 项目", str(self.project_dir), "项目 (*.json)")
+        """v1.50:直接弹文件夹选择器,去掉 v1.30 迁移期的二选一弹窗
+        老 .json 入口移到 工具菜单 → '导入旧 .json 项目'(罕用)"""
+        path = QFileDialog.getExistingDirectory(
+            self, "选择项目文件夹", str(self.project_dir))
         if not path:
             return
 
