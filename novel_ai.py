@@ -42,6 +42,11 @@ try:
     BOOK_SPLITTER_AVAILABLE = True
 except ImportError:
     BOOK_SPLITTER_AVAILABLE = False
+try:
+    import import_continuation
+    IMPORT_CONTINUATION_AVAILABLE = True
+except ImportError:
+    IMPORT_CONTINUATION_AVAILABLE = False
 import time
 import random
 import socket
@@ -7979,6 +7984,7 @@ class MainWindow(QMainWindow):
         for txt, slot, sc in [
             ("新建项目", self.new_project, ""),
             ("打开项目", self.open_project, "Ctrl+O"),
+            ("📥 导入外部小说续写...", self.import_continuation, ""),
             ("🕐 最近项目", "__RECENT__", ""),   # v1.41 标记,下面动态填充
             ("保存项目", self.save_project, "Ctrl+S"),
             ("🕓 恢复历史版本(最近 10 次)", self.restore_project_backup, ""),
@@ -8723,6 +8729,15 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(
                     self, "诊断处理失败",
                     f"AI 返回处理失败:{_e}\n\n原始返回前 500 字:\n{content[:500]}")
+            return
+        elif target == "import_extract":
+            # v1.51: 导入续写 — AI 提取设定返回
+            try:
+                self._on_import_extract_received(content, meta)
+            except Exception as _e:
+                import traceback
+                print(f"[import_extract] dispatch 失败: {_e}\n{traceback.format_exc()}",
+                      flush=True)
             return
         elif target == "book_chapter_analysis":
             # v1.38: 拆书章节 AI 分析返回
@@ -12540,6 +12555,257 @@ class MainWindow(QMainWindow):
                 self.tab_home.refresh(self)
         except Exception as e:
             QMessageBox.critical(self, "打开失败", f"加载项目失败:\n{e}")
+
+    def import_continuation(self):
+        """v1.51: 导入外部小说续写 — 三阶段:
+        阶段 1: 选 .txt 文件 → book_splitter 拆章
+        阶段 2: ImportContinuationDialog 让用户选模式(当前项目/新项目 + AI 提取?)
+        阶段 3: 执行导入(可能含 AI 调用)
+        """
+        if not BOOK_SPLITTER_AVAILABLE or not IMPORT_CONTINUATION_AVAILABLE:
+            QMessageBox.warning(
+                self, "模块缺失",
+                "需要 book_splitter.py 和 import_continuation.py")
+            return
+
+        # 阶段 1: 选文件 + 拆章
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择外部小说 TXT 文件",
+            str(self.project_dir), "TXT 文件 (*.txt);;所有文件 (*.*)")
+        if not path:
+            return
+        try:
+            book_meta = book_splitter.load_and_split(path)
+        except Exception as e:
+            QMessageBox.critical(self, "拆章失败", f"无法读取或拆分文件:\n{e}")
+            return
+        if book_meta.chapter_count == 0:
+            QMessageBox.warning(
+                self, "未识别章节",
+                "没有从这个文件识别出任何章节(可能没有「第 X 章」标记)。\n\n"
+                "如果想整本当一章导入,先重命名为「第一章 xxx.txt」之类。")
+            return
+
+        # 阶段 2: 配置对话框
+        dlg = import_continuation.ImportContinuationDialog(
+            parent=self, book_meta=book_meta)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        cfg = dlg.get_result()
+
+        # 阶段 3: 浏览器在线检查(只在勾选 AI 时)
+        if cfg["ai_extract"]:
+            if not self.worker.is_ready():
+                ret = QMessageBox.question(
+                    self, "浏览器未启动",
+                    "你勾了「让 AI 提取设定」,但浏览器还没启动。\n\n"
+                    "  是 → 现在去启动浏览器(请先到「生成控制」点 🚀 启动)\n"
+                    "  否 → 跳过 AI 提取,只导入章节(以后手动补设定)",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                if ret == QMessageBox.Yes:
+                    # 跳到生成控制 Tab,让用户去启动浏览器
+                    try:
+                        for i in range(self.tabs.count()):
+                            if "生成控制" in self.tabs.tabText(i):
+                                self.tabs.setCurrentIndex(i)
+                                break
+                    except Exception:
+                        pass
+                    return   # 用户启动后重新走这个流程
+                else:
+                    cfg["ai_extract"] = False   # 用户选跳过
+
+        # 执行导入
+        self._do_import_continuation(book_meta, cfg, source_path=path)
+
+    def _do_import_continuation(self, book_meta, cfg, source_path=""):
+        """阶段 3: 执行实际的导入操作"""
+        from pathlib import Path as _P
+
+        # ─ 模式 B: 新建项目 ─
+        if cfg["mode"] == "new":
+            # 如果有未保存内容,提示
+            if self.chapters and not QMessageBox.question(
+                self, "新建项目?",
+                "当前已有打开的项目。新建会切换到新项目(当前会先自动保存)。\n\n"
+                "继续吗?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            ) == QMessageBox.Yes:
+                return
+            # 先保存当前
+            try:
+                if self.current_project_file:
+                    self.save_project()
+            except Exception:
+                pass
+            # 清空状态
+            self.chapters = []
+            self.current_chapter_index = -1
+            self.current_project_file = None
+            # 设书名
+            self.tab_settings.title_input.setText(book_meta.title)
+
+        # ─ 把章节追加到 self.chapters ─
+        start_idx = len(self.chapters)
+        for ch in book_meta.chapters:
+            chapter_dict = {
+                "title": ch.title_clean or ch.title,
+                "content": ch.content,
+            }
+            if cfg["mark_imported"] and source_path:
+                chapter_dict["imported_from"] = _P(source_path).name
+                chapter_dict["is_imported"] = True
+            self.chapters.append(chapter_dict)
+
+        # 刷新章节列表 + UI
+        self._refresh_chapter_list()
+        try:
+            if hasattr(self, "tab_home"):
+                self.tab_home.refresh(self)
+        except Exception:
+            pass
+
+        self.tab_generation.log(
+            f"✓ 已导入 {book_meta.chapter_count} 章到{'当前项目' if cfg['mode']=='current' else '新项目'},"
+            f"现在共 {len(self.chapters)} 章",
+            "success")
+
+        # ─ 走 AI 提取(如果勾了) ─
+        if cfg["ai_extract"]:
+            extract_n = min(cfg["extract_n"], book_meta.chapter_count)
+            chapters_to_extract = book_meta.chapters[:extract_n]
+            prompt = import_continuation.build_extract_prompt(
+                chapters_to_extract, max_chars=30000)
+            self.tab_generation.log(
+                f"▶ 让 AI 读前 {extract_n} 章提取设定,约 1-2 分钟...", "info")
+            self._send_to_ai(
+                prompt, f"导入续写-AI 提取设定(前{extract_n}章)",
+                target="import_extract",
+                import_source=_P(source_path).name if source_path else "",
+            )
+        else:
+            # 不提取 → 直接弹完成提示
+            QMessageBox.information(
+                self, "✓ 导入完成",
+                f"已导入 {book_meta.chapter_count} 章。\n\n"
+                "下一步:\n"
+                "  · 到「创作设置」/「故事大纲」补一下世界观/主角设定\n"
+                "  · 到「章节编辑器」检查导入的章节内容\n"
+                "  · 点「📖 生成下一章」开始续写")
+            # 保存
+            try:
+                self.save_project()
+            except Exception:
+                pass
+
+    def _on_import_extract_received(self, content, meta):
+        """v1.51: AI 提取设定返回 → 填充对应字段"""
+        data = import_continuation.parse_extract_response(content)
+        if not data:
+            QMessageBox.warning(
+                self, "AI 提取失败",
+                f"AI 返回的 JSON 无法解析。\n\n"
+                f"原始返回(前 500 字):\n{(content or '')[:500]}\n\n"
+                f"章节已正常导入,但设定字段需要手动补。")
+            try:
+                self.save_project()
+            except Exception:
+                pass
+            return
+
+        # ── 填充字段 ──
+        filled = []
+
+        # 1. 角色 → 6 库
+        chars = data.get("characters", []) or []
+        if chars and hasattr(self, "tab_charlib") and hasattr(self.tab_charlib, "tbl_chars"):
+            try:
+                tbl = self.tab_charlib.tbl_chars
+                for ch in chars[:20]:   # 最多 20 个,避免炸表
+                    row = tbl.rowCount()
+                    tbl.insertRow(row)
+                    cells = [
+                        ch.get("name", ""), ch.get("role", ""),
+                        ch.get("appearance", ""), ch.get("personality", ""),
+                        "",   # 标志/口头禅
+                        ch.get("ability", ""), ch.get("state", ""), "",
+                    ]
+                    from PyQt5.QtWidgets import QTableWidgetItem
+                    for c, v in enumerate(cells):
+                        tbl.setItem(row, c, QTableWidgetItem(str(v)))
+                filled.append(f"角色 {len(chars)} 个 → 6 库")
+            except Exception as e:
+                print(f"[import] 填充角色失败: {e}", flush=True)
+
+        # 2. 世界观 → 故事大纲
+        wv = data.get("worldview", "").strip()
+        if wv:
+            try:
+                current = self.tab_outline.worldview_edit.toPlainText().strip()
+                # 追加,不覆盖
+                merged = (current + "\n\n──── AI 提取 ────\n" + wv) if current else wv
+                self.tab_outline.worldview_edit.setPlainText(merged)
+                filled.append(f"世界观({len(wv)} 字)→ 故事大纲")
+            except Exception as e:
+                print(f"[import] 填充世界观失败: {e}", flush=True)
+
+        # 3. 故事种子 → 大纲 seed
+        seed = data.get("seed", "").strip()
+        if seed:
+            try:
+                current = self.tab_outline.seed_edit.toPlainText().strip()
+                merged = (current + "\n\n──── AI 提取 ────\n" + seed) if current else seed
+                self.tab_outline.seed_edit.setPlainText(merged)
+                filled.append(f"故事种子 → 大纲")
+            except Exception as e:
+                print(f"[import] 填充种子失败: {e}", flush=True)
+
+        # 4. 伏笔 → Canon
+        forshadows = data.get("foreshadows", []) or []
+        if forshadows and hasattr(self, "tab_canon"):
+            try:
+                for f in forshadows[:20]:
+                    # 简化:把伏笔追加到 canon 的"演化项"
+                    ch_num = f.get("chapter", "?")
+                    content_text = f.get("content", "").strip()
+                    if content_text:
+                        item_text = f"[第{ch_num}章 伏笔] {content_text}"
+                        # 复用 tab_canon 的接口(如果有的话)
+                        if hasattr(self.tab_canon, "add_evolving"):
+                            self.tab_canon.add_evolving(item_text)
+                filled.append(f"伏笔 {len(forshadows)} 条 → Canon")
+            except Exception as e:
+                print(f"[import] 填充伏笔失败: {e}", flush=True)
+
+        # 5. 后续大纲建议 → 章节大纲(追加在末尾)
+        next_outline = data.get("outline_next", []) or []
+        if next_outline:
+            try:
+                current = self.tab_outline.chapter_outline_edit.toPlainText().strip()
+                addition = "\n\n──── AI 续写建议(导入时生成) ────\n"
+                addition += "\n".join(f"  · {x}" for x in next_outline)
+                merged = (current + addition) if current else addition.lstrip("\n")
+                self.tab_outline.chapter_outline_edit.setPlainText(merged)
+                filled.append(f"后续大纲 {len(next_outline)} 条 → 章节大纲")
+            except Exception as e:
+                print(f"[import] 填充后续大纲失败: {e}", flush=True)
+
+        # 总结
+        summary = "\n".join(f"  ✓ {x}" for x in filled) if filled else "  (无可用字段)"
+        QMessageBox.information(
+            self, "✓ 导入完成 + AI 提取完成",
+            f"已成功导入章节并提取设定:\n\n{summary}\n\n"
+            f"建议:\n"
+            f"  · 到「🎭 角色与世界」检查角色档案是否准确\n"
+            f"  · 到「故事大纲」检查世界观/种子\n"
+            f"  · 到「Canon 设定」检查伏笔\n"
+            f"  · 这些都是 AI 提取的,可能不完美,请按需调整")
+
+        # 保存
+        try:
+            self.save_project()
+        except Exception as e:
+            self.tab_generation.log(f"⚠ 保存失败:{e}", "warn")
 
     def _import_legacy_json(self):
         """v1.50: 导入老 .json 项目(罕用,从工具菜单触发)
