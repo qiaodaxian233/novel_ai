@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.74"
+APP_VERSION = "v1.75"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -5358,6 +5358,13 @@ class CanonGuard(QWidget):
         crow.addWidget(self.chk_inject); crow.addWidget(self.chk_audit)
         crow.addWidget(self.chk_extract); crow.addStretch()
         layout.addLayout(crow)
+        
+        # v1.75:自动抽取可见性 label — 每次自动抽取后更新,让用户不用翻日志就能确认
+        self.lbl_last_extract = QLabel("📌 自动抽取状态:尚未运行(写完下一章后查看)")
+        self.lbl_last_extract.setStyleSheet(
+            "color: #666; font-size: 11px; padding: 4px 6px; "
+            "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
+        layout.addWidget(self.lbl_last_extract)
 
         # Canon 文本编辑区(简单方便,JSON 内部表达,UI 是结构化文本)
         # 行格式:[L|E][severity:H/M/L] key = value (chN)
@@ -12870,16 +12877,42 @@ class MainWindow(QMainWindow):
         prompt = PROMPTS["canon_extract"].format(
             existing=existing or "(空)",
             ch_num=ch_num, content=content[:6000])
+        # v1.75:发送诊断 — 让用户看到 prompt 真的发出去了
+        print(f"[canon-extract v1.75] ch={ch_num} 发送 prompt({len(prompt)} 字)",
+              flush=True)
+        self.tab_generation.log(
+            f"🛡️ Canon 抽取-第{ch_num}章 → AI({len(prompt)} 字 prompt)", "info")
         self._send_to_ai(prompt, f"Canon抽取-第{ch_num}章",
                          target="canon_extract", ch_num=ch_num)
 
     def _on_canon_extract_response(self, content, meta):
         """处理 Canon 抽取 AI 回复
         既写 Canon Tab(单值条目),也按前缀分发到 🎭 角色与世界 6 库"""
+        from datetime import datetime as _dt
         ch_num = meta.get("ch_num", 0)
+        # v1.75:全链路诊断 — 打印 AI 原始回复前 200 字,方便排障
+        print(f"[canon-extract v1.75] ch={ch_num} AI 原始回复({len(content or '')} 字) "
+              f"前 200: {(content or '')[:200]!r}", flush=True)
         try:
             text = self._extract_json_blob(content)
             arr = json.loads(text)
+            # v1.75:防 list-vs-dict — prompt 要求是数组,但 AI 可能输出对象
+            if not isinstance(arr, list):
+                self.tab_generation.log(
+                    f"⚠️ Canon 抽取:AI 返回的不是 JSON 数组(是 {type(arr).__name__}),"
+                    f"已忽略。原始前 200 字:{(content or '')[:200]}",
+                    "warn")
+                # 更新 label 让用户看见
+                try:
+                    self.tab_canon.lbl_last_extract.setText(
+                        f"⚠ 最近抽取:第{ch_num}章 AI 输出格式错误(非数组) "
+                        f"@ {_dt.now().strftime('%H:%M:%S')}")
+                    self.tab_canon.lbl_last_extract.setStyleSheet(
+                        "color: #c00; font-size: 11px; padding: 4px 6px; "
+                        "background: #fff5f5; border: 1px solid #fcc; border-radius: 3px;")
+                except Exception:
+                    pass
+                return
             count = 0
             # 用于按前缀分发到 charlib 的结构化 dict
             charlib_data = {
@@ -12894,6 +12927,9 @@ class MainWindow(QMainWindow):
             items_acc = {}      # name -> {owner, source, status, ability}
 
             for it in arr:
+                # v1.75:防 list-of-string — AI 可能塞字符串而不是 dict 到数组里
+                if not isinstance(it, dict):
+                    continue
                 key = it.get("key", "").strip()
                 value = it.get("value", "").strip()
                 mode = it.get("mode", "evolving")
@@ -12989,8 +13025,41 @@ class MainWindow(QMainWindow):
                 f"🎭 角色与世界 角色+{added.get('ch',0)} 关系+{added.get('rel',0)} "
                 f"物品+{added.get('it',0)} 时间线+{added.get('ev',0)} 伏笔+{added.get('fo',0)}",
                 "success")
+            
+            # v1.75:永远更新 Canon Tab 顶部 label,无论 count 是否为 0
+            try:
+                ts = _dt.now().strftime('%H:%M:%S')
+                if count > 0:
+                    self.tab_canon.lbl_last_extract.setText(
+                        f"✅ 最近抽取:第{ch_num}章 +{count} 条新设定 @ {ts}")
+                    self.tab_canon.lbl_last_extract.setStyleSheet(
+                        "color: #1a4480; font-size: 11px; padding: 4px 6px; "
+                        "background: #e8f0fe; border: 1px solid #88aaff; "
+                        "border-radius: 3px; font-weight:bold;")
+                else:
+                    # AI 跑了但没抽到东西 — 不是错误,但要让用户看见
+                    self.tab_canon.lbl_last_extract.setText(
+                        f"📭 最近抽取:第{ch_num}章 AI 返回空数组(本章无新设定) @ {ts}")
+                    self.tab_canon.lbl_last_extract.setStyleSheet(
+                        "color: #666; font-size: 11px; padding: 4px 6px; "
+                        "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
+            except Exception:
+                pass
         except Exception as e:
-            self.tab_generation.log(f"Canon 抽取解析失败:{e}", "warn")
+            self.tab_generation.log(f"⚠️ Canon 抽取解析失败:{e}", "warn")
+            # v1.75:解析失败也要让用户看见,不能静默
+            try:
+                ts = _dt.now().strftime('%H:%M:%S')
+                self.tab_canon.lbl_last_extract.setText(
+                    f"⚠ 最近抽取:第{ch_num}章 JSON 解析失败({e}) @ {ts}")
+                self.tab_canon.lbl_last_extract.setStyleSheet(
+                    "color: #c00; font-size: 11px; padding: 4px 6px; "
+                    "background: #fff5f5; border: 1px solid #fcc; border-radius: 3px;")
+            except Exception:
+                pass
+            # 诊断打印 AI 原始回复前 500 字
+            print(f"[canon-extract v1.75] ch={ch_num} 解析失败,原始 500 字: "
+                  f"{(content or '')[:500]!r}", flush=True)
 
     @staticmethod
     def _extract_json_blob(text):
@@ -13450,6 +13519,18 @@ class MainWindow(QMainWindow):
         """章节通过后的链式处理:Canon 抽取 → 6库抽取 → 章末技能 → 摘要 → 下一章"""
         if ch_num <= 0:
             return
+        # v1.75:全链路诊断 — 让用户能看出'Canon 自动抽取没生效'到底卡在哪
+        canon_on = bool(self.tab_canon.chk_extract.isChecked())
+        charlib_on = bool(hasattr(self.tab_charlib, "chk_auto_extract") and
+                          self.tab_charlib.chk_auto_extract.isChecked())
+        print(f"[post-chain v1.75] ch={ch_num} canon_extract={canon_on} "
+              f"charlib_extract={charlib_on}", flush=True)
+        self.tab_generation.log(
+            f"📋 第 {ch_num} 章后置链准备启动 "
+            f"(Canon抽取={'✓' if canon_on else '✗'} / "
+            f"6库抽取={'✓' if charlib_on else '✗'})",
+            "info")
+        
         pipeline = []
         if self.tab_canon.chk_extract.isChecked():
             pipeline.append(("canon_extract", ch_num))
