@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.60"
+APP_VERSION = "v1.61"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -14018,22 +14018,21 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(
             self, "新建项目", "新建将清空所有数据,继续?"
         ) != QMessageBox.Yes: return
-        self.chapters.clear()
-        self.current_chapter_index = -1
+        # v1.60 BUG-050: 用统一的 _reset_ui_state 清空(代替之前不完整的清单)
+        self._reset_ui_state()
         self.current_project_file = None
-        self.tab_editor.load_chapter("", "")
-        for w in [
-            self.tab_settings.title_input, self.tab_settings.inspiration_edit,
-            self.tab_outline.special_edit, self.tab_outline.intro_edit,
-            self.tab_outline.seed_edit, self.tab_outline.worldview_edit,
-            self.tab_outline.lo_edit, self.tab_outline.structure_edit,
-            self.tab_outline.chapter_outline_edit,
-            # 对话记忆
-            self.tab_memory.chars_edit, self.tab_memory.summaries_edit,
-            self.tab_memory.long_term_edit, self.tab_memory.preview_edit,
-        ]:
-            (w.clear() if hasattr(w, 'clear') else w.setPlainText(""))
-        self._refresh_chapter_list()
+        # 清 QSettings 的 last_project_path,下次启动不会回到老项目
+        try:
+            from PyQt5.QtCore import QSettings
+            QSettings("NovelAI", "UI").setValue("last_project_path", "")
+        except Exception:
+            pass
+        # 刷新项目主页(显示空状态)
+        try:
+            if hasattr(self, "tab_home"):
+                self.tab_home.refresh(self)
+        except Exception:
+            pass
         self.statusBar().showMessage("新项目已创建", 3000)
 
     def open_project(self):
@@ -14121,9 +14120,136 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"打开失败:{e}")
 
+    def _reset_ui_state(self):
+        """v1.60 BUG-050: 切项目/新建项目前显式清空所有 UI 状态
+        各 tab 的 load 方法多有 'if 空则不动' 的早返回逻辑,
+        所以必须在这里直接清,不能依赖 load_from_dict({})。
+        """
+        # 1. 章节列表 + 编辑器
+        self.chapters = []
+        self.current_chapter_index = -1
+        try:
+            self.tab_editor.load_chapter("", "")
+        except Exception:
+            pass
+
+        # 2. 创作设置 — title + inspiration + 所有高级选项
+        try:
+            self.tab_settings.title_input.clear()
+            self.tab_settings.inspiration_edit.clear()
+            # 重置高级选项到默认值(题材/平台/章节数等)
+            # 用 _apply_advanced 传空 dict 触发默认值,但要确保 _apply_advanced 处理空 dict
+            self._apply_advanced({})
+        except Exception as _e:
+            print(f"[_reset] settings 清空异常: {_e}", flush=True)
+
+        # 3. 大纲 — 6 个文本框 + intro + special
+        try:
+            for w in (
+                self.tab_outline.seed_edit,
+                self.tab_outline.worldview_edit,
+                self.tab_outline.lo_edit,
+                self.tab_outline.structure_edit,
+                self.tab_outline.chapter_outline_edit,
+                self.tab_outline.intro_edit,
+                self.tab_outline.special_edit,
+            ):
+                w.clear()
+        except Exception as _e:
+            print(f"[_reset] outline 清空异常: {_e}", flush=True)
+
+        # 4. 对话记忆 — 3 个文本框 + 4 个开关
+        try:
+            self.tab_memory.chars_edit.clear()
+            self.tab_memory.summaries_edit.clear()
+            self.tab_memory.long_term_edit.clear()
+            if hasattr(self.tab_memory, "preview_edit"):
+                self.tab_memory.preview_edit.clear()
+            self.tab_memory.auto_summarize.setChecked(True)
+            self.tab_memory.auto_inject.setChecked(True)
+            self.tab_memory.recent_n.setValue(3)
+            self.tab_memory.summary_len.setValue(80)
+        except Exception as _e:
+            print(f"[_reset] memory 清空异常: {_e}", flush=True)
+
+        # 5. Canon — 文本 + 3 个开关
+        try:
+            if hasattr(self.tab_canon, "canon_edit"):
+                self.tab_canon.canon_edit.clear()
+            if hasattr(self.tab_canon, "chk_inject"):
+                self.tab_canon.chk_inject.setChecked(True)
+                self.tab_canon.chk_audit.setChecked(True)
+                self.tab_canon.chk_extract.setChecked(True)
+        except Exception as _e:
+            print(f"[_reset] canon 清空异常: {_e}", flush=True)
+
+        # 6. 6 库(charlib) — 5 个表格全部清空
+        try:
+            if hasattr(self, "tab_charlib"):
+                for tbl_attr in (
+                    "tbl_chars", "tbl_rel", "tbl_timeline",
+                    "tbl_items", "tbl_foreshadows",
+                ):
+                    tbl = getattr(self.tab_charlib, tbl_attr, None)
+                    if tbl is not None:
+                        tbl.setRowCount(0)
+        except Exception as _e:
+            print(f"[_reset] charlib 清空异常: {_e}", flush=True)
+
+        # 7. 技能库
+        try:
+            if hasattr(self.tab_skills, "skills"):
+                self.tab_skills.skills = []
+            if hasattr(self.tab_skills, "_refresh_list"):
+                self.tab_skills._refresh_list()
+        except Exception as _e:
+            print(f"[_reset] skills 清空异常: {_e}", flush=True)
+
+        # 8. 章节质量校验配置(critique) — 5 个 checkbox 默认值
+        try:
+            self.tab_generation.chk_crit_words.setChecked(True)
+            self.tab_generation.chk_crit_hook.setChecked(True)
+            self.tab_generation.chk_crit_canon.setChecked(True)
+            self.tab_generation.chk_crit_rhythm.setChecked(False)
+            self.tab_generation.chk_crit_char.setChecked(False)
+        except Exception as _e:
+            print(f"[_reset] critique 清空异常: {_e}", flush=True)
+
+        # 9. 对话槽(conv_slots)
+        try:
+            cs = self.tab_generation.conv_switcher
+            cs.slots = []
+            cs._active_slot_idx = -1
+            if hasattr(cs, "active_label"):
+                cs.active_label.setText("(未绑定槽)")
+            if hasattr(cs, "_refresh_list"):
+                cs._refresh_list()
+        except Exception as _e:
+            print(f"[_reset] conv_slots 清空异常: {_e}", flush=True)
+
+        # 10. 寿元/伏笔
+        try:
+            if LIFESPAN_LOOPS_AVAILABLE and self.tab_lifespan is not None:
+                if hasattr(self.tab_lifespan, "load_from_dict"):
+                    # lifespan 的 load 应该能处理空 dict
+                    self.tab_lifespan.load_from_dict({})
+        except Exception as _e:
+            print(f"[_reset] lifespan 清空异常: {_e}", flush=True)
+
+        # 11. 刷新章节列表 UI
+        try:
+            self._refresh_chapter_list()
+        except Exception:
+            pass
+
+        print("[_reset] ✓ UI 状态已全部清空", flush=True)
+
     def _load_payload_into_ui(self, d: dict):
         """v1.30:从 payload(可能来自文件夹或旧 .json)还原所有 UI 状态
-        抽出来作为统一接口,文件夹路径和老路径都能复用"""
+        抽出来作为统一接口,文件夹路径和老路径都能复用
+        v1.60 BUG-050: 加载前先清空 UI 防止旧项目状态残留
+        """
+        self._reset_ui_state()
         self.chapters = d.get("chapters", [])
         self.tab_settings.title_input.setText(d.get("title", ""))
         self.tab_settings.inspiration_edit.setPlainText(d.get("inspiration", ""))
