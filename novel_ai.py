@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.77"
+APP_VERSION = "v1.78"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -294,6 +294,15 @@ PROMPTS = {
         '  "promises": [\n'
         '    {{"ch": "{ch_num}", "kind": "承诺/威胁/约定", "from": "发起者(谁说的)", "to": "对象(对谁说的)", "content": "具体内容(20-40字)", "deadline": "建议第几章兑现/到期(如:20)"}}\n'
         "  ],\n"
+        '  "arcs": [\n'
+        '    {{"name": "弧线名(如:主线-灭门复仇 / 支线-情感线 / 金手指线)", "progress": 35, "phase": "开端/铺垫/转折/高潮/收束"}}\n'
+        "  ],\n"
+        '  "relations_value": [\n'
+        '    {{"a": "角色A(通常是主角)", "b": "角色B", "value": -80, "ch": "{ch_num}"}}\n'
+        "  ],\n"
+        '  "goals": [\n'
+        '    {{"name": "目标名(如:找到杀父仇人/突破金丹)", "priority": "主线/支线/紧急", "status": "进行中/已达成/已放弃", "set_ch": "{ch_num}"}}\n'
+        "  ],\n"
         '  "hero_state": {{"age": "本章末主角年龄(数字字符串)", "realm": "本章末主角修为/境界(如:金丹中期)", "location": "本章末主角所在地", "faction": "本章末主角所属势力/门派", "mood": "本章末主角心境(如:愤怒/决绝/平静)"}}\n'
         "}}\n\n"
         "提取规则:\n"
@@ -320,7 +329,13 @@ PROMPTS = {
         "    - 中期承诺(几月/一年内)→ 当前章+20 到 +60\n"
         "    - 长期誓言(三年后/几年后)→ 当前章+80 到 +200\n"
         "    - 实在判断不出 → 默认填 当前章+15 的保守值。0 是无效值。\n"
-        "11. 若某类列表无内容,对应数组留空 [] 即可,不要省略整个字段\n\n"
+        "11. 若某类列表无内容,对应数组留空 [] 即可,不要省略整个字段\n"
+        "12. arcs(故事弧线)只列【本章末状态有变化】或【本章新引入】的弧线,progress 是 0-100 的整数,反映该弧线总体推进百分比;phase 必须从【开端/铺垫/转折/高潮/收束】五选一:\n"
+        "    - 开端 progress≈5-20  / 铺垫 progress≈20-50  / 转折 progress≈50-70\n"
+        "    - 高潮 progress≈70-90 / 收束 progress≈90-100\n"
+        "    - 主线/支线/金手指线等多条平行,弧线名要简短可识别(8 字内)\n"
+        "13. relations_value(关系值矩阵)只列【本章首次出现】或【本章发生明确变化】的角色对值:value 是 -100~+100 整数,-100=死敌/-80=有仇/-50=不和/0=陌生/+50=朋友/+80=至交/+100=至亲;ch 填本章号;同一对 a→b 只列一次,以最新值为准\n"
+        "14. goals(目标列表)只列【本章新立的】或【本章状态变化】的目标:priority 三选一(主线/支线/紧急),status 三选一(进行中/已达成/已放弃),set_ch 填首次立目标的章号(本章新立则填 {ch_num})\n\n"
         "已有数据(避免重复提取):\n{existing}\n\n"
         "本章是第 {ch_num} 章,正文:\n{content}"
     ),
@@ -557,6 +572,49 @@ PROMPTS = {
         "5. 长期誓言(三年后/几年后)→ 埋设章+80 到 +200\n"
         "6. 实在判断不出 → 默认填 {current_ch} + 15 的保守值\n"
         "7. 绝对不要返回 0,id 必须从清单取,只输出 JSON"
+    ),
+
+    # ─────────────────────────────────────────────────────────────
+    # v1.78 BUG-058:剧情进度管理(弧线 % / 关系值矩阵 / 目标列表)
+    # ─────────────────────────────────────────────────────────────
+
+    "arc_advance_check": (
+        "请评估【本章正文】对下列【当前故事弧线】各推进了多少 progress。\n"
+        "推进 = 本章实质让该弧线的情节向前发展;只是顺带提及、与该弧线无关的内容 → 不算推进。\n\n"
+        "【当前弧线清单】(每条带 id、当前 progress、当前 phase):\n{arc_list}\n\n"
+        "【本章正文】(第 {ch_num} 章):\n{content}\n\n"
+        "请严格输出 JSON 数组,只列【本章对其有实质推进】的弧线:\n"
+        '[{{"id": 0, "delta": 5, "reason": "本章具体怎么推进(30字内)"}}]\n\n'
+        "硬规则:\n"
+        "1. 没有任何弧线被推进 → 返回 []\n"
+        "2. id 必须从上面清单里取(整数),不要凭空造\n"
+        "3. delta 是【本章为该弧线增加的 progress 百分比】,正整数 1-15:\n"
+        "   - 单章铺垫/小事件 → +1~3\n"
+        "   - 关键转折/重要进展 → +5~10\n"
+        "   - 大高潮章/决战章 → +10~15\n"
+        "4. progress 上限 100,合并时系统会自动封顶\n"
+        "5. 只看本章正文,不要联系未发生章节臆测\n"
+        "6. 只输出 JSON,不加任何说明文字"
+    ),
+
+    "relation_change_check": (
+        "请评估【本章正文】中哪些角色之间的【关系值】发生了明确变化。\n"
+        "变化 = 角色之间发生了影响关系的事件(救命/翻脸/告白/背叛/和解等),仅出场未互动 → 不算变化。\n\n"
+        "【当前已记录的关系值】(每条带 id、角色对、当前值):\n{relation_list}\n\n"
+        "【本章正文】(第 {ch_num} 章):\n{content}\n\n"
+        "请严格输出 JSON 数组,只列【本章关系值有实质变化】的角色对:\n"
+        '[{{"id": 0, "a": "林远", "b": "王屠户", "delta": -30, "reason": "本章发生了什么(30字内)"}}]\n\n'
+        "硬规则:\n"
+        "1. 没有任何变化 → 返回 []\n"
+        "2. 若 id ≥ 0:命中已有关系对,delta 加到当前值上,a/b 可省略\n"
+        "3. 若 id = -1:本章新建立的关系对,必须填 a/b,delta 作为起始值\n"
+        "4. delta 是【本章为该关系值的变动量】,整数 -50~+50:\n"
+        "   - 小变化(普通交流/小恩小怨) → ±5~15\n"
+        "   - 中变化(被救/被坑/合作/翻脸) → ±20~40\n"
+        "   - 大变化(救命/灭门/告白成功/背叛揭穿) → ±50\n"
+        "5. 关系值上限 +100 下限 -100,合并时系统自动封顶\n"
+        "6. 只看本章正文,不要联系未发生章节臆测\n"
+        "7. 只输出 JSON,不加任何说明文字"
     ),
 }
 
@@ -3751,6 +3809,7 @@ class CharacterLibrary(QWidget):
         self._build_power_tab()
         self._build_foreshadows_tab()
         self._build_promises_tab()   # v1.77 新增:⚡ 威胁承诺
+        self._build_plot_progress_tab()   # v1.78 新增:📈 剧情进度(弧线/关系值/目标)
         self._build_hooks_tab()      # 新增:钩子编年
         self._build_coolpts_tab()    # 新增:爽点编年
 
@@ -4366,6 +4425,180 @@ class CharacterLibrary(QWidget):
         for r in rows:
             self.tbl_promises.removeRow(r)
 
+    # ── 5c. 剧情进度子页(v1.78 BUG-058)─────────────────────
+    # 3 子表共用一个 sub-tab(嵌套 QTabWidget):
+    #   - tbl_arcs:故事弧线(3 列:弧线名/progress/phase)
+    #   - tbl_rel_values:关系值矩阵(4 列:角色A/角色B/value/最近变化章)
+    #   - tbl_goals:当前目标(4 列:目标名/优先级/状态/设立章)
+    def _build_plot_progress_tab(self):
+        from PyQt5.QtWidgets import (QTableWidget, QTableWidgetItem, QTabWidget,
+                                     QComboBox)
+        w = QWidget()
+        lay = QVBoxLayout(w)
+
+        # 顶部状态 label(同 v1.76/v1.77 五态模式)
+        self.lbl_last_arc_check = QLabel(
+            "📌 自动弧线/关系值评估:尚未运行(写完下一章后查看)"
+        )
+        self.lbl_last_arc_check.setStyleSheet(
+            "color: #555; font-size: 11px; padding: 4px 6px; "
+            "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
+        self.lbl_last_arc_check.setWordWrap(True)
+        lay.addWidget(self.lbl_last_arc_check)
+
+        # 内嵌 3 子选项卡
+        inner_tabs = QTabWidget()
+        lay.addWidget(inner_tabs)
+
+        # ── 子表 1:故事弧线 ──────────────────────────────
+        w_arcs = QWidget()
+        lay_arcs = QVBoxLayout(w_arcs)
+        top_arcs = QHBoxLayout()
+        btn_add_arc = QPushButton("➕ 新增弧线")
+        btn_add_arc.clicked.connect(self._add_arc)
+        btn_del_arc = QPushButton("➖ 删除选中")
+        btn_del_arc.clicked.connect(self._del_arc)
+        top_arcs.addWidget(btn_add_arc); top_arcs.addWidget(btn_del_arc)
+        top_arcs.addStretch()
+        lay_arcs.addLayout(top_arcs)
+
+        self.tbl_arcs = QTableWidget(0, 3)
+        self.tbl_arcs.setHorizontalHeaderLabels([
+            "弧线名", "当前进度(0-100)", "阶段"
+        ])
+        self.tbl_arcs.horizontalHeader().setStretchLastSection(False)
+        self.tbl_arcs.verticalHeader().setVisible(False)
+        self.tbl_arcs.setEditTriggers(
+            QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_arcs.setColumnWidth(0, 200)
+        self.tbl_arcs.setColumnWidth(1, 130)
+        self.tbl_arcs.setColumnWidth(2, 100)
+        lay_arcs.addWidget(self.tbl_arcs)
+
+        tip_arcs = QLabel(
+            "💡 故事弧线(主线/支线/金手指线)的整体推进百分比。\n"
+            "    阶段:开端/铺垫/转折/高潮/收束(5 选 1)。\n"
+            "    每章生成后,AI 自动评估本章推进了哪几条弧线、推进了多少 progress,自动累加(封顶 100)。")
+        tip_arcs.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip_arcs.setWordWrap(True)
+        lay_arcs.addWidget(tip_arcs)
+        inner_tabs.addTab(w_arcs, "📊 故事弧线")
+
+        # ── 子表 2:关系值矩阵 ──────────────────────────
+        w_rels = QWidget()
+        lay_rels = QVBoxLayout(w_rels)
+        top_rels = QHBoxLayout()
+        btn_add_rel = QPushButton("➕ 新增关系值")
+        btn_add_rel.clicked.connect(self._add_rel_value)
+        btn_del_rel = QPushButton("➖ 删除选中")
+        btn_del_rel.clicked.connect(self._del_rel_value)
+        top_rels.addWidget(btn_add_rel); top_rels.addWidget(btn_del_rel)
+        top_rels.addStretch()
+        lay_rels.addLayout(top_rels)
+
+        self.tbl_rel_values = QTableWidget(0, 4)
+        self.tbl_rel_values.setHorizontalHeaderLabels([
+            "角色A", "角色B", "关系值(-100~+100)", "最近变化章"
+        ])
+        self.tbl_rel_values.horizontalHeader().setStretchLastSection(False)
+        self.tbl_rel_values.verticalHeader().setVisible(False)
+        self.tbl_rel_values.setEditTriggers(
+            QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_rel_values.setColumnWidth(0, 120)
+        self.tbl_rel_values.setColumnWidth(1, 120)
+        self.tbl_rel_values.setColumnWidth(2, 140)
+        self.tbl_rel_values.setColumnWidth(3, 100)
+        lay_rels.addWidget(self.tbl_rel_values)
+
+        tip_rels = QLabel(
+            "💡 关系值数字化:-100=死敌 / -80=有仇 / -50=不和 / 0=陌生 / "
+            "+50=朋友 / +80=至交 / +100=至亲。\n"
+            "    AI 每章评估本章互动让哪些关系值变化,自动累加(封顶 ±100)。\n"
+            "    注入 prompt 时,|value|≥50 的会作为『关系热点』提示 AI 写出符合该关系的反应。")
+        tip_rels.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip_rels.setWordWrap(True)
+        lay_rels.addWidget(tip_rels)
+        inner_tabs.addTab(w_rels, "💞 关系值矩阵")
+
+        # ── 子表 3:当前目标 ──────────────────────────
+        w_goals = QWidget()
+        lay_goals = QVBoxLayout(w_goals)
+        top_goals = QHBoxLayout()
+        btn_add_goal = QPushButton("➕ 新增目标")
+        btn_add_goal.clicked.connect(self._add_goal)
+        btn_del_goal = QPushButton("➖ 删除选中")
+        btn_del_goal.clicked.connect(self._del_goal)
+        top_goals.addWidget(btn_add_goal); top_goals.addWidget(btn_del_goal)
+        top_goals.addStretch()
+        lay_goals.addLayout(top_goals)
+
+        self.tbl_goals = QTableWidget(0, 4)
+        self.tbl_goals.setHorizontalHeaderLabels([
+            "目标名", "优先级", "状态", "设立章节"
+        ])
+        self.tbl_goals.horizontalHeader().setStretchLastSection(False)
+        self.tbl_goals.verticalHeader().setVisible(False)
+        self.tbl_goals.setEditTriggers(
+            QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_goals.setColumnWidth(0, 280)
+        self.tbl_goals.setColumnWidth(1, 80)
+        self.tbl_goals.setColumnWidth(2, 90)
+        self.tbl_goals.setColumnWidth(3, 80)
+        lay_goals.addWidget(self.tbl_goals)
+
+        tip_goals = QLabel(
+            "💡 主角当前最关心什么。\n"
+            "    优先级:主线/支线/紧急。状态:进行中/已达成/已放弃。\n"
+            "    注入 prompt 时,只把【进行中】的目标喂给 AI,避免主角行动偏离当前目标。")
+        tip_goals.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip_goals.setWordWrap(True)
+        lay_goals.addWidget(tip_goals)
+        inner_tabs.addTab(w_goals, "🎯 当前目标")
+
+        self.sub_tabs.addTab(w, "📈 剧情进度")
+
+    def _add_arc(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_arcs.rowCount()
+        self.tbl_arcs.insertRow(r)
+        defaults = ["新弧线", "5", "开端"]
+        for c, v in enumerate(defaults):
+            self.tbl_arcs.setItem(r, c, QTableWidgetItem(v))
+
+    def _del_arc(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_arcs.selectedIndexes()),
+                      reverse=True)
+        for r in rows:
+            self.tbl_arcs.removeRow(r)
+
+    def _add_rel_value(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_rel_values.rowCount()
+        self.tbl_rel_values.insertRow(r)
+        defaults = ["主角", "", "0", "1"]
+        for c, v in enumerate(defaults):
+            self.tbl_rel_values.setItem(r, c, QTableWidgetItem(v))
+
+    def _del_rel_value(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_rel_values.selectedIndexes()),
+                      reverse=True)
+        for r in rows:
+            self.tbl_rel_values.removeRow(r)
+
+    def _add_goal(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_goals.rowCount()
+        self.tbl_goals.insertRow(r)
+        defaults = ["新目标", "主线", "进行中", "1"]
+        for c, v in enumerate(defaults):
+            self.tbl_goals.setItem(r, c, QTableWidgetItem(v))
+
+    def _del_goal(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_goals.selectedIndexes()),
+                      reverse=True)
+        for r in rows:
+            self.tbl_goals.removeRow(r)
+
     # ── 6. 钩子编年子页 ────────────────────────────────────
     def _build_hooks_tab(self):
         from PyQt5.QtWidgets import QTableWidget
@@ -4563,6 +4796,9 @@ class CharacterLibrary(QWidget):
             "power_levels": tbl_to_list(self.tbl_power, 4),
             "foreshadows":tbl_to_list(self.tbl_fore, 5),
             "promises":   tbl_to_list(self.tbl_promises, 7),  # v1.77
+            "arcs":          tbl_to_list(self.tbl_arcs, 3),         # v1.78
+            "relations_value": tbl_to_list(self.tbl_rel_values, 4), # v1.78
+            "goals":         tbl_to_list(self.tbl_goals, 4),        # v1.78
             "hooks":      tbl_to_list(self.tbl_hooks, 4),  # 新增
             "cool_pts":   tbl_to_list(self.tbl_cool, 3),   # 新增
             "hero_state": {
@@ -4598,6 +4834,9 @@ class CharacterLibrary(QWidget):
             "power_levels":["realm", "level", "power", "note"],
             "foreshadows": ["ch", "content", "plan_pay_at", "paid", "pay_ch"],
             "promises":    ["ch", "kind", "from", "to", "content", "deadline", "fulfilled"],
+            "arcs":            ["name", "progress", "phase"],
+            "relations_value": ["a", "b", "value", "ch"],
+            "goals":           ["name", "priority", "status", "set_ch"],
             "hooks":       ["ch", "hook", "type", "resolved"],
             "cool_pts":    ["ch", "scene", "score"],
         }
@@ -4639,6 +4878,9 @@ class CharacterLibrary(QWidget):
         list_to_tbl(self.tbl_power,     normalize(data.get("power_levels", []), "power_levels"), 4)
         list_to_tbl(self.tbl_fore,      normalize(data.get("foreshadows", []), "foreshadows"), 5)
         list_to_tbl(self.tbl_promises,  normalize(data.get("promises", []), "promises"), 7)  # v1.77
+        list_to_tbl(self.tbl_arcs,       normalize(data.get("arcs", []), "arcs"), 3)              # v1.78
+        list_to_tbl(self.tbl_rel_values, normalize(data.get("relations_value", []), "relations_value"), 4)  # v1.78
+        list_to_tbl(self.tbl_goals,      normalize(data.get("goals", []), "goals"), 4)            # v1.78
         list_to_tbl(self.tbl_hooks,     normalize(data.get("hooks", []), "hooks"), 4)
         list_to_tbl(self.tbl_cool,      normalize(data.get("cool_pts", []), "cool_pts"), 3)
         
@@ -4659,7 +4901,8 @@ class CharacterLibrary(QWidget):
         v1.74:加 power_levels(战力体系)合并。
         """
         from PyQt5.QtWidgets import QTableWidgetItem
-        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "pr": 0}
+        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "pr": 0,
+                 "arc": 0, "rv": 0, "gl": 0}  # v1.78: 弧线/关系值/目标
         if not data:
             return added
         
@@ -4678,6 +4921,9 @@ class CharacterLibrary(QWidget):
                 "foreshadows": ["ch", "content", "plan_pay_at", "paid", "pay_ch"],
                 "power_levels":["realm", "level", "power", "note"],
                 "promises":    ["ch", "kind", "from", "to", "content", "deadline", "fulfilled"],
+                "arcs":            ["name", "progress", "phase"],            # v1.78
+                "relations_value": ["a", "b", "value", "ch"],                # v1.78
+                "goals":           ["name", "priority", "status", "set_ch"], # v1.78
             }
             keys = DICT_KEY_MAPS_LOCAL.get(schema_key, [])
             out = []
@@ -4840,7 +5086,100 @@ class CharacterLibrary(QWidget):
                 self.tbl_promises.setItem(row, col, QTableWidgetItem(str(v)))
             added["pr"] = added.get("pr", 0) + 1
             ex_prs.add(k)
-        
+
+        # v1.78:故事弧线 arcs(去重 key=name;有重复时 progress 取较大值)
+        if hasattr(self, "tbl_arcs"):
+            ex_arcs = {}  # name -> row idx
+            for r in range(self.tbl_arcs.rowCount()):
+                nm = self.tbl_arcs.item(r, 0).text() if self.tbl_arcs.item(r, 0) else ""
+                if nm:
+                    ex_arcs[nm] = r
+            for arc in _as_dict_list(data.get("arcs"), "arcs"):
+                nm = str(arc.get("name", "")).strip()
+                if not nm:
+                    continue
+                try:
+                    new_prog = max(0, min(100, int(arc.get("progress", 0) or 0)))
+                except (TypeError, ValueError):
+                    new_prog = 0
+                phase = str(arc.get("phase", "开端")).strip() or "开端"
+                if nm in ex_arcs:
+                    # 取较大 progress;phase 用新值(更新到位)
+                    r = ex_arcs[nm]
+                    try:
+                        old_prog = int(self.tbl_arcs.item(r, 1).text()
+                                       if self.tbl_arcs.item(r, 1) else "0")
+                    except (TypeError, ValueError):
+                        old_prog = 0
+                    if new_prog > old_prog:
+                        self.tbl_arcs.setItem(
+                            r, 1, QTableWidgetItem(str(new_prog)))
+                    self.tbl_arcs.setItem(r, 2, QTableWidgetItem(phase))
+                    continue
+                row = self.tbl_arcs.rowCount()
+                self.tbl_arcs.insertRow(row)
+                for col, v in enumerate([nm, str(new_prog), phase]):
+                    self.tbl_arcs.setItem(row, col, QTableWidgetItem(v))
+                added["arc"] = added.get("arc", 0) + 1
+                ex_arcs[nm] = row
+
+        # v1.78:关系值矩阵 relations_value(去重 key=a|b;有重复时 value 用新值 + 更新 ch)
+        if hasattr(self, "tbl_rel_values"):
+            ex_rvs = {}  # "a|b" -> row idx
+            for r in range(self.tbl_rel_values.rowCount()):
+                a = self.tbl_rel_values.item(r, 0).text() if self.tbl_rel_values.item(r, 0) else ""
+                b = self.tbl_rel_values.item(r, 1).text() if self.tbl_rel_values.item(r, 1) else ""
+                if a and b:
+                    ex_rvs[f"{a}|{b}"] = r
+            for rv in _as_dict_list(data.get("relations_value"), "relations_value"):
+                a = str(rv.get("a", "")).strip()
+                b = str(rv.get("b", "")).strip()
+                if not (a and b):
+                    continue
+                try:
+                    val = max(-100, min(100, int(rv.get("value", 0) or 0)))
+                except (TypeError, ValueError):
+                    val = 0
+                ch = str(rv.get("ch", "1")).strip() or "1"
+                k = f"{a}|{b}"
+                if k in ex_rvs:
+                    r = ex_rvs[k]
+                    self.tbl_rel_values.setItem(r, 2, QTableWidgetItem(str(val)))
+                    self.tbl_rel_values.setItem(r, 3, QTableWidgetItem(ch))
+                    continue
+                row = self.tbl_rel_values.rowCount()
+                self.tbl_rel_values.insertRow(row)
+                for col, v in enumerate([a, b, str(val), ch]):
+                    self.tbl_rel_values.setItem(row, col, QTableWidgetItem(v))
+                added["rv"] = added.get("rv", 0) + 1
+                ex_rvs[k] = row
+
+        # v1.78:当前目标 goals(去重 key=name;status 用新值,priority 仅在新建时填)
+        if hasattr(self, "tbl_goals"):
+            ex_gls = {}
+            for r in range(self.tbl_goals.rowCount()):
+                nm = self.tbl_goals.item(r, 0).text() if self.tbl_goals.item(r, 0) else ""
+                if nm:
+                    ex_gls[nm] = r
+            for gl in _as_dict_list(data.get("goals"), "goals"):
+                nm = str(gl.get("name", "")).strip()
+                if not nm:
+                    continue
+                priority = str(gl.get("priority", "主线")).strip() or "主线"
+                status = str(gl.get("status", "进行中")).strip() or "进行中"
+                set_ch = str(gl.get("set_ch", "1")).strip() or "1"
+                if nm in ex_gls:
+                    # 已存在 → 只更新状态(进行中→已达成/已放弃)
+                    r = ex_gls[nm]
+                    self.tbl_goals.setItem(r, 2, QTableWidgetItem(status))
+                    continue
+                row = self.tbl_goals.rowCount()
+                self.tbl_goals.insertRow(row)
+                for col, v in enumerate([nm, priority, status, set_ch]):
+                    self.tbl_goals.setItem(row, col, QTableWidgetItem(v))
+                added["gl"] = added.get("gl", 0) + 1
+                ex_gls[nm] = row
+
         return added
     
     # ── 注入到提示词 ───────────────────────────────────────
@@ -5028,7 +5367,87 @@ class CharacterLibrary(QWidget):
                     "处理方式:写到涉及的人物时,要让承诺被兑现 / 威胁被执行(或化解) / 约定被赴约(或违约)。\n"
                     "    禁止用『以后再算』『改日再说』敷衍。违背 = 失信,必须有读者可见的结果。")
                 parts.append("\n".join(strict_lines))
-        
+
+        # 5c. 剧情进度(v1.78 BUG-058)— 3 段:弧线进度 / 关系热点 / 当前目标
+        # 弧线进度 — 总是注入,给 AI "已写多少 / 还能写多少" 的宏观感
+        if hasattr(self, "tbl_arcs"):
+            arc_lines = []
+            for r in range(self.tbl_arcs.rowCount()):
+                nm = self.tbl_arcs.item(r, 0).text() if self.tbl_arcs.item(r, 0) else ""
+                pg = self.tbl_arcs.item(r, 1).text() if self.tbl_arcs.item(r, 1) else "0"
+                ph = self.tbl_arcs.item(r, 2).text() if self.tbl_arcs.item(r, 2) else "开端"
+                if not nm:
+                    continue
+                try:
+                    pg_int = max(0, min(100, int(pg)))
+                except (TypeError, ValueError):
+                    pg_int = 0
+                arc_lines.append(f"  • {nm}: {pg_int}% [{ph}]")
+            if arc_lines:
+                parts.append(
+                    "【当前弧线进度】(参考宏观节奏,主线<50% 不收束,>90% 准备高潮)\n"
+                    + "\n".join(arc_lines))
+
+        # 关系值热点 — 只注入 |value| ≥ 50 的前 8 条,按绝对值降序
+        if hasattr(self, "tbl_rel_values"):
+            hot = []
+            for r in range(self.tbl_rel_values.rowCount()):
+                a = self.tbl_rel_values.item(r, 0).text() if self.tbl_rel_values.item(r, 0) else ""
+                b = self.tbl_rel_values.item(r, 1).text() if self.tbl_rel_values.item(r, 1) else ""
+                v = self.tbl_rel_values.item(r, 2).text() if self.tbl_rel_values.item(r, 2) else "0"
+                if not (a and b):
+                    continue
+                try:
+                    val = int(v)
+                except (TypeError, ValueError):
+                    continue
+                if abs(val) < 50:
+                    continue
+                # mentioned_names 筛选(若提供)— 二者至少一个出现在本章
+                if mentioned_names:
+                    if not (a in mentioned_names or b in mentioned_names):
+                        continue
+                hot.append((abs(val), val, a, b))
+            hot.sort(key=lambda x: -x[0])
+            if hot:
+                lines = []
+                for _av, v, a, b in hot[:8]:
+                    if v <= -80:
+                        tone = "死敌/血仇"
+                    elif v <= -50:
+                        tone = "敌对/有仇"
+                    elif v >= 80:
+                        tone = "至交/挚爱"
+                    elif v >= 50:
+                        tone = "朋友/亲近"
+                    else:
+                        tone = "中性"
+                    lines.append(f"  • {a} → {b}: {v:+d} [{tone}]")
+                parts.append(
+                    "【当前关系热点(写到对应角色时,情绪反应须符合该关系值)】\n"
+                    + "\n".join(lines))
+
+        # 当前目标 — 只注入【进行中】的目标
+        if hasattr(self, "tbl_goals"):
+            ongoing = []
+            for r in range(self.tbl_goals.rowCount()):
+                nm = self.tbl_goals.item(r, 0).text() if self.tbl_goals.item(r, 0) else ""
+                pr = self.tbl_goals.item(r, 1).text() if self.tbl_goals.item(r, 1) else "主线"
+                st = self.tbl_goals.item(r, 2).text() if self.tbl_goals.item(r, 2) else "进行中"
+                sc = self.tbl_goals.item(r, 3).text() if self.tbl_goals.item(r, 3) else "1"
+                if not nm or st != "进行中":
+                    continue
+                ongoing.append((pr, nm, sc))
+            if ongoing:
+                # 紧急 → 主线 → 支线 排序
+                _ord = {"紧急": 0, "主线": 1, "支线": 2}
+                ongoing.sort(key=lambda x: _ord.get(x[0], 9))
+                lines = [f"  • [{pr}] {nm}(第{sc}章立)"
+                         for pr, nm, sc in ongoing[:10]]
+                parts.append(
+                    "【主角当前目标(进行中)— 主角行动应朝这些目标推进,避免偏离】\n"
+                    + "\n".join(lines))
+
         # 6. 战力等级体系(防止跨级混乱)
         powers = []
         for r in range(self.tbl_power.rowCount()):
@@ -10206,6 +10625,16 @@ class MainWindow(QMainWindow):
         elif target == "promise_reeval":
             # v1.77 BUG-057:deadline=0 批量重评估(按钮触发)
             self._on_promise_reeval_response(content, meta)
+        elif target == "arc_advance_check":
+            # v1.78 BUG-058:章末弧线推进自动评估
+            self._on_arc_advance_check_response(content, meta)
+            if getattr(self, "_post_chapter_pipeline", None):
+                QTimer.singleShot(500, self._run_next_post_chapter_step)
+        elif target == "relation_change_check":
+            # v1.78 BUG-058:章末关系值变化自动评估
+            self._on_relation_change_check_response(content, meta)
+            if getattr(self, "_post_chapter_pipeline", None):
+                QTimer.singleShot(500, self._run_next_post_chapter_step)
         elif target == "critique_rhythm":
             ch_num = meta.get("ch_num", 0)
             self._on_critique_score_response(content, "rhythm", ch_num)
@@ -12049,10 +12478,12 @@ class MainWindow(QMainWindow):
         # v1.02:检测"AI 返回了合法 JSON 但全部数组全空" — 也算抓取串/AI 没识别
         # v1.74:加上 power_levels(战力体系)一起算
         # v1.77:加上 promises(威胁承诺)一起算
+        # v1.78:加上 arcs / relations_value / goals(剧情进度)一起算
         all_empty = not any(
             (data.get(k) or []) for k in
             ("characters", "relations", "items", "events", "foreshadows",
-             "power_levels", "promises")
+             "power_levels", "promises",
+             "arcs", "relations_value", "goals")
         )
         if all_empty:
             retry_n = getattr(self, "_world_extract_retry", {}).get(ch_num, 0)
@@ -12073,11 +12504,17 @@ class MainWindow(QMainWindow):
         hero_n = added.get("hero", 0)
         pw_n = added.get("pw", 0)
         pr_n = added.get("pr", 0)
+        arc_n = added.get("arc", 0)   # v1.78
+        rv_n = added.get("rv", 0)     # v1.78
+        gl_n = added.get("gl", 0)     # v1.78
         self.tab_generation.log(
             f"✓ 第{ch_num}章 6 库提取完成: 角色+{added['ch']} 关系+{added['rel']} "
             f"物品+{added['it']} 时间线+{added['ev']} 伏笔+{added['fo']}"
             + (f" 战力+{pw_n}" if pw_n else "")
             + (f" 承诺+{pr_n}" if pr_n else "")
+            + (f" 弧线+{arc_n}" if arc_n else "")
+            + (f" 关系值+{rv_n}" if rv_n else "")
+            + (f" 目标+{gl_n}" if gl_n else "")
             + (f" 主角状态+{hero_n}" if hero_n else ""),
             "success")
         # 触发下一章
@@ -12087,7 +12524,8 @@ class MainWindow(QMainWindow):
         """把提取的数据合并进 charlib UI 表格(去重)"""
         from PyQt5.QtWidgets import QTableWidgetItem
         cl = self.tab_charlib
-        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "pr": 0, "hero": 0}
+        added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "pr": 0,
+                 "arc": 0, "rv": 0, "gl": 0, "hero": 0}  # v1.78: arc/rv/gl
 
         def existing_names(tbl, col=0):
             return set((tbl.item(r, col).text() if tbl.item(r, col) else "")
@@ -12245,7 +12683,103 @@ class MainWindow(QMainWindow):
                     cl.tbl_promises.setItem(row, col, QTableWidgetItem(str(v)))
                 added["pr"] = added.get("pr", 0) + 1
                 ex_prs.add(k)
-        
+
+        # v1.78:故事弧线 arcs(去重 key=name;progress 取较大值,phase 用新值)
+        if hasattr(cl, "tbl_arcs"):
+            ex_arcs = {}  # name -> row idx
+            for r in range(cl.tbl_arcs.rowCount()):
+                nm = cl.tbl_arcs.item(r, 0).text() if cl.tbl_arcs.item(r, 0) else ""
+                if nm:
+                    ex_arcs[nm] = r
+            for arc in (data.get("arcs") or []):
+                if not isinstance(arc, dict):
+                    continue
+                nm = str(arc.get("name", "")).strip()
+                if not nm:
+                    continue
+                try:
+                    new_prog = max(0, min(100, int(arc.get("progress", 0) or 0)))
+                except (TypeError, ValueError):
+                    new_prog = 0
+                phase = str(arc.get("phase", "开端")).strip() or "开端"
+                if nm in ex_arcs:
+                    r = ex_arcs[nm]
+                    try:
+                        old_prog = int(cl.tbl_arcs.item(r, 1).text()
+                                       if cl.tbl_arcs.item(r, 1) else "0")
+                    except (TypeError, ValueError):
+                        old_prog = 0
+                    if new_prog > old_prog:
+                        cl.tbl_arcs.setItem(r, 1, QTableWidgetItem(str(new_prog)))
+                    cl.tbl_arcs.setItem(r, 2, QTableWidgetItem(phase))
+                    continue
+                row = cl.tbl_arcs.rowCount()
+                cl.tbl_arcs.insertRow(row)
+                for col, v in enumerate([nm, str(new_prog), phase]):
+                    cl.tbl_arcs.setItem(row, col, QTableWidgetItem(v))
+                added["arc"] = added.get("arc", 0) + 1
+                ex_arcs[nm] = row
+
+        # v1.78:关系值矩阵 relations_value(去重 key=a|b;value 用新值)
+        if hasattr(cl, "tbl_rel_values"):
+            ex_rvs = {}
+            for r in range(cl.tbl_rel_values.rowCount()):
+                a = cl.tbl_rel_values.item(r, 0).text() if cl.tbl_rel_values.item(r, 0) else ""
+                b = cl.tbl_rel_values.item(r, 1).text() if cl.tbl_rel_values.item(r, 1) else ""
+                if a and b:
+                    ex_rvs[f"{a}|{b}"] = r
+            for rv in (data.get("relations_value") or []):
+                if not isinstance(rv, dict):
+                    continue
+                a = str(rv.get("a", "")).strip()
+                b = str(rv.get("b", "")).strip()
+                if not (a and b):
+                    continue
+                try:
+                    val = max(-100, min(100, int(rv.get("value", 0) or 0)))
+                except (TypeError, ValueError):
+                    val = 0
+                ch = str(rv.get("ch", "1")).strip() or "1"
+                k = f"{a}|{b}"
+                if k in ex_rvs:
+                    r = ex_rvs[k]
+                    cl.tbl_rel_values.setItem(r, 2, QTableWidgetItem(str(val)))
+                    cl.tbl_rel_values.setItem(r, 3, QTableWidgetItem(ch))
+                    continue
+                row = cl.tbl_rel_values.rowCount()
+                cl.tbl_rel_values.insertRow(row)
+                for col, v in enumerate([a, b, str(val), ch]):
+                    cl.tbl_rel_values.setItem(row, col, QTableWidgetItem(v))
+                added["rv"] = added.get("rv", 0) + 1
+                ex_rvs[k] = row
+
+        # v1.78:当前目标 goals(去重 key=name;status 用新值)
+        if hasattr(cl, "tbl_goals"):
+            ex_gls = {}
+            for r in range(cl.tbl_goals.rowCount()):
+                nm = cl.tbl_goals.item(r, 0).text() if cl.tbl_goals.item(r, 0) else ""
+                if nm:
+                    ex_gls[nm] = r
+            for gl in (data.get("goals") or []):
+                if not isinstance(gl, dict):
+                    continue
+                nm = str(gl.get("name", "")).strip()
+                if not nm:
+                    continue
+                priority = str(gl.get("priority", "主线")).strip() or "主线"
+                status = str(gl.get("status", "进行中")).strip() or "进行中"
+                set_ch = str(gl.get("set_ch", "1")).strip() or "1"
+                if nm in ex_gls:
+                    r = ex_gls[nm]
+                    cl.tbl_goals.setItem(r, 2, QTableWidgetItem(status))
+                    continue
+                row = cl.tbl_goals.rowCount()
+                cl.tbl_goals.insertRow(row)
+                for col, v in enumerate([nm, priority, status, set_ch]):
+                    cl.tbl_goals.setItem(row, col, QTableWidgetItem(v))
+                added["gl"] = added.get("gl", 0) + 1
+                ex_gls[nm] = row
+
         # v1.64+v1.74:hero_state 字段(B 方案 — AI 写完每章后自动同步主角状态)
         # 由 QSettings 开关控制,默认开启
         # v1.74:prompt 已改成快照模式(每次都输出完整状态),根因修复;
@@ -14299,6 +14833,255 @@ class MainWindow(QMainWindow):
                 self, "AI 重评估失败",
                 f"JSON 解析失败:{e}\n原始前 300 字:\n{(content or '')[:300]}")
 
+    # ──────────────────────────────────────────────────────────
+    # v1.78 BUG-058:剧情进度自动更新(弧线推进 / 关系值变化)
+    # ─────────────────────────────────────────────────────────
+    # 与 v1.77 不同点:不是"标记已兑现"(布尔),而是"加 delta"(数值累积)。
+    # 弧线 progress 封顶 100,关系值封顶 ±100。
+    # 不要"重评估"按钮 — 因为 progress/value 是 0~100/-100~100 的连续值,
+    # 没有"deadline=0 失败"这种二元状态,直接 AI 章末更新即可。
+
+    def _run_arc_advance_check(self, content, ch_num):
+        """章末让 AI 评估本章对哪几条弧线推进了多少 progress"""
+        if not hasattr(self.tab_charlib, "tbl_arcs"):
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        tbl = self.tab_charlib.tbl_arcs
+        arcs = []
+        for r in range(tbl.rowCount()):
+            nm = tbl.item(r, 0).text() if tbl.item(r, 0) else ""
+            pg = tbl.item(r, 1).text() if tbl.item(r, 1) else "0"
+            ph = tbl.item(r, 2).text() if tbl.item(r, 2) else "开端"
+            if not nm:
+                continue
+            try:
+                pg_int = max(0, min(100, int(pg)))
+            except (TypeError, ValueError):
+                pg_int = 0
+            # 已收束(progress=100)的弧线不再让 AI 推进
+            if pg_int >= 100:
+                continue
+            arcs.append({"id": r, "name": nm, "progress": pg_int, "phase": ph})
+        if not arcs:
+            print(f"[arc-check v1.78] ch={ch_num} 无可推进弧线,跳过", flush=True)
+            self.tab_generation.log(
+                f"📈 第{ch_num}章弧线推进检查:无可推进弧线,跳过", "info")
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        al = json.dumps(arcs, ensure_ascii=False)
+        prompt = PROMPTS["arc_advance_check"].format(
+            arc_list=al, ch_num=ch_num, content=content[:6000])
+        print(f"[arc-check v1.78] ch={ch_num} 评估 {len(arcs)} 条弧线, "
+              f"prompt {len(prompt)} 字", flush=True)
+        self.tab_generation.log(
+            f"📈 弧线推进检查-第{ch_num}章 → AI({len(arcs)} 条, "
+            f"{len(prompt)} 字 prompt)", "info")
+        self._send_to_ai(prompt, f"弧线推进检查-第{ch_num}章",
+                         target="arc_advance_check", ch_num=ch_num)
+
+    def _on_arc_advance_check_response(self, content, meta):
+        """AI 回复 → 把 delta 累加到对应 arc 的 progress(封顶 100)"""
+        from datetime import datetime as _dt
+        from PyQt5.QtWidgets import QTableWidgetItem
+        ch_num = meta.get("ch_num", 0)
+        print(f"[arc-check v1.78] ch={ch_num} AI 原始回复({len(content or '')} 字) "
+              f"前 200: {(content or '')[:200]!r}", flush=True)
+        try:
+            text = self._extract_json_blob(content)
+            arr = json.loads(text)
+            if not isinstance(arr, list):
+                self.tab_generation.log(
+                    f"⚠️ 弧线推进检查:AI 返回的不是 JSON 数组(是 {type(arr).__name__}),"
+                    f"已忽略。原始前 200 字:{(content or '')[:200]}", "warn")
+                try:
+                    self.tab_charlib.lbl_last_arc_check.setText(
+                        f"⚠ 最近评估:第{ch_num}章 AI 输出格式错误(非数组) "
+                        f"@ {_dt.now().strftime('%H:%M:%S')}")
+                    self.tab_charlib.lbl_last_arc_check.setStyleSheet(
+                        "color: #c00; font-size: 11px; padding: 4px 6px; "
+                        "background: #fff5f5; border: 1px solid #fcc; border-radius: 3px;")
+                except Exception:
+                    pass
+                return
+            count = 0
+            tbl = self.tab_charlib.tbl_arcs
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                try:
+                    rid = int(it.get("id", -1))
+                    delta = int(it.get("delta", 0))
+                except (TypeError, ValueError):
+                    continue
+                if not (0 <= rid < tbl.rowCount()):
+                    continue
+                # 守:delta 限定 0~15(AI 越界时 clamp)
+                delta = max(0, min(15, delta))
+                if delta == 0:
+                    continue
+                old_item = tbl.item(rid, 1)
+                try:
+                    old = int(old_item.text() if old_item else "0")
+                except (TypeError, ValueError):
+                    old = 0
+                new_prog = max(0, min(100, old + delta))
+                tbl.setItem(rid, 1, QTableWidgetItem(str(new_prog)))
+                # 自动推进 phase(可选,基于 progress 区间)
+                try:
+                    if new_prog >= 90:
+                        ph = "收束"
+                    elif new_prog >= 70:
+                        ph = "高潮"
+                    elif new_prog >= 50:
+                        ph = "转折"
+                    elif new_prog >= 20:
+                        ph = "铺垫"
+                    else:
+                        ph = "开端"
+                    cur_ph = tbl.item(rid, 2).text() if tbl.item(rid, 2) else ""
+                    # 不回退 phase(已"高潮"不会因下章推进 5% 回到"转折")
+                    _PHASE_RANK = {"开端": 0, "铺垫": 1, "转折": 2, "高潮": 3, "收束": 4}
+                    if _PHASE_RANK.get(ph, 0) > _PHASE_RANK.get(cur_ph, 0):
+                        tbl.setItem(rid, 2, QTableWidgetItem(ph))
+                except Exception:
+                    pass
+                name = tbl.item(rid, 0).text() if tbl.item(rid, 0) else f"#{rid}"
+                reason = str(it.get("reason", ""))[:50]
+                self.tab_generation.log(
+                    f"  ✓ 弧线推进:[{name}] {old}% → {new_prog}% (+{delta}) — {reason}",
+                    "info")
+                count += 1
+            ts = _dt.now().strftime("%H:%M:%S")
+            try:
+                if count > 0:
+                    self.tab_charlib.lbl_last_arc_check.setText(
+                        f"✅ 最近评估:第{ch_num}章 {count} 条弧线推进 @ {ts}")
+                    self.tab_charlib.lbl_last_arc_check.setStyleSheet(
+                        "color: #06f; font-weight: bold; font-size: 11px; "
+                        "padding: 4px 6px; background: #eef6ff; "
+                        "border: 1px solid #aac; border-radius: 3px;")
+                else:
+                    self.tab_charlib.lbl_last_arc_check.setText(
+                        f"📭 最近评估:第{ch_num}章 本章未实质推进任何弧线 @ {ts}")
+                    self.tab_charlib.lbl_last_arc_check.setStyleSheet(
+                        "color: #777; font-size: 11px; padding: 4px 6px; "
+                        "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
+            except Exception:
+                pass
+            self.tab_generation.log(
+                f"✓ 弧线推进检查完成:第{ch_num}章 共 {count} 条弧线推进", "info")
+        except Exception as e:
+            self.tab_generation.log(f"⚠️ 弧线推进检查解析失败:{e}", "warn")
+            try:
+                self.tab_charlib.lbl_last_arc_check.setText(
+                    f"⚠ 最近评估:第{ch_num}章 JSON 解析失败({e}) "
+                    f"@ {_dt.now().strftime('%H:%M:%S')}")
+                self.tab_charlib.lbl_last_arc_check.setStyleSheet(
+                    "color: #c00; font-size: 11px; padding: 4px 6px; "
+                    "background: #fff5f5; border: 1px solid #fcc; border-radius: 3px;")
+            except Exception:
+                pass
+
+    def _run_relation_change_check(self, content, ch_num):
+        """章末让 AI 评估本章哪些关系值发生变化"""
+        if not hasattr(self.tab_charlib, "tbl_rel_values"):
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        tbl = self.tab_charlib.tbl_rel_values
+        rels = []
+        for r in range(tbl.rowCount()):
+            a = tbl.item(r, 0).text() if tbl.item(r, 0) else ""
+            b = tbl.item(r, 1).text() if tbl.item(r, 1) else ""
+            v = tbl.item(r, 2).text() if tbl.item(r, 2) else "0"
+            if not (a and b):
+                continue
+            try:
+                val = int(v)
+            except (TypeError, ValueError):
+                val = 0
+            rels.append({"id": r, "a": a, "b": b, "value": val})
+        # 注意:即使 rels 为空,也要发 AI — 因为本章可能新建关系(id=-1)
+        rl = json.dumps(rels, ensure_ascii=False)
+        prompt = PROMPTS["relation_change_check"].format(
+            relation_list=rl, ch_num=ch_num, content=content[:6000])
+        print(f"[rel-check v1.78] ch={ch_num} 评估 {len(rels)} 条已有关系, "
+              f"prompt {len(prompt)} 字", flush=True)
+        self.tab_generation.log(
+            f"💞 关系值变化检查-第{ch_num}章 → AI({len(rels)} 条已有, "
+            f"{len(prompt)} 字 prompt)", "info")
+        self._send_to_ai(prompt, f"关系值变化检查-第{ch_num}章",
+                         target="relation_change_check", ch_num=ch_num)
+
+    def _on_relation_change_check_response(self, content, meta):
+        """AI 回复 → 把 delta 累加 / 新建关系对(封顶 ±100)"""
+        from datetime import datetime as _dt
+        from PyQt5.QtWidgets import QTableWidgetItem
+        ch_num = meta.get("ch_num", 0)
+        print(f"[rel-check v1.78] ch={ch_num} AI 原始回复({len(content or '')} 字) "
+              f"前 200: {(content or '')[:200]!r}", flush=True)
+        try:
+            text = self._extract_json_blob(content)
+            arr = json.loads(text)
+            if not isinstance(arr, list):
+                self.tab_generation.log(
+                    f"⚠️ 关系值变化检查:AI 返回的不是 JSON 数组(是 {type(arr).__name__}),"
+                    f"已忽略。原始前 200 字:{(content or '')[:200]}", "warn")
+                return
+            count_upd = 0
+            count_new = 0
+            tbl = self.tab_charlib.tbl_rel_values
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                try:
+                    rid = int(it.get("id", -1))
+                    delta = int(it.get("delta", 0))
+                except (TypeError, ValueError):
+                    continue
+                # 守:delta 限定 ±50
+                delta = max(-50, min(50, delta))
+                if delta == 0:
+                    continue
+                if 0 <= rid < tbl.rowCount():
+                    # 已有关系对累加
+                    old_item = tbl.item(rid, 2)
+                    try:
+                        old = int(old_item.text() if old_item else "0")
+                    except (TypeError, ValueError):
+                        old = 0
+                    new_val = max(-100, min(100, old + delta))
+                    tbl.setItem(rid, 2, QTableWidgetItem(str(new_val)))
+                    tbl.setItem(rid, 3, QTableWidgetItem(str(ch_num)))
+                    a = tbl.item(rid, 0).text() if tbl.item(rid, 0) else ""
+                    b = tbl.item(rid, 1).text() if tbl.item(rid, 1) else ""
+                    reason = str(it.get("reason", ""))[:50]
+                    self.tab_generation.log(
+                        f"  ✓ 关系变化:[{a}→{b}] {old:+d} → {new_val:+d} "
+                        f"({delta:+d}) — {reason}", "info")
+                    count_upd += 1
+                elif rid == -1:
+                    # 新关系对
+                    a = str(it.get("a", "")).strip()
+                    b = str(it.get("b", "")).strip()
+                    if not (a and b):
+                        continue
+                    new_val = max(-100, min(100, delta))
+                    row = tbl.rowCount()
+                    tbl.insertRow(row)
+                    for col, v in enumerate([a, b, str(new_val), str(ch_num)]):
+                        tbl.setItem(row, col, QTableWidgetItem(v))
+                    reason = str(it.get("reason", ""))[:50]
+                    self.tab_generation.log(
+                        f"  ✓ 新关系建立:[{a}→{b}] {new_val:+d} — {reason}", "info")
+                    count_new += 1
+            ts = _dt.now().strftime("%H:%M:%S")
+            self.tab_generation.log(
+                f"✓ 关系值变化检查完成:第{ch_num}章 更新 {count_upd} 条 + 新建 {count_new} 条",
+                "info")
+            # 注:关系值变化不单独更新 label — arc_advance 已经更新过了
+        except Exception as e:
+            self.tab_generation.log(f"⚠️ 关系值变化检查解析失败:{e}", "warn")
+
     def _post_chapter_chain(self, ch_num):
         """章节通过后的链式处理:Canon 抽取 → 6库抽取 → 章末技能 → 摘要 → 下一章"""
         if ch_num <= 0:
@@ -14350,6 +15133,41 @@ class MainWindow(QMainWindow):
                     break
             if _has_pending_pr:
                 pipeline.append(("promise_check", ch_num))
+
+        # v1.78 BUG-058:剧情进度更新(弧线推进 + 关系值变化)— 都挂在 promise_check 之后
+        # 顺序:arc_advance_check → relation_change_check(独立 AI 调用,各管各的)
+        # 同 v1.76/v1.77 模式 — 只有库里有"可推进"或"可变化"的对象时才挂
+        if hasattr(self.tab_charlib, "tbl_arcs"):
+            # 弧线检查:只要有未完成弧线(progress < 100)就挂
+            _has_open_arc = False
+            for r in range(self.tab_charlib.tbl_arcs.rowCount()):
+                nm_it = self.tab_charlib.tbl_arcs.item(r, 0)
+                pg_it = self.tab_charlib.tbl_arcs.item(r, 1)
+                if not (nm_it and nm_it.text().strip()):
+                    continue
+                try:
+                    pg = int(pg_it.text()) if pg_it else 0
+                except (TypeError, ValueError):
+                    pg = 0
+                if pg < 100:
+                    _has_open_arc = True
+                    break
+            if _has_open_arc:
+                pipeline.append(("arc_advance_check", ch_num))
+
+        if hasattr(self.tab_charlib, "tbl_rel_values"):
+            # 关系值检查:库里有任何关系对 / 或者哪怕没关系对也允许 AI 新建
+            # 但若全库为空且本章可能没角色互动,跳过 — 这里保守:库里有 ≥1 行就挂,
+            # 没行就先等 world_extract 抽出来再说,本章不查变化
+            _has_rel = False
+            for r in range(self.tab_charlib.tbl_rel_values.rowCount()):
+                a_it = self.tab_charlib.tbl_rel_values.item(r, 0)
+                b_it = self.tab_charlib.tbl_rel_values.item(r, 1)
+                if a_it and b_it and a_it.text().strip() and b_it.text().strip():
+                    _has_rel = True
+                    break
+            if _has_rel:
+                pipeline.append(("relation_change_check", ch_num))
 
         # after_chapter_generation 技能(固定自动触发)
         for s in self.tab_skills.get_after_chapter_skills():
@@ -14418,6 +15236,22 @@ class MainWindow(QMainWindow):
             ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
             if ch and ch.get("content"):
                 self._run_promise_check(ch["content"], ch_num)
+            else:
+                QTimer.singleShot(100, self._run_next_post_chapter_step)
+        elif step[0] == "arc_advance_check":
+            # v1.78 BUG-058:弧线推进自动评估
+            ch_num = step[1]
+            ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
+            if ch and ch.get("content"):
+                self._run_arc_advance_check(ch["content"], ch_num)
+            else:
+                QTimer.singleShot(100, self._run_next_post_chapter_step)
+        elif step[0] == "relation_change_check":
+            # v1.78 BUG-058:关系值变化自动评估
+            ch_num = step[1]
+            ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
+            if ch and ch.get("content"):
+                self._run_relation_change_check(ch["content"], ch_num)
             else:
                 QTimer.singleShot(100, self._run_next_post_chapter_step)
         elif step[0] == "skill_after":
