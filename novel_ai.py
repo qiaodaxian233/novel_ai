@@ -940,6 +940,7 @@ class ProjectHomeTab(QWidget):
     request_new_project = pyqtSignal()
     request_open_recent = pyqtSignal(str)   # path
     request_restore_backup = pyqtSignal()
+    request_import_continuation = pyqtSignal()   # v1.51: 导入续写
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -978,6 +979,7 @@ class ProjectHomeTab(QWidget):
         for txt, color, slot_name in [
             ("📂 打开项目", "#3498db", "open"),
             ("✨ 新建项目", "#27ae60", "new"),
+            ("📥 导入续写(外部小说)", "#9b59b6", "import"),
             ("🕓 恢复历史版本", "#95a5a6", "restore"),
         ]:
             btn = QPushButton(txt)
@@ -991,6 +993,12 @@ class ProjectHomeTab(QWidget):
                 btn.clicked.connect(self.request_open_project.emit)
             elif slot_name == "new":
                 btn.clicked.connect(self.request_new_project.emit)
+            elif slot_name == "import":
+                btn.clicked.connect(self.request_import_continuation.emit)
+                btn.setToolTip(
+                    "导入其他平台/AI 工具写的小说 TXT,自动拆章节,\n"
+                    "可选用 AI 提取角色/世界观/伏笔/续写大纲,\n"
+                    "然后从下一章接着用盘古写。")
             elif slot_name == "restore":
                 btn.clicked.connect(self.request_restore_backup.emit)
             action_lay.addWidget(btn)
@@ -8304,6 +8312,7 @@ class MainWindow(QMainWindow):
         self.tab_home.request_new_project.connect(self.new_project)
         self.tab_home.request_open_recent.connect(self._open_project_by_path)
         self.tab_home.request_restore_backup.connect(self.restore_project_backup)
+        self.tab_home.request_import_continuation.connect(self.import_continuation)
         self._init_tts()
         # v1.21:加 视图 菜单 + Ctrl+Shift+D 快捷键(corner widget click bug 的兜底入口)
         try:
