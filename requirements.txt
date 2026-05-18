@@ -9,3 +9,7 @@ webdriver-manager>=4.0.0
 edge-tts>=6.1  # v1.10: TTS 默认后端 — 免费/在线/中文音质好
 gradio_client>=0.10  # v1.10: 接本地 Index-TTS Gradio 服务(可选,只在用 Index-TTS 时需要)
 pygame>=2.5  # v1.16: TTS 音频播放最稳后端(SDL2,支持任意 WAV 格式)
+
+# v1.70 关系网络图(🎭 角色与世界 → 🕸️ 关系网 sub_tab)
+# 没装的话该 sub_tab 显示"请安装 PyQtWebEngine"提示,程序其他功能不受影响
+PyQtWebEngine>=5.15  # v1.70: QWebEngineView + vis-network 力导向关系图

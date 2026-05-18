@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.64"
+APP_VERSION = "v1.70"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -47,6 +47,11 @@ try:
     IMPORT_CONTINUATION_AVAILABLE = True
 except ImportError:
     IMPORT_CONTINUATION_AVAILABLE = False
+try:
+    import relation_graph
+    RELATION_GRAPH_AVAILABLE = True
+except ImportError:
+    RELATION_GRAPH_AVAILABLE = False
 import time
 import random
 import socket
@@ -3644,12 +3649,16 @@ class CharacterLibrary(QWidget):
         
         self._build_characters_tab()
         self._build_relations_tab()
+        self._build_relation_graph_tab()  # v1.70 新增:🕸️ 关系网(vis-network 可视化)
         self._build_timeline_tab()
         self._build_items_tab()
         self._build_power_tab()
         self._build_foreshadows_tab()
         self._build_hooks_tab()      # 新增:钩子编年
         self._build_coolpts_tab()    # 新增:爽点编年
+
+        # v1.70: 切换到 🕸️ 关系网 子页时自动用最新数据刷新图
+        self.sub_tabs.currentChanged.connect(self._on_sub_tab_changed)
         
         # 底部: 操作按钮
         from PyQt5.QtCore import QSettings as _QS_charlib
@@ -4273,7 +4282,75 @@ class CharacterLibrary(QWidget):
         rows = sorted(set(idx.row() for idx in self.tbl_cool.selectedIndexes()), reverse=True)
         for r in rows:
             self.tbl_cool.removeRow(r)
-    
+
+    # ── 9. 关系网子页(v1.70 新增,vis-network 可视化) ─────
+    def _build_relation_graph_tab(self):
+        """🕸️ 关系网 sub_tab:把 tbl_chars + tbl_relations 用力导向图渲染"""
+        from PyQt5.QtWidgets import QPushButton  # 局部 import 保持风格一致
+        w = QWidget()
+        lay = QVBoxLayout(w)
+
+        # 顶部工具栏:刷新按钮 + 说明
+        top = QHBoxLayout()
+        btn_refresh = QPushButton("🔄 刷新图谱")
+        btn_refresh.setToolTip("从角色库 + 关系图谱表格重新拉数据渲染")
+        btn_refresh.clicked.connect(self._refresh_relation_graph)
+        top.addWidget(btn_refresh)
+        top.addStretch()
+        lbl_hint = QLabel(
+            "提示:切换子页会自动刷新。鼠标拖节点 / 滚轮缩放 / 悬停看详情。")
+        lbl_hint.setStyleSheet("color:#888;font-size:11px;")
+        top.addWidget(lbl_hint)
+        lay.addLayout(top)
+
+        # 主图组件
+        if RELATION_GRAPH_AVAILABLE:
+            self.relation_graph_widget = relation_graph.RelationGraphWidget()
+            lay.addWidget(self.relation_graph_widget)
+        else:
+            # relation_graph.py 缺失(用户删了文件):兜底提示
+            self.relation_graph_widget = None
+            fallback = QLabel(
+                "🕸️ 关系网模块未加载。\n"
+                "请确认项目根目录有 relation_graph.py 文件。")
+            fallback.setStyleSheet(
+                "padding:24px;color:#999;font-size:13px;text-align:center;")
+            fallback.setAlignment(Qt.AlignCenter)
+            lay.addWidget(fallback)
+
+        self.sub_tabs.addTab(w, "🕸️ 关系网")
+
+    def _refresh_relation_graph(self):
+        """把 tbl_chars + tbl_relations 转成行二维数组,送进 RelationGraphWidget"""
+        if not RELATION_GRAPH_AVAILABLE or not getattr(self, "relation_graph_widget", None):
+            return
+
+        def _tbl_to_rows(tbl, ncol):
+            out = []
+            for r in range(tbl.rowCount()):
+                row = []
+                for c in range(ncol):
+                    item = tbl.item(r, c)
+                    row.append(item.text() if item else "")
+                out.append(row)
+            return out
+
+        chars_rows = _tbl_to_rows(self.tbl_chars, 8)
+        relations_rows = _tbl_to_rows(self.tbl_relations, 4)
+        try:
+            self.relation_graph_widget.set_data(chars_rows, relations_rows)
+        except Exception as e:
+            print(f"[relation_graph] set_data failed: {e}")
+
+    def _on_sub_tab_changed(self, idx):
+        """切到 🕸️ 关系网 子页时自动刷新最新数据"""
+        try:
+            tab_text = self.sub_tabs.tabText(idx)
+        except Exception:
+            return
+        if "关系网" in tab_text:
+            self._refresh_relation_graph()
+
     # ── 数据序列化(保存/加载到项目JSON) ────────────────────
     def serialize(self):
         """导出全部数据为 dict, 用于持久化"""
