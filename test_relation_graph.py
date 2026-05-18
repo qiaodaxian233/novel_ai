@@ -270,16 +270,18 @@ def test_html_calls_fit_after_stabilization():
     assert "stabilizationIterationsDone" in html_text
 
 
-def test_widget_has_max_height_constraint():
-    """v1.71 B 修复:RelationGraphWidget 在 _build_relation_graph_tab 里被
-    setMaximumHeight 限制,避免画布把整个 sub_tab 撑爆。"""
+def test_widget_has_min_height_and_stretch():
+    """v1.72 B 修复:画布只设 minHeight 防小屏太挤,**不设 maxHeight**(否则
+    大屏上画布只占上半,下面一片空白)。stretch=1 让画布吃满 sub_tab 剩余空间。"""
     src = _read_src()
-    # 找到 _build_relation_graph_tab 函数体
     m = re.search(
         r"def _build_relation_graph_tab\(self\):(.*?)def \w",
         src, re.DOTALL,
     )
     assert m, "找不到 _build_relation_graph_tab"
     body = m.group(1)
-    assert "setMaximumHeight" in body, "应该给 relation_graph_widget 设 setMaximumHeight"
     assert "setMinimumHeight" in body, "应该给 relation_graph_widget 设 setMinimumHeight"
+    assert "setMaximumHeight" not in body, \
+        "v1.72:不应再设 setMaximumHeight(会导致大屏画布占不满,下方空白)"
+    assert "stretch=1" in body or "stretch = 1" in body, \
+        "addWidget 应该带 stretch=1 撑满剩余空间"

@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.71"
+APP_VERSION = "v1.72"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -4306,11 +4306,10 @@ class CharacterLibrary(QWidget):
         # 主图组件
         if RELATION_GRAPH_AVAILABLE:
             self.relation_graph_widget = relation_graph.RelationGraphWidget()
-            # v1.71 修:画布不爆炸,最大 520 px(用户反馈"太大了")
-            self.relation_graph_widget.setMinimumHeight(280)
-            self.relation_graph_widget.setMaximumHeight(520)
-            lay.addWidget(self.relation_graph_widget)
-            lay.addStretch(1)  # 画布下方留弹性空白,避免底部按钮排离画布太远
+            # v1.72: 让画布自然撑满 sub_tab 剩余空间(v1.71 设的 maxHeight=520
+            # 反而导致下方一片空白,用户反馈"改成满了")。只保留 minHeight 防小屏太挤。
+            self.relation_graph_widget.setMinimumHeight(320)
+            lay.addWidget(self.relation_graph_widget, stretch=1)  # stretch=1 吃满剩余空间
         else:
             # relation_graph.py 缺失(用户删了文件):兜底提示
             self.relation_graph_widget = None
