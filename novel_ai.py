@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.75"
+APP_VERSION = "v1.76"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -299,7 +299,11 @@ PROMPTS = {
         "3. items 只列主角【新获得】的物品,不列敌人物品或一次性消耗品\n"
         "4. events 只列影响主线的重大事件,日常对话不算\n"
         "5. foreshadows 必须是【作者埋下、读者会记住的悬念】,不是普通铺垫\n"
-        "6. plan_pay_at 根据伏笔重要性给出合理回收章节,无法判断填 '0'\n"
+        "6. plan_pay_at 必须给一个【大于本章号】的具体章节号,绝对不要填 0:\n"
+        "   - 小钩子(场景悬念/单线索)→ 当前章+5 到 +10\n"
+        "   - 中线伏笔(角色身世/重要物品/承诺)→ 当前章+20 到 +40\n"
+        "   - 主线伏笔(身世真相/最终对决/最大秘密)→ 当前章+50 到 +150\n"
+        "   - 实在判断不出 → 默认填 当前章+30 的保守值。0 是无效值,会导致系统误报超期。\n"
         "7. power_levels 只列【本章首次出现】或【有新解释】的修炼层级,普通对战不算\n"
         "8. hero_state 5 字段必须全部输出【本章末的当前快照】 — 即使本章未变化也要重复填入上一章的值,不要留空字符串。这是快照而非 diff。\n"
         "9. 若某类列表无内容,对应数组留空 [] 即可,不要省略整个字段\n\n"
@@ -465,6 +469,42 @@ PROMPTS = {
         "【老刀的点评(就是问题清单+改法)】\n{critique}\n\n"
         "【原章节正文(要被你重写的内容)】\n{content}\n\n"
         "现在请直接输出按老刀建议重写后的完整章节正文(只输出小说正文,无任何前后缀,不要任何解释):"
+    ),
+
+    # ─────────────────────────────────────────────────────────────
+    # v1.76 BUG-056:全自动伏笔闭环
+    # ─────────────────────────────────────────────────────────────
+
+    "foreshadow_check": (
+        "请检查【本章正文】是否回收了下列【未回收的伏笔】。\n"
+        "回收 = 正文里明确解决/揭晓/兑现承诺/物归原主/答案出现/秘密被戳破。\n"
+        "顺带提一句、模糊暗示、没有实质进展 → 不算回收。\n\n"
+        "【未回收的伏笔清单】(每条带 id):\n{foreshadow_list}\n\n"
+        "【本章正文】(第 {ch_num} 章):\n{content}\n\n"
+        "请严格输出 JSON 数组,只列【确认本章回收】的伏笔:\n"
+        '[{{"id": 1, "how": "本章具体怎么回收的(30 字内)"}}]\n\n'
+        "硬规则:\n"
+        "1. 没有任何回收 → 返回 []\n"
+        "2. id 必须从上面清单里取(整数),不要凭空造\n"
+        "3. 只看本章正文,不要联系未发生章节臆测\n"
+        "4. 必须【实质回收】,模糊提及不算\n"
+        "5. 只输出 JSON,不加任何说明文字"
+    ),
+
+    "foreshadow_reeval": (
+        "请为下列【需重新评估】的伏笔评估合理的【建议回收章节】。\n"
+        "这些伏笔原 plan_pay_at=0(评估失败),需要你重新判断。\n\n"
+        "【当前已写到】第 {current_ch} 章\n\n"
+        "【待评估的伏笔】(每条带 id 和埋设章号):\n{foreshadow_list}\n\n"
+        "请输出 JSON 数组:\n"
+        '[{{"id": 0, "plan_pay_at": 35, "reason": "中线悬念(20字内理由)"}}]\n\n'
+        "评估规则:\n"
+        "1. plan_pay_at 必须 > {current_ch}(在未来回收,不能填过去的章节)\n"
+        "2. 小钩子(单一场景悬念)→ 埋设章+5 到 +10\n"
+        "3. 中线伏笔(角色身世/重要物品/承诺)→ 埋设章+20 到 +40\n"
+        "4. 主线伏笔(身世真相/最终对决/最大秘密)→ 埋设章+50 到 +150\n"
+        "5. 实在判断不出 → 默认填 {current_ch} + 30 的保守值\n"
+        "6. 绝对不要返回 0,id 必须从清单取,只输出 JSON"
     ),
 }
 
@@ -4138,12 +4178,30 @@ class CharacterLibrary(QWidget):
         w = QWidget()
         lay = QVBoxLayout(w)
         
+        # v1.76 BUG-056:顶部状态 label(自动回收检查/重评估状态可见)
+        from datetime import datetime as _dt
+        self.lbl_last_check = QLabel(
+            "📌 自动回收检查:尚未运行(写完下一章后查看)"
+        )
+        self.lbl_last_check.setStyleSheet(
+            "color: #555; font-size: 11px; padding: 4px 6px; "
+            "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
+        self.lbl_last_check.setWordWrap(True)
+        lay.addWidget(self.lbl_last_check)
+        
         top = QHBoxLayout()
         btn_add = QPushButton("➕ 新增伏笔")
         btn_add.clicked.connect(self._add_fore)
         btn_del = QPushButton("➖ 删除选中")
         btn_del.clicked.connect(self._del_fore)
-        top.addWidget(btn_add); top.addWidget(btn_del); top.addStretch()
+        # v1.76 BUG-056:一键 AI 重评估 plan_pay_at=0 的伏笔
+        self.btn_reeval_fore = QPushButton("🤖 AI 重评估未设回收期")
+        self.btn_reeval_fore.setToolTip(
+            "把所有 plan_pay_at=0 的伏笔交给 AI 评估合理回收章节,自动回填")
+        self.btn_reeval_fore.setStyleSheet(
+            "QPushButton { background:#fff3e0; border:1px solid #ffa726; }")
+        top.addWidget(btn_add); top.addWidget(btn_del)
+        top.addWidget(self.btn_reeval_fore); top.addStretch()
         lay.addLayout(top)
         
         from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
@@ -4161,8 +4219,9 @@ class CharacterLibrary(QWidget):
         lay.addWidget(self.tbl_fore)
         
         tip = QLabel(
-            "💡 已埋伏笔越久未回收越扣读者分。生成新章节时,程序会优先提醒『接近回收期』的伏笔。\n"
-            "    『已回收?』填 是/否,回收后填上回收章节号。")
+            "💡 v1.76 起,程序会在每章生成后自动检查回收(AI 看本章正文回收了哪些伏笔)\n"
+            "    『已回收?』填 是/否,回收后填上回收章节号。\n"
+            "    plan_pay_at=0 的伏笔会触发误报超期,可用上方按钮一键 AI 重评估。")
         tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
@@ -4703,6 +4762,7 @@ class CharacterLibrary(QWidget):
         # 5. 待回收的伏笔(按距离回收期排序)
         if current_chapter is not None:
             pending = []
+            must_pay = []   # v1.76:本章硬性必须回收的(plan_pay_at == current_chapter)
             for r in range(self.tbl_fore.rowCount()):
                 ch_set = self.tbl_fore.item(r, 0).text() if self.tbl_fore.item(r, 0) else "0"
                 content= self.tbl_fore.item(r, 1).text() if self.tbl_fore.item(r, 1) else ""
@@ -4712,18 +4772,44 @@ class CharacterLibrary(QWidget):
                     continue
                 try:
                     ch_pay_int = int(ch_pay)
+                    # v1.76 BUG-056:ch_pay=0 意味着 AI 没评估出回收期,不算超期(灰色温和提示)
+                    if ch_pay_int == 0:
+                        pending.append((999, ch_set, content, "未评估"))
+                        continue
                     distance = ch_pay_int - current_chapter
                     if -5 <= distance <= 10:  # 接近回收期或已超期
                         pending.append((distance, ch_set, content, ch_pay))
+                        # 已到回收期或超期 → 进 must_pay(强约束)
+                        if distance <= 0:
+                            must_pay.append((ch_set, content, ch_pay, distance))
                 except ValueError:
                     pending.append((999, ch_set, content, ch_pay))
             pending.sort(key=lambda x: x[0])
             if pending:
                 lines = []
                 for dist, cs, ct, cp in pending[:5]:
-                    flag = "⚠️超期" if dist < 0 else ("🎯本章可回收" if dist <= 2 else f"还有{dist}章")
+                    if cp == "未评估":
+                        flag = "📝待AI评估"
+                    elif dist < 0:
+                        flag = "⚠️超期"
+                    elif dist <= 2:
+                        flag = "🎯本章可回收"
+                    else:
+                        flag = f"还有{dist}章"
                     lines.append(f"  • 第{cs}章埋: {ct} → 第{cp}章回收[{flag}]")
                 parts.append("【待回收伏笔(优先考虑)】\n" + "\n".join(lines))
+            # v1.76 BUG-056:本章硬性必须回收的伏笔,加强约束块
+            if must_pay:
+                strict_lines = ["⚠️ 【本章硬性必须回收的伏笔 — 不允许跳过】"]
+                strict_lines.append(
+                    "本章正文必须明确处理下列伏笔(给出实质解决/揭晓/兑现,不能只字未提):")
+                for cs, ct, cp, dist in must_pay[:10]:
+                    overdue_tag = f"已超期 {abs(dist)} 章" if dist < 0 else "本章到期"
+                    strict_lines.append(f"  • [第{cs}章埋,{overdue_tag}] {ct}")
+                strict_lines.append(
+                    "回收方式:写到这条伏笔涉及的人物、物品、地点、谜题时,给出确切答案或下一步进展。\n"
+                    "    禁止用『以后再说』『暂且不表』等敷衍话术绕过。")
+                parts.append("\n".join(strict_lines))
         
         # 6. 战力等级体系(防止跨级混乱)
         powers = []
@@ -9274,6 +9360,9 @@ class MainWindow(QMainWindow):
         # v1.02:✨ 勾上时,如果检测到"已有章节但 6 库还空" → 主动询问要不要立刻补抽
         self.tab_charlib.chk_auto_extract.stateChanged.connect(
             self._on_chk_auto_extract_toggled)
+        # v1.76 BUG-056:伏笔追踪 Tab 的 AI 重评估按钮
+        if hasattr(self.tab_charlib, "btn_reeval_fore"):
+            self.tab_charlib.btn_reeval_fore.clicked.connect(self._reeval_zero_pay_at)
 
         # 章节编辑器: 风格检测 + 备选版本
         self.tab_editor.btn_style_check.clicked.connect(self._on_style_check)
@@ -9879,6 +9968,14 @@ class MainWindow(QMainWindow):
             if getattr(self, "_canon_batch_active", False):
                 self._canon_batch_active = False
                 QTimer.singleShot(800, self._run_next_canon_extract)
+        elif target == "foreshadow_check":
+            # v1.76 BUG-056:章末伏笔回收自动检查
+            self._on_foreshadow_check_response(content, meta)
+            if getattr(self, "_post_chapter_pipeline", None):
+                QTimer.singleShot(500, self._run_next_post_chapter_step)
+        elif target == "foreshadow_reeval":
+            # v1.76 BUG-056:plan_pay_at=0 批量重评估(按钮触发,不挂 pipeline)
+            self._on_foreshadow_reeval_response(content, meta)
         elif target == "critique_rhythm":
             ch_num = meta.get("ch_num", 0)
             self._on_critique_score_response(content, "rhythm", ch_num)
@@ -12128,6 +12225,9 @@ class MainWindow(QMainWindow):
                 ch_pay_int = int(ch_pay)
             except ValueError:
                 continue
+            # v1.76 BUG-056:ch_pay=0 是 AI 评估失败的占位,不算超期(应该走重评估按钮)
+            if ch_pay_int == 0:
+                continue
             distance = ch_pay_int - ch_num
             if distance < 0:
                 overdue.append((ch_set, content, ch_pay, abs(distance)))
@@ -13515,6 +13615,210 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    # ──────────────────────────────────────────────────────────
+    # v1.76 BUG-056:全自动伏笔闭环
+    # ──────────────────────────────────────────────────────────
+    def _run_foreshadow_check(self, content, ch_num):
+        """章节生成后,把未回收伏笔交给 AI 检查本章回收了哪些"""
+        if not hasattr(self.tab_charlib, "tbl_fore"):
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        pending = []
+        for r in range(self.tab_charlib.tbl_fore.rowCount()):
+            ch_set = self.tab_charlib.tbl_fore.item(r, 0).text() if self.tab_charlib.tbl_fore.item(r, 0) else "0"
+            ct = self.tab_charlib.tbl_fore.item(r, 1).text() if self.tab_charlib.tbl_fore.item(r, 1) else ""
+            ch_pay = self.tab_charlib.tbl_fore.item(r, 2).text() if self.tab_charlib.tbl_fore.item(r, 2) else "0"
+            paid = self.tab_charlib.tbl_fore.item(r, 3).text() if self.tab_charlib.tbl_fore.item(r, 3) else "否"
+            if paid == "是" or not ct:
+                continue
+            pending.append({
+                "id": r, "ch_set": ch_set, "content": ct[:120],
+                "plan_pay_at": ch_pay,
+            })
+        if not pending:
+            # 无可检查 — 跳过这一步,推进 pipeline
+            print(f"[foreshadow-check v1.76] ch={ch_num} 无未回收伏笔,跳过", flush=True)
+            self.tab_generation.log(
+                f"🪤 第{ch_num}章伏笔回收检查:无未回收伏笔,跳过", "info")
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        fl = json.dumps(pending, ensure_ascii=False)
+        prompt = PROMPTS["foreshadow_check"].format(
+            foreshadow_list=fl, ch_num=ch_num, content=content[:6000])
+        print(f"[foreshadow-check v1.76] ch={ch_num} 检查 {len(pending)} 条伏笔, "
+              f"prompt {len(prompt)} 字", flush=True)
+        self.tab_generation.log(
+            f"🪤 伏笔回收检查-第{ch_num}章 → AI({len(pending)} 条未回收, {len(prompt)} 字 prompt)",
+            "info")
+        self._send_to_ai(prompt, f"伏笔回收检查-第{ch_num}章",
+                         target="foreshadow_check", ch_num=ch_num)
+
+    def _on_foreshadow_check_response(self, content, meta):
+        """AI 检查回复 → 把命中的伏笔在 tbl_fore 里标记已回收"""
+        from datetime import datetime as _dt
+        ch_num = meta.get("ch_num", 0)
+        print(f"[foreshadow-check v1.76] ch={ch_num} AI 原始回复({len(content or '')} 字) "
+              f"前 200: {(content or '')[:200]!r}", flush=True)
+        from PyQt5.QtWidgets import QTableWidgetItem
+        try:
+            text = self._extract_json_blob(content)
+            arr = json.loads(text)
+            if not isinstance(arr, list):
+                self.tab_generation.log(
+                    f"⚠️ 伏笔回收检查:AI 返回的不是 JSON 数组(是 {type(arr).__name__}),"
+                    f"已忽略。原始前 200 字:{(content or '')[:200]}", "warn")
+                try:
+                    self.tab_charlib.lbl_last_check.setText(
+                        f"⚠ 最近检查:第{ch_num}章 AI 输出格式错误(非数组) "
+                        f"@ {_dt.now().strftime('%H:%M:%S')}")
+                    self.tab_charlib.lbl_last_check.setStyleSheet(
+                        "color: #c00; font-size: 11px; padding: 4px 6px; "
+                        "background: #fff5f5; border: 1px solid #fcc; border-radius: 3px;")
+                except Exception:
+                    pass
+                return
+            count = 0
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                try:
+                    rid = int(it.get("id", -1))
+                except (TypeError, ValueError):
+                    continue
+                if not (0 <= rid < self.tab_charlib.tbl_fore.rowCount()):
+                    continue
+                # 已经标记过的不重复(防 AI 重复回收)
+                paid_now = self.tab_charlib.tbl_fore.item(rid, 3)
+                if paid_now and paid_now.text() == "是":
+                    continue
+                self.tab_charlib.tbl_fore.setItem(rid, 3, QTableWidgetItem("是"))
+                self.tab_charlib.tbl_fore.setItem(rid, 4, QTableWidgetItem(str(ch_num)))
+                how = str(it.get("how", ""))[:50]
+                self.tab_generation.log(
+                    f"  ✓ 伏笔回收:[{rid}] @第{ch_num}章 — {how}", "info")
+                count += 1
+            ts = _dt.now().strftime("%H:%M:%S")
+            try:
+                if count > 0:
+                    self.tab_charlib.lbl_last_check.setText(
+                        f"✅ 最近检查:第{ch_num}章 +{count} 条伏笔已回收 @ {ts}")
+                    self.tab_charlib.lbl_last_check.setStyleSheet(
+                        "color: #06f; font-weight: bold; font-size: 11px; "
+                        "padding: 4px 6px; background: #eef6ff; "
+                        "border: 1px solid #aac; border-radius: 3px;")
+                else:
+                    self.tab_charlib.lbl_last_check.setText(
+                        f"📭 最近检查:第{ch_num}章 本章未回收任何伏笔 @ {ts}")
+                    self.tab_charlib.lbl_last_check.setStyleSheet(
+                        "color: #777; font-size: 11px; padding: 4px 6px; "
+                        "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
+            except Exception:
+                pass
+            self.tab_generation.log(
+                f"✓ 伏笔回收检查完成:第{ch_num}章 共 {count} 条回收", "info")
+        except Exception as e:
+            self.tab_generation.log(f"⚠️ 伏笔回收检查解析失败:{e}", "warn")
+            try:
+                self.tab_charlib.lbl_last_check.setText(
+                    f"⚠ 最近检查:第{ch_num}章 JSON 解析失败({e}) "
+                    f"@ {_dt.now().strftime('%H:%M:%S')}")
+                self.tab_charlib.lbl_last_check.setStyleSheet(
+                    "color: #c00; font-size: 11px; padding: 4px 6px; "
+                    "background: #fff5f5; border: 1px solid #fcc; border-radius: 3px;")
+            except Exception:
+                pass
+
+    def _reeval_zero_pay_at(self):
+        """🤖 AI 重评估 plan_pay_at=0(或空)的伏笔 — 由按钮触发"""
+        if not hasattr(self.tab_charlib, "tbl_fore"):
+            return
+        items = []
+        for r in range(self.tab_charlib.tbl_fore.rowCount()):
+            ch_set = self.tab_charlib.tbl_fore.item(r, 0).text() if self.tab_charlib.tbl_fore.item(r, 0) else "0"
+            ct = self.tab_charlib.tbl_fore.item(r, 1).text() if self.tab_charlib.tbl_fore.item(r, 1) else ""
+            ch_pay = self.tab_charlib.tbl_fore.item(r, 2).text() if self.tab_charlib.tbl_fore.item(r, 2) else "0"
+            paid = self.tab_charlib.tbl_fore.item(r, 3).text() if self.tab_charlib.tbl_fore.item(r, 3) else "否"
+            if paid == "是" or not ct:
+                continue
+            try:
+                if int(ch_pay) != 0:
+                    continue
+            except ValueError:
+                continue
+            items.append({"id": r, "ch_set": ch_set, "content": ct[:120]})
+        if not items:
+            QMessageBox.information(
+                self, "AI 重评估",
+                "没有需要重评估的伏笔(所有未回收伏笔的 plan_pay_at 都非 0)")
+            return
+        current_ch = len(self.chapters) if hasattr(self, "chapters") else 1
+        ret = QMessageBox.question(
+            self, "AI 重评估确认",
+            f"将把 {len(items)} 条 plan_pay_at=0 的伏笔交给 AI 评估合理回收章节(基于当前已写到第 {current_ch} 章)。\n\n"
+            f"继续吗?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ret != QMessageBox.Yes:
+            return
+        fl = json.dumps(items, ensure_ascii=False)
+        prompt = PROMPTS["foreshadow_reeval"].format(
+            current_ch=current_ch, foreshadow_list=fl)
+        print(f"[foreshadow-reeval v1.76] 评估 {len(items)} 条, "
+              f"prompt {len(prompt)} 字", flush=True)
+        self.tab_generation.log(
+            f"🤖 AI 重评估伏笔 → 发送 {len(items)} 条({len(prompt)} 字 prompt)", "info")
+        self._send_to_ai(prompt, f"伏笔重评估-{len(items)}条",
+                         target="foreshadow_reeval", count=len(items))
+
+    def _on_foreshadow_reeval_response(self, content, meta):
+        """AI 重评估回复 → 把 plan_pay_at 回填到 tbl_fore"""
+        from datetime import datetime as _dt
+        from PyQt5.QtWidgets import QTableWidgetItem
+        count_req = meta.get("count", 0)
+        print(f"[foreshadow-reeval v1.76] AI 原始回复({len(content or '')} 字) "
+              f"前 200: {(content or '')[:200]!r}", flush=True)
+        try:
+            text = self._extract_json_blob(content)
+            arr = json.loads(text)
+            if not isinstance(arr, list):
+                self.tab_generation.log(
+                    f"⚠️ 伏笔重评估:AI 返回的不是 JSON 数组(是 {type(arr).__name__}),"
+                    f"已忽略", "warn")
+                QMessageBox.warning(self, "AI 重评估失败",
+                                    f"AI 输出不是 JSON 数组,本次未更新。\n原始前 200 字:\n{(content or '')[:200]}")
+                return
+            count = 0
+            current_ch = len(self.chapters) if hasattr(self, "chapters") else 1
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                try:
+                    rid = int(it.get("id", -1))
+                    new_pay = int(it.get("plan_pay_at", 0))
+                except (TypeError, ValueError):
+                    continue
+                if not (0 <= rid < self.tab_charlib.tbl_fore.rowCount()):
+                    continue
+                # v1.76:守 — 必须 > current_ch,绝不允许 0 或过去章节
+                if new_pay <= current_ch:
+                    new_pay = current_ch + 30  # 保守 fallback
+                self.tab_charlib.tbl_fore.setItem(rid, 2, QTableWidgetItem(str(new_pay)))
+                reason = str(it.get("reason", ""))[:30]
+                self.tab_generation.log(
+                    f"  ✓ 伏笔重评估:[{rid}] plan_pay_at → 第{new_pay}章 ({reason})", "info")
+                count += 1
+            ts = _dt.now().strftime("%H:%M:%S")
+            self.tab_generation.log(
+                f"✓ AI 重评估完成:更新 {count}/{count_req} 条伏笔", "info")
+            QMessageBox.information(
+                self, "AI 重评估完成",
+                f"AI 评估完成,已自动回填 {count}/{count_req} 条伏笔的 plan_pay_at。\n\n"
+                f"完成时间:{ts}")
+        except Exception as e:
+            self.tab_generation.log(f"⚠️ 伏笔重评估解析失败:{e}", "warn")
+            QMessageBox.warning(
+                self, "AI 重评估失败",
+                f"JSON 解析失败:{e}\n原始前 300 字:\n{(content or '')[:300]}")
+
     def _post_chapter_chain(self, ch_num):
         """章节通过后的链式处理:Canon 抽取 → 6库抽取 → 章末技能 → 摘要 → 下一章"""
         if ch_num <= 0:
@@ -13539,6 +13843,20 @@ class MainWindow(QMainWindow):
         if hasattr(self.tab_charlib, "chk_auto_extract") and \
                 self.tab_charlib.chk_auto_extract.isChecked():
             pipeline.append(("charlib_extract", ch_num))
+
+        # v1.76 BUG-056:伏笔自动回收检查(只有当库里有未回收伏笔时才发 AI)
+        # 注意:放在 charlib_extract 后面 — 让新抽的伏笔先入库,再统一检查回收
+        if hasattr(self.tab_charlib, "tbl_fore"):
+            # 检查是否有未回收伏笔,有才挂(节省 AI 调用)
+            _has_pending = False
+            for r in range(self.tab_charlib.tbl_fore.rowCount()):
+                paid = self.tab_charlib.tbl_fore.item(r, 3)
+                ct = self.tab_charlib.tbl_fore.item(r, 1)
+                if ct and ct.text().strip() and (not paid or paid.text() != "是"):
+                    _has_pending = True
+                    break
+            if _has_pending:
+                pipeline.append(("foreshadow_check", ch_num))
 
         # after_chapter_generation 技能(固定自动触发)
         for s in self.tab_skills.get_after_chapter_skills():
@@ -13591,6 +13909,14 @@ class MainWindow(QMainWindow):
                 # 设置 flag,让 _on_world_extract_received 完成后回 post_chapter 链
                 self._charlib_chain_post = True
                 self._run_next_charlib_extract()
+            else:
+                QTimer.singleShot(100, self._run_next_post_chapter_step)
+        elif step[0] == "foreshadow_check":
+            # v1.76 BUG-056:伏笔自动回收检查
+            ch_num = step[1]
+            ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
+            if ch and ch.get("content"):
+                self._run_foreshadow_check(ch["content"], ch_num)
             else:
                 QTimer.singleShot(100, self._run_next_post_chapter_step)
         elif step[0] == "skill_after":
