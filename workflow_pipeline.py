@@ -278,14 +278,8 @@ class WordCountStep(PipelineStep):
 
 
 class HookCheckStep(PipelineStep):
-    """即时章末钩子启发式检查"""
+    """即时章末钩子启发式检查 (v1.73: 源头统一到 pangu_system.PanguEngine.HOOK_MARKERS)"""
     name = "hook_check"
-
-    _MARKERS = (
-        '?', '?', '...', '……',
-        '突然', '却见', '只是', '可是', '然而', '没想到',
-        '但下一秒', '正当', '就在', '直到',
-    )
 
     def __init__(self, main_window):
         self._mw = main_window
@@ -295,11 +289,15 @@ class HookCheckStep(PipelineStep):
         return self._mw.tab_generation.critique_config().get("hook", True)
 
     def run(self, ctx: PipelineContext, done):
-        tail = ctx.content[-200:].strip()
-        if not any(m in tail for m in self._MARKERS):
+        try:
+            from pangu_system import PanguEngine as _PE
+            has_hook = _PE.check_chapter_has_hook(ctx.content)
+        except Exception:
+            has_hook = True  # 兜底:pangu 不可用就放行
+        if not has_hook:
             ctx.add_issue(
-                "章末缺少钩子:最后一段没有问号/省略号/转折词,"
-                "读者追更欲不足。请在结尾留一个新悬念或反转")
+                "章末缺少钩子:末段无悬念/转折/留白/反差元素,"
+                "读者追更欲不足。请在结尾留一个新悬念、决断、神秘人或场景切换")
         done()
 
 

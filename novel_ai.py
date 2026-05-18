@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.72"
+APP_VERSION = "v1.73"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -12969,19 +12969,18 @@ class MainWindow(QMainWindow):
                     f"字数不达标:目标 {target_words} 字,实际 {actual} 字"
                     f"(差 {min_words - actual} 字)")
 
-        # 2. 章末钩子(无 AI 调用,启发式)
+        # 2. 章末钩子(v1.73:扩 80+ 关键词 + 看末段,源头在 pangu_system.HOOK_MARKERS)
         if cfg.get("hook"):
             ran_checks.append("钩子")
-            tail = content[-200:].strip()
-            hook_markers = (
-                '?', '?', '...', '……',
-                '突然', '却见', '只是', '可是', '然而', '没想到',
-                '但下一秒', '正当', '就在', '直到')
-            has_hook = any(m in tail for m in hook_markers)
+            try:
+                from pangu_system import PanguEngine as _PE
+                has_hook = _PE.check_chapter_has_hook(content)
+            except Exception:
+                has_hook = True  # 兜底:pangu 不可用就放行,不要硬崩
             if not has_hook:
                 issues.append(
-                    "章末缺少钩子:最后一段没有问号/省略号/转折词,"
-                    "读者追更欲不足。请在结尾留一个新悬念或反转")
+                    "章末缺少钩子:末段无悬念/转折/留白/反差元素,"
+                    "读者追更欲不足。请在结尾留一个新悬念、决断、神秘人或场景切换")
 
         # 3. 禁用词扫描(高严重度 → 直接触发死磕重写)
         # 阈值:总命中次数 >5 或 单词命中 >2 都算违反
