@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.78"
+APP_VERSION = "v1.79"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -303,6 +303,12 @@ PROMPTS = {
         '  "goals": [\n'
         '    {{"name": "目标名(如:找到杀父仇人/突破金丹)", "priority": "主线/支线/紧急", "status": "进行中/已达成/已放弃", "set_ch": "{ch_num}"}}\n'
         "  ],\n"
+        '  "infos": [\n'
+        '    {{"id": "INFO-XXX", "content": "信息内容(20-40字,如:林远是叶家次子;主角金手指是咒血术)", "source_ch": "{ch_num}", "source_type": "设定/事件揭露/角色透露"}}\n'
+        "  ],\n"
+        '  "info_disclosures": [\n'
+        '    {{"info_id": "INFO-XXX", "to": "知情人(角色名)", "via": "通过何途径知道(如:第{ch_num}章亲口告诉/第{ch_num}章亲眼见/出生即知)"}}\n'
+        "  ],\n"
         '  "hero_state": {{"age": "本章末主角年龄(数字字符串)", "realm": "本章末主角修为/境界(如:金丹中期)", "location": "本章末主角所在地", "faction": "本章末主角所属势力/门派", "mood": "本章末主角心境(如:愤怒/决绝/平静)"}}\n'
         "}}\n\n"
         "提取规则:\n"
@@ -335,7 +341,22 @@ PROMPTS = {
         "    - 高潮 progress≈70-90 / 收束 progress≈90-100\n"
         "    - 主线/支线/金手指线等多条平行,弧线名要简短可识别(8 字内)\n"
         "13. relations_value(关系值矩阵)只列【本章首次出现】或【本章发生明确变化】的角色对值:value 是 -100~+100 整数,-100=死敌/-80=有仇/-50=不和/0=陌生/+50=朋友/+80=至交/+100=至亲;ch 填本章号;同一对 a→b 只列一次,以最新值为准\n"
-        "14. goals(目标列表)只列【本章新立的】或【本章状态变化】的目标:priority 三选一(主线/支线/紧急),status 三选一(进行中/已达成/已放弃),set_ch 填首次立目标的章号(本章新立则填 {ch_num})\n\n"
+        "14. goals(目标列表)只列【本章新立的】或【本章状态变化】的目标:priority 三选一(主线/支线/紧急),status 三选一(进行中/已达成/已放弃),set_ch 填首次立目标的章号(本章新立则填 {ch_num})\n"
+        "15. infos(关键信息条目)只列【本章首次确立】的关键信息(角色身份秘密/金手指本质/势力暗线/血脉来历等):\n"
+        "    - id 自动用 INFO-001/INFO-002... 顺序编号(从 INFO-001 开始,系统会去重和续号)\n"
+        "    - content 20-40 字,必须是【全文唯一可被反复引用】的硬事实,如『林远是叶家次子』『主角金手指是咒血术』\n"
+        "    - 不要列『林远很帅』这种主观判断,也不要列瞬时事件(那是 events 干的活)\n"
+        "    - source_type 三选一:【设定】= 主角出生即有的事实 / 【事件揭露】= 某场景里被揭穿 / 【角色透露】= 某角色亲口说出\n"
+        "    - 本章没有新关键信息确立 → 留空 []\n"
+        "16. info_disclosures(信息披露追踪)只列【本章中谁知道了某条 info】:\n"
+        "    - info_id 必须引用 infos 表里已有的 id(本章新建的 info 也算,因为本章会一起入库)\n"
+        "    - to 是知情人角色名,via 必须明确披露路径,常见格式:\n"
+        "      * 『出生即知』(主角对自己的设定类信息默认就知道)\n"
+        "      * 『第{ch_num}章亲口告诉』(角色对角色说出来)\n"
+        "      * 『第{ch_num}章亲眼见』(亲眼见到证据)\n"
+        "      * 『第{ch_num}章读到 X 的信』(信件/书札)\n"
+        "    - 关键:【知情链断了不要补】 — 路人甲若没见证披露事件,就不能列他在 known_by 里\n"
+        "    - 本章没有信息披露事件 → 留空 []\n\n"
         "已有数据(避免重复提取):\n{existing}\n\n"
         "本章是第 {ch_num} 章,正文:\n{content}"
     ),
@@ -614,6 +635,50 @@ PROMPTS = {
         "   - 大变化(救命/灭门/告白成功/背叛揭穿) → ±50\n"
         "5. 关系值上限 +100 下限 -100,合并时系统自动封顶\n"
         "6. 只看本章正文,不要联系未发生章节臆测\n"
+        "7. 只输出 JSON,不加任何说明文字"
+    ),
+
+    # ─────────────────────────────────────────────────────────────
+    # v1.79 BUG-059:信息隔离控制(知识穿帮检查 / 披露追踪)
+    # ─────────────────────────────────────────────────────────────
+
+    "info_check": (
+        "请检查【本章正文】里有没有【知识穿帮】 — 即某个角色用到/提到了他【不该知道】的关键信息。\n"
+        "判定方法:对每条关键信息,只有在【已知信息边界表】里被列为知情人的角色才能合法地用它;\n"
+        "如果正文里某个不在该信息知情人列表的角色直接引用、嘲讽、利用了这条信息 = 穿帮。\n\n"
+        "【已知信息边界(权威表)】:\n{known_table}\n\n"
+        "【本章正文】(第 {ch_num} 章):\n{content}\n\n"
+        "请严格输出 JSON 数组,只列【确凿穿帮】的违规事件:\n"
+        '[{{"info_id": "INFO-001", "character": "王屠户", "evidence": "正文中王屠户说了xxx(15字内原文摘录)", "why_should_not_know": "他不在该信息知情人列表(20字内)"}}]\n\n'
+        "硬规则:\n"
+        "1. 没有穿帮 → 返回 []\n"
+        "2. info_id 必须从上面权威表里取,不要凭空造\n"
+        "3. evidence 必须是【正文里的实际句子】(摘录前 15 字即可),不要复述\n"
+        "4. 主角自己的信息(只要主角自己出场)默认是合法的 — 主角什么都知道,不要把主角列为违规者\n"
+        "5. 模糊的内心独白/旁白不算穿帮 — 只挑【角色明确说出/利用】的情况\n"
+        "6. 群体反应(如『众人窃窃私语』『村民都觉得他不对劲』)不算穿帮,只算具名角色的台词/动作\n"
+        "7. 宁可放过 5 个嫌疑,不要冤枉 1 个无辜 — 拿不准 → 不报\n"
+        "8. 只输出 JSON,不加任何说明文字"
+    ),
+
+    "info_disclose_check": (
+        "请扫描【本章正文】,识别其中发生的【信息披露事件】(谁告诉/展示了什么给谁)。\n"
+        "披露事件 = 一条已存在的关键信息,本章首次被披露给某个之前不知道它的角色。\n\n"
+        "【现有关键信息表】:\n{info_table}\n\n"
+        "【当前已知情人表(已经知道的不要重复列)】:\n{known_table}\n\n"
+        "【本章正文】(第 {ch_num} 章):\n{content}\n\n"
+        "请严格输出 JSON 数组,只列【本章发生的新披露事件】:\n"
+        '[{{"info_id": "INFO-001", "to": "王屠户", "via": "第{ch_num}章林远亲口告诉(15字内具体描述)"}}]\n\n'
+        "硬规则:\n"
+        "1. 本章没有新披露 → 返回 []\n"
+        "2. info_id 只能从现有信息表取(本章不创建新 info,新 info 由 world_extract 抽)\n"
+        "3. 已经在知情人表里的角色不要重复列\n"
+        "4. via 必须具体,常见格式:\n"
+        "   - 『第{ch_num}章 X 亲口告诉』\n"
+        "   - 『第{ch_num}章亲眼见到 X』\n"
+        "   - 『第{ch_num}章读到 X 留的字条』\n"
+        "5. 群体披露(如『当众宣布』)→ 每个具名旁观者各列一条;无名群众不算\n"
+        "6. 主角【自己出场知道一切】的设定类信息默认就是『出生即知』,不需要本章重复披露 — 不要列主角自己\n"
         "7. 只输出 JSON,不加任何说明文字"
     ),
 }
@@ -3810,6 +3875,7 @@ class CharacterLibrary(QWidget):
         self._build_foreshadows_tab()
         self._build_promises_tab()   # v1.77 新增:⚡ 威胁承诺
         self._build_plot_progress_tab()   # v1.78 新增:📈 剧情进度(弧线/关系值/目标)
+        self._build_info_isolation_tab()  # v1.79 新增:🔒 信息隔离(infos + known_by)
         self._build_hooks_tab()      # 新增:钩子编年
         self._build_coolpts_tab()    # 新增:爽点编年
 
@@ -4599,6 +4665,141 @@ class CharacterLibrary(QWidget):
         for r in rows:
             self.tbl_goals.removeRow(r)
 
+    # ── 5d. 信息隔离子页(v1.79 BUG-059)──────────────────────
+    # 2 子表 via info_id 外键引用:
+    #   - tbl_infos:信息条目(4 列:id/内容/来源章/来源类型)
+    #   - tbl_known_by:知情人表(3 列:信息 id/知情人/知情来源)
+    # 与 v1.78 的核心差异:
+    #   - 引入【外键引用】(known_by.info_id 引用 infos.id)
+    #   - info_check 是【侦测违规】检查(找穿帮),不是状态推进
+    def _build_info_isolation_tab(self):
+        from PyQt5.QtWidgets import (QTableWidget, QTableWidgetItem, QTabWidget)
+        w = QWidget()
+        lay = QVBoxLayout(w)
+
+        # 顶部状态 label(同 v1.76/v1.77/v1.78 五态模式)
+        self.lbl_last_info_check = QLabel(
+            "📌 自动知识穿帮检查:尚未运行(写完下一章后查看)"
+        )
+        self.lbl_last_info_check.setStyleSheet(
+            "color: #555; font-size: 11px; padding: 4px 6px; "
+            "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
+        self.lbl_last_info_check.setWordWrap(True)
+        lay.addWidget(self.lbl_last_info_check)
+
+        # 嵌套 2 子选项卡
+        inner_tabs = QTabWidget()
+        lay.addWidget(inner_tabs)
+
+        # ── 子表 1:信息条目 ─────────────────────────────
+        w_infos = QWidget()
+        lay_infos = QVBoxLayout(w_infos)
+        top_infos = QHBoxLayout()
+        btn_add_info = QPushButton("➕ 新增信息")
+        btn_add_info.clicked.connect(self._add_info)
+        btn_del_info = QPushButton("➖ 删除选中")
+        btn_del_info.clicked.connect(self._del_info)
+        top_infos.addWidget(btn_add_info); top_infos.addWidget(btn_del_info)
+        top_infos.addStretch()
+        lay_infos.addLayout(top_infos)
+
+        self.tbl_infos = QTableWidget(0, 4)
+        self.tbl_infos.setHorizontalHeaderLabels([
+            "信息 id", "信息内容", "来源章", "来源类型"
+        ])
+        self.tbl_infos.horizontalHeader().setStretchLastSection(False)
+        self.tbl_infos.verticalHeader().setVisible(False)
+        self.tbl_infos.setEditTriggers(
+            QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_infos.setColumnWidth(0, 100)
+        self.tbl_infos.setColumnWidth(1, 380)
+        self.tbl_infos.setColumnWidth(2, 80)
+        self.tbl_infos.setColumnWidth(3, 100)
+        lay_infos.addWidget(self.tbl_infos)
+
+        tip_infos = QLabel(
+            "💡 全文唯一可被反复引用的关键信息(角色身份秘密/金手指本质/势力暗线/血脉来历)。\n"
+            "    id 用 INFO-001/INFO-002... 顺序编号(系统自动去重续号)。\n"
+            "    来源类型 = 设定(出生即有)/事件揭露(场景里被揭穿)/角色透露(亲口说出)。")
+        tip_infos.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip_infos.setWordWrap(True)
+        lay_infos.addWidget(tip_infos)
+        inner_tabs.addTab(w_infos, "📋 信息条目")
+
+        # ── 子表 2:知情人表 ─────────────────────────────
+        w_kb = QWidget()
+        lay_kb = QVBoxLayout(w_kb)
+        top_kb = QHBoxLayout()
+        btn_add_kb = QPushButton("➕ 新增知情人")
+        btn_add_kb.clicked.connect(self._add_known_by)
+        btn_del_kb = QPushButton("➖ 删除选中")
+        btn_del_kb.clicked.connect(self._del_known_by)
+        top_kb.addWidget(btn_add_kb); top_kb.addWidget(btn_del_kb)
+        top_kb.addStretch()
+        lay_kb.addLayout(top_kb)
+
+        self.tbl_known_by = QTableWidget(0, 3)
+        self.tbl_known_by.setHorizontalHeaderLabels([
+            "信息 id(引用)", "知情人", "知情来源"
+        ])
+        self.tbl_known_by.horizontalHeader().setStretchLastSection(False)
+        self.tbl_known_by.verticalHeader().setVisible(False)
+        self.tbl_known_by.setEditTriggers(
+            QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.tbl_known_by.setColumnWidth(0, 110)
+        self.tbl_known_by.setColumnWidth(1, 120)
+        self.tbl_known_by.setColumnWidth(2, 400)
+        lay_kb.addWidget(self.tbl_known_by)
+
+        tip_kb = QLabel(
+            "💡 谁知道哪条信息 + 怎么知道的(信息 id 必须在【信息条目】里存在,系统自动校验)。\n"
+            "    AI 章末自动:① 扫描穿帮(不该知道的人用了某 info)② 追踪新披露事件(谁告诉了谁)。\n"
+            "    每章生成时,注入会只向【出场角色】告知他们的【已知信息边界】,严防 OOC。")
+        tip_kb.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip_kb.setWordWrap(True)
+        lay_kb.addWidget(tip_kb)
+        inner_tabs.addTab(w_kb, "👁 知情人表")
+
+        self.sub_tabs.addTab(w, "🔒 信息隔离")
+
+    def _add_info(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_infos.rowCount()
+        # 自动续号 INFO-XXX
+        existing = set()
+        for i in range(r):
+            it = self.tbl_infos.item(i, 0)
+            if it and it.text().strip():
+                existing.add(it.text().strip())
+        n = 1
+        while f"INFO-{n:03d}" in existing:
+            n += 1
+        new_id = f"INFO-{n:03d}"
+        self.tbl_infos.insertRow(r)
+        defaults = [new_id, "新关键信息", "1", "设定"]
+        for c, v in enumerate(defaults):
+            self.tbl_infos.setItem(r, c, QTableWidgetItem(v))
+
+    def _del_info(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_infos.selectedIndexes()),
+                      reverse=True)
+        for r in rows:
+            self.tbl_infos.removeRow(r)
+
+    def _add_known_by(self):
+        from PyQt5.QtWidgets import QTableWidgetItem
+        r = self.tbl_known_by.rowCount()
+        self.tbl_known_by.insertRow(r)
+        defaults = ["INFO-001", "", "第1章亲口告诉"]
+        for c, v in enumerate(defaults):
+            self.tbl_known_by.setItem(r, c, QTableWidgetItem(v))
+
+    def _del_known_by(self):
+        rows = sorted(set(idx.row() for idx in self.tbl_known_by.selectedIndexes()),
+                      reverse=True)
+        for r in rows:
+            self.tbl_known_by.removeRow(r)
+
     # ── 6. 钩子编年子页 ────────────────────────────────────
     def _build_hooks_tab(self):
         from PyQt5.QtWidgets import QTableWidget
@@ -4799,6 +5000,8 @@ class CharacterLibrary(QWidget):
             "arcs":          tbl_to_list(self.tbl_arcs, 3),         # v1.78
             "relations_value": tbl_to_list(self.tbl_rel_values, 4), # v1.78
             "goals":         tbl_to_list(self.tbl_goals, 4),        # v1.78
+            "infos":         tbl_to_list(self.tbl_infos, 4),        # v1.79
+            "known_by":      tbl_to_list(self.tbl_known_by, 3),     # v1.79
             "hooks":      tbl_to_list(self.tbl_hooks, 4),  # 新增
             "cool_pts":   tbl_to_list(self.tbl_cool, 3),   # 新增
             "hero_state": {
@@ -4837,6 +5040,8 @@ class CharacterLibrary(QWidget):
             "arcs":            ["name", "progress", "phase"],
             "relations_value": ["a", "b", "value", "ch"],
             "goals":           ["name", "priority", "status", "set_ch"],
+            "infos":           ["id", "content", "source_ch", "source_type"],
+            "known_by":        ["info_id", "character", "via"],
             "hooks":       ["ch", "hook", "type", "resolved"],
             "cool_pts":    ["ch", "scene", "score"],
         }
@@ -4881,6 +5086,8 @@ class CharacterLibrary(QWidget):
         list_to_tbl(self.tbl_arcs,       normalize(data.get("arcs", []), "arcs"), 3)              # v1.78
         list_to_tbl(self.tbl_rel_values, normalize(data.get("relations_value", []), "relations_value"), 4)  # v1.78
         list_to_tbl(self.tbl_goals,      normalize(data.get("goals", []), "goals"), 4)            # v1.78
+        list_to_tbl(self.tbl_infos,      normalize(data.get("infos", []), "infos"), 4)            # v1.79
+        list_to_tbl(self.tbl_known_by,   normalize(data.get("known_by", []), "known_by"), 3)      # v1.79
         list_to_tbl(self.tbl_hooks,     normalize(data.get("hooks", []), "hooks"), 4)
         list_to_tbl(self.tbl_cool,      normalize(data.get("cool_pts", []), "cool_pts"), 3)
         
@@ -4902,7 +5109,8 @@ class CharacterLibrary(QWidget):
         """
         from PyQt5.QtWidgets import QTableWidgetItem
         added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "pr": 0,
-                 "arc": 0, "rv": 0, "gl": 0}  # v1.78: 弧线/关系值/目标
+                 "arc": 0, "rv": 0, "gl": 0,                # v1.78
+                 "info": 0, "kb": 0}                         # v1.79
         if not data:
             return added
         
@@ -4924,6 +5132,9 @@ class CharacterLibrary(QWidget):
                 "arcs":            ["name", "progress", "phase"],            # v1.78
                 "relations_value": ["a", "b", "value", "ch"],                # v1.78
                 "goals":           ["name", "priority", "status", "set_ch"], # v1.78
+                "infos":           ["id", "content", "source_ch", "source_type"],   # v1.79
+                "known_by":        ["info_id", "character", "via"],                 # v1.79
+                "info_disclosures": ["info_id", "to", "via"],                       # v1.79(同 known_by 但来自 disclosure 抽取)
             }
             keys = DICT_KEY_MAPS_LOCAL.get(schema_key, [])
             out = []
@@ -5179,6 +5390,107 @@ class CharacterLibrary(QWidget):
                     self.tbl_goals.setItem(row, col, QTableWidgetItem(v))
                 added["gl"] = added.get("gl", 0) + 1
                 ex_gls[nm] = row
+
+        # v1.79:关键信息条目 infos(去重 key=content;id 自动续号 INFO-XXX)
+        # 关键设计:AI 可能用占位符 id(INFO-XXX/INFO-001 重复),系统自动重编号并维护 id_remap
+        id_remap = {}  # AI 给的原始 id → 入库后的最终 id(给 info_disclosures 用)
+        if hasattr(self, "tbl_infos"):
+            # 收集已有 content → row idx 和已用过的 id
+            ex_infos_by_content = {}
+            used_ids = set()
+            for r in range(self.tbl_infos.rowCount()):
+                ct_it = self.tbl_infos.item(r, 1)
+                id_it = self.tbl_infos.item(r, 0)
+                if ct_it and ct_it.text().strip():
+                    ex_infos_by_content[ct_it.text().strip()] = r
+                if id_it and id_it.text().strip():
+                    used_ids.add(id_it.text().strip())
+
+            def _next_info_id():
+                n = 1
+                while f"INFO-{n:03d}" in used_ids:
+                    n += 1
+                used_ids.add(f"INFO-{n:03d}")
+                return f"INFO-{n:03d}"
+
+            for info in _as_dict_list(data.get("infos"), "infos"):
+                content = str(info.get("content", "")).strip()
+                if not content:
+                    continue
+                raw_id = str(info.get("id", "")).strip()
+                if content in ex_infos_by_content:
+                    # 内容已存在 → 复用现有 id,只把映射记好
+                    r = ex_infos_by_content[content]
+                    existing_id = self.tbl_infos.item(r, 0).text() if self.tbl_infos.item(r, 0) else ""
+                    if raw_id:
+                        id_remap[raw_id] = existing_id
+                    continue
+                # 新内容 → 分配新 id
+                final_id = raw_id if (raw_id and raw_id not in used_ids
+                                       and re.match(r"^INFO-\d{3}$", raw_id)) else _next_info_id()
+                if raw_id and final_id != raw_id:
+                    id_remap[raw_id] = final_id
+                used_ids.add(final_id)
+                src_ch = str(info.get("source_ch", "1")).strip() or "1"
+                src_type = str(info.get("source_type", "设定")).strip() or "设定"
+                row = self.tbl_infos.rowCount()
+                self.tbl_infos.insertRow(row)
+                for col, v in enumerate([final_id, content, src_ch, src_type]):
+                    self.tbl_infos.setItem(row, col, QTableWidgetItem(v))
+                added["info"] = added.get("info", 0) + 1
+                ex_infos_by_content[content] = row
+
+        # v1.79:知情人 known_by 合并 — 同时接受 known_by 字段和 info_disclosures 字段
+        # info_disclosures 是 world_extract 输出的"披露事件",字段 (info_id, to, via),
+        # known_by 是直接的"知情人记录",字段 (info_id, character, via);两者语义相同,合并入同一个表
+        if hasattr(self, "tbl_known_by"):
+            ex_kbs = set()  # "info_id|character"
+            for r in range(self.tbl_known_by.rowCount()):
+                info_it = self.tbl_known_by.item(r, 0)
+                ch_it = self.tbl_known_by.item(r, 1)
+                if info_it and ch_it and info_it.text().strip() and ch_it.text().strip():
+                    ex_kbs.add(f"{info_it.text().strip()}|{ch_it.text().strip()}")
+
+            # 收集两种来源
+            kb_records = []
+            for kb in _as_dict_list(data.get("known_by"), "known_by"):
+                kb_records.append({
+                    "info_id": str(kb.get("info_id", "")).strip(),
+                    "character": str(kb.get("character", "")).strip(),
+                    "via": str(kb.get("via", "")).strip(),
+                })
+            for dc in _as_dict_list(data.get("info_disclosures"), "info_disclosures"):
+                kb_records.append({
+                    "info_id": str(dc.get("info_id", "")).strip(),
+                    "character": str(dc.get("to", "") or dc.get("character", "")).strip(),
+                    "via": str(dc.get("via", "")).strip(),
+                })
+
+            for rec in kb_records:
+                # id_remap 应用(AI 给的占位符 id → 真实 id)
+                info_id = id_remap.get(rec["info_id"], rec["info_id"])
+                character = rec["character"]
+                via = rec["via"]
+                if not (info_id and character):
+                    continue
+                # 守:info_id 必须在 tbl_infos 里存在,否则不要悬挂引用
+                if hasattr(self, "tbl_infos"):
+                    valid_ids = set()
+                    for r in range(self.tbl_infos.rowCount()):
+                        it = self.tbl_infos.item(r, 0)
+                        if it and it.text().strip():
+                            valid_ids.add(it.text().strip())
+                    if info_id not in valid_ids:
+                        continue
+                k = f"{info_id}|{character}"
+                if k in ex_kbs:
+                    continue
+                row = self.tbl_known_by.rowCount()
+                self.tbl_known_by.insertRow(row)
+                for col, v in enumerate([info_id, character, via or "未知途径"]):
+                    self.tbl_known_by.setItem(row, col, QTableWidgetItem(v))
+                added["kb"] = added.get("kb", 0) + 1
+                ex_kbs.add(k)
 
         return added
     
@@ -5447,6 +5759,54 @@ class CharacterLibrary(QWidget):
                 parts.append(
                     "【主角当前目标(进行中)— 主角行动应朝这些目标推进,避免偏离】\n"
                     + "\n".join(lines))
+
+        # 5d. 信息隔离(v1.79 BUG-059)— 角色已知信息边界
+        # 仅对本章 mentioned_names 中的角色注入,防止 OOC(主角不在场也合理);
+        # 若 mentioned_names 为空(没传或全空),整段不出 — 因为没法精确定向。
+        if hasattr(self, "tbl_infos") and hasattr(self, "tbl_known_by") and mentioned_names:
+            # 1. 建 info_id → content 索引
+            info_content = {}
+            for r in range(self.tbl_infos.rowCount()):
+                id_it = self.tbl_infos.item(r, 0)
+                ct_it = self.tbl_infos.item(r, 1)
+                if id_it and ct_it:
+                    info_content[id_it.text().strip()] = ct_it.text().strip()
+            # 2. 按角色聚合
+            by_char = {}  # name → set(info_id)
+            for r in range(self.tbl_known_by.rowCount()):
+                iid_it = self.tbl_known_by.item(r, 0)
+                ch_it = self.tbl_known_by.item(r, 1)
+                if not (iid_it and ch_it):
+                    continue
+                iid = iid_it.text().strip()
+                ch = ch_it.text().strip()
+                if not (iid and ch) or iid not in info_content:
+                    continue
+                by_char.setdefault(ch, set()).add(iid)
+            # 3. 只输出 mentioned_names 中的角色
+            lines = []
+            # 严格匹配 — 完整名字匹配(不做子串,避免"林"匹配"林远""林悦"乱套)
+            for ch in sorted(set(by_char.keys()) & set(mentioned_names)):
+                ids = sorted(by_char[ch])
+                # 把 id 和内容片段都显示
+                snippets = [f"{iid}({info_content.get(iid, '?')[:20]})" for iid in ids]
+                lines.append(f"  • {ch} 已知: " + ", ".join(snippets))
+            if lines:
+                # 同时列出"全文有但本章角色都不知道"的信息(警示用)
+                all_info_ids = set(info_content.keys())
+                known_in_chapter = set()
+                for ch in (set(by_char.keys()) & set(mentioned_names)):
+                    known_in_chapter |= by_char[ch]
+                secrets = all_info_ids - known_in_chapter
+                hint_block = (
+                    "【本章出场角色已知信息边界(严守 — 不在已知列表的信息,该角色绝对不能提及/利用/暗示)】\n"
+                    + "\n".join(lines))
+                if secrets:
+                    sec_lines = [f"{iid}({info_content.get(iid, '?')[:20]})"
+                                 for iid in sorted(secrets)[:8]]
+                    hint_block += (
+                        "\n  ⚠ 本章出场角色【不应】触及的信息:" + ", ".join(sec_lines))
+                parts.append(hint_block)
 
         # 6. 战力等级体系(防止跨级混乱)
         powers = []
@@ -10635,6 +10995,16 @@ class MainWindow(QMainWindow):
             self._on_relation_change_check_response(content, meta)
             if getattr(self, "_post_chapter_pipeline", None):
                 QTimer.singleShot(500, self._run_next_post_chapter_step)
+        elif target == "info_disclose_check":
+            # v1.79 BUG-059:章末信息披露追踪
+            self._on_info_disclose_check_response(content, meta)
+            if getattr(self, "_post_chapter_pipeline", None):
+                QTimer.singleShot(500, self._run_next_post_chapter_step)
+        elif target == "info_check":
+            # v1.79 BUG-059:章末知识穿帮检查(标红警告,不自动修)
+            self._on_info_check_response(content, meta)
+            if getattr(self, "_post_chapter_pipeline", None):
+                QTimer.singleShot(500, self._run_next_post_chapter_step)
         elif target == "critique_rhythm":
             ch_num = meta.get("ch_num", 0)
             self._on_critique_score_response(content, "rhythm", ch_num)
@@ -12479,11 +12849,13 @@ class MainWindow(QMainWindow):
         # v1.74:加上 power_levels(战力体系)一起算
         # v1.77:加上 promises(威胁承诺)一起算
         # v1.78:加上 arcs / relations_value / goals(剧情进度)一起算
+        # v1.79:加上 infos / info_disclosures(信息隔离)一起算
         all_empty = not any(
             (data.get(k) or []) for k in
             ("characters", "relations", "items", "events", "foreshadows",
              "power_levels", "promises",
-             "arcs", "relations_value", "goals")
+             "arcs", "relations_value", "goals",
+             "infos", "info_disclosures")
         )
         if all_empty:
             retry_n = getattr(self, "_world_extract_retry", {}).get(ch_num, 0)
@@ -12507,6 +12879,8 @@ class MainWindow(QMainWindow):
         arc_n = added.get("arc", 0)   # v1.78
         rv_n = added.get("rv", 0)     # v1.78
         gl_n = added.get("gl", 0)     # v1.78
+        info_n = added.get("info", 0) # v1.79
+        kb_n = added.get("kb", 0)     # v1.79
         self.tab_generation.log(
             f"✓ 第{ch_num}章 6 库提取完成: 角色+{added['ch']} 关系+{added['rel']} "
             f"物品+{added['it']} 时间线+{added['ev']} 伏笔+{added['fo']}"
@@ -12515,6 +12889,8 @@ class MainWindow(QMainWindow):
             + (f" 弧线+{arc_n}" if arc_n else "")
             + (f" 关系值+{rv_n}" if rv_n else "")
             + (f" 目标+{gl_n}" if gl_n else "")
+            + (f" 信息+{info_n}" if info_n else "")
+            + (f" 知情+{kb_n}" if kb_n else "")
             + (f" 主角状态+{hero_n}" if hero_n else ""),
             "success")
         # 触发下一章
@@ -12525,7 +12901,9 @@ class MainWindow(QMainWindow):
         from PyQt5.QtWidgets import QTableWidgetItem
         cl = self.tab_charlib
         added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "pr": 0,
-                 "arc": 0, "rv": 0, "gl": 0, "hero": 0}  # v1.78: arc/rv/gl
+                 "arc": 0, "rv": 0, "gl": 0,                # v1.78
+                 "info": 0, "kb": 0,                         # v1.79
+                 "hero": 0}
 
         def existing_names(tbl, col=0):
             return set((tbl.item(r, col).text() if tbl.item(r, col) else "")
@@ -12779,6 +13157,104 @@ class MainWindow(QMainWindow):
                     cl.tbl_goals.setItem(row, col, QTableWidgetItem(v))
                 added["gl"] = added.get("gl", 0) + 1
                 ex_gls[nm] = row
+
+        # v1.79:关键信息条目 infos(content 去重 + id 自动续号 + remap 表)
+        id_remap = {}
+        if hasattr(cl, "tbl_infos"):
+            ex_infos_by_content = {}
+            used_ids = set()
+            for r in range(cl.tbl_infos.rowCount()):
+                ct_it = cl.tbl_infos.item(r, 1)
+                id_it = cl.tbl_infos.item(r, 0)
+                if ct_it and ct_it.text().strip():
+                    ex_infos_by_content[ct_it.text().strip()] = r
+                if id_it and id_it.text().strip():
+                    used_ids.add(id_it.text().strip())
+
+            def _next_info_id():
+                n = 1
+                while f"INFO-{n:03d}" in used_ids:
+                    n += 1
+                used_ids.add(f"INFO-{n:03d}")
+                return f"INFO-{n:03d}"
+
+            for info in (data.get("infos") or []):
+                if not isinstance(info, dict):
+                    continue
+                content = str(info.get("content", "")).strip()
+                if not content:
+                    continue
+                raw_id = str(info.get("id", "")).strip()
+                if content in ex_infos_by_content:
+                    r = ex_infos_by_content[content]
+                    existing_id = cl.tbl_infos.item(r, 0).text() if cl.tbl_infos.item(r, 0) else ""
+                    if raw_id:
+                        id_remap[raw_id] = existing_id
+                    continue
+                final_id = raw_id if (raw_id and raw_id not in used_ids
+                                       and re.match(r"^INFO-\d{3}$", raw_id)) else _next_info_id()
+                if raw_id and final_id != raw_id:
+                    id_remap[raw_id] = final_id
+                used_ids.add(final_id)
+                src_ch = str(info.get("source_ch", "1")).strip() or "1"
+                src_type = str(info.get("source_type", "设定")).strip() or "设定"
+                row = cl.tbl_infos.rowCount()
+                cl.tbl_infos.insertRow(row)
+                for col, v in enumerate([final_id, content, src_ch, src_type]):
+                    cl.tbl_infos.setItem(row, col, QTableWidgetItem(v))
+                added["info"] = added.get("info", 0) + 1
+                ex_infos_by_content[content] = row
+
+        # v1.79:知情人 known_by(同时接受 known_by + info_disclosures,悬挂引用过滤)
+        if hasattr(cl, "tbl_known_by"):
+            ex_kbs = set()
+            for r in range(cl.tbl_known_by.rowCount()):
+                info_it = cl.tbl_known_by.item(r, 0)
+                ch_it = cl.tbl_known_by.item(r, 1)
+                if info_it and ch_it and info_it.text().strip() and ch_it.text().strip():
+                    ex_kbs.add(f"{info_it.text().strip()}|{ch_it.text().strip()}")
+
+            kb_records = []
+            for kb in (data.get("known_by") or []):
+                if isinstance(kb, dict):
+                    kb_records.append({
+                        "info_id": str(kb.get("info_id", "")).strip(),
+                        "character": str(kb.get("character", "")).strip(),
+                        "via": str(kb.get("via", "")).strip(),
+                    })
+            for dc in (data.get("info_disclosures") or []):
+                if isinstance(dc, dict):
+                    kb_records.append({
+                        "info_id": str(dc.get("info_id", "")).strip(),
+                        "character": str(dc.get("to", "") or dc.get("character", "")).strip(),
+                        "via": str(dc.get("via", "")).strip(),
+                    })
+
+            # 收集有效 info_ids 以过滤悬挂引用
+            valid_ids = set()
+            if hasattr(cl, "tbl_infos"):
+                for r in range(cl.tbl_infos.rowCount()):
+                    it = cl.tbl_infos.item(r, 0)
+                    if it and it.text().strip():
+                        valid_ids.add(it.text().strip())
+
+            for rec in kb_records:
+                info_id = id_remap.get(rec["info_id"], rec["info_id"])
+                character = rec["character"]
+                via = rec["via"]
+                if not (info_id and character):
+                    continue
+                if info_id not in valid_ids:
+                    continue  # 悬挂引用过滤
+                k = f"{info_id}|{character}"
+                if k in ex_kbs:
+                    continue
+                row = cl.tbl_known_by.rowCount()
+                cl.tbl_known_by.insertRow(row)
+                for col, v in enumerate([info_id, character, via or "未知途径"]):
+                    cl.tbl_known_by.setItem(row, col, QTableWidgetItem(v))
+                added["kb"] = added.get("kb", 0) + 1
+                ex_kbs.add(k)
 
         # v1.64+v1.74:hero_state 字段(B 方案 — AI 写完每章后自动同步主角状态)
         # 由 QSettings 开关控制,默认开启
@@ -15082,6 +15558,229 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.tab_generation.log(f"⚠️ 关系值变化检查解析失败:{e}", "warn")
 
+    # ──────────────────────────────────────────────────────────
+    # v1.79 BUG-059:信息隔离自动检查(知识穿帮 + 披露追踪)
+    # ──────────────────────────────────────────────────────────
+    # 与 v1.77/v1.78 的关键差异:info_check 是【侦测违规】而非【状态推进】 —
+    # AI 返回的不是"哪些条更新",而是"哪些角色穿帮了"。
+    # 命中违规时,系统不会自动修复正文(那需要重写),只标红警告给用户看。
+    # 用户判断是 AI 抽错了(可去 known_by 表里加补)还是 AI 写错了(需要重写章节)。
+
+    def _build_known_table_snapshot(self):
+        """构造发给 AI 的【已知信息边界】权威表(JSON 字符串)"""
+        if not (hasattr(self.tab_charlib, "tbl_infos")
+                and hasattr(self.tab_charlib, "tbl_known_by")):
+            return "[]"
+        # 1. 收集 info_id → content 索引
+        info_map = {}
+        for r in range(self.tab_charlib.tbl_infos.rowCount()):
+            iid = self.tab_charlib.tbl_infos.item(r, 0)
+            ct = self.tab_charlib.tbl_infos.item(r, 1)
+            if iid and ct and iid.text().strip() and ct.text().strip():
+                info_map[iid.text().strip()] = ct.text().strip()
+        # 2. 按 info_id 聚合知情人
+        by_info = {}
+        for r in range(self.tab_charlib.tbl_known_by.rowCount()):
+            iid_it = self.tab_charlib.tbl_known_by.item(r, 0)
+            ch_it = self.tab_charlib.tbl_known_by.item(r, 1)
+            if not (iid_it and ch_it):
+                continue
+            iid = iid_it.text().strip()
+            ch = ch_it.text().strip()
+            if not (iid and ch) or iid not in info_map:
+                continue
+            by_info.setdefault(iid, []).append(ch)
+        # 3. 序列化:[{info_id, content, knowers: [角色...]}, ...]
+        out = []
+        for iid, content in info_map.items():
+            out.append({
+                "info_id": iid,
+                "content": content,
+                "knowers": sorted(by_info.get(iid, [])),
+            })
+        return json.dumps(out, ensure_ascii=False)
+
+    def _run_info_check(self, content, ch_num):
+        """章末让 AI 扫描穿帮 — 某角色用了他不该知道的信息"""
+        if not (hasattr(self.tab_charlib, "tbl_infos")
+                and hasattr(self.tab_charlib, "tbl_known_by")):
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        if self.tab_charlib.tbl_infos.rowCount() == 0:
+            print(f"[info-check v1.79] ch={ch_num} 库里没 info,跳过", flush=True)
+            self.tab_generation.log(
+                f"🔒 第{ch_num}章 知识穿帮检查:库里没 info,跳过", "info")
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        kt = self._build_known_table_snapshot()
+        prompt = PROMPTS["info_check"].format(
+            known_table=kt, ch_num=ch_num, content=content[:6000])
+        print(f"[info-check v1.79] ch={ch_num} 检查 {self.tab_charlib.tbl_infos.rowCount()} 条 info, "
+              f"prompt {len(prompt)} 字", flush=True)
+        self.tab_generation.log(
+            f"🔒 知识穿帮检查-第{ch_num}章 → AI({self.tab_charlib.tbl_infos.rowCount()} 条 info, "
+            f"{len(prompt)} 字 prompt)", "info")
+        self._send_to_ai(prompt, f"知识穿帮检查-第{ch_num}章",
+                         target="info_check", ch_num=ch_num)
+
+    def _on_info_check_response(self, content, meta):
+        """AI 回复穿帮违规清单 → 标红警告(不自动修)"""
+        from datetime import datetime as _dt
+        ch_num = meta.get("ch_num", 0)
+        print(f"[info-check v1.79] ch={ch_num} AI 原始回复({len(content or '')} 字) "
+              f"前 200: {(content or '')[:200]!r}", flush=True)
+        try:
+            text = self._extract_json_blob(content)
+            arr = json.loads(text)
+            if not isinstance(arr, list):
+                self.tab_generation.log(
+                    f"⚠️ 知识穿帮检查:AI 返回的不是 JSON 数组(是 {type(arr).__name__}),"
+                    f"已忽略。原始前 200 字:{(content or '')[:200]}", "warn")
+                try:
+                    self.tab_charlib.lbl_last_info_check.setText(
+                        f"⚠ 最近检查:第{ch_num}章 AI 输出格式错误(非数组) "
+                        f"@ {_dt.now().strftime('%H:%M:%S')}")
+                    self.tab_charlib.lbl_last_info_check.setStyleSheet(
+                        "color: #c00; font-size: 11px; padding: 4px 6px; "
+                        "background: #fff5f5; border: 1px solid #fcc; border-radius: 3px;")
+                except Exception:
+                    pass
+                return
+            violations = []
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                info_id = str(it.get("info_id", "")).strip()
+                character = str(it.get("character", "")).strip()
+                evidence = str(it.get("evidence", "")).strip()
+                why = str(it.get("why_should_not_know", "")).strip()
+                if not (info_id and character):
+                    continue
+                violations.append((info_id, character, evidence, why))
+            ts = _dt.now().strftime("%H:%M:%S")
+            try:
+                if violations:
+                    self.tab_charlib.lbl_last_info_check.setText(
+                        f"🚨 最近检查:第{ch_num}章 发现 {len(violations)} 处知识穿帮 — 请人工核查"
+                        f" @ {ts}")
+                    self.tab_charlib.lbl_last_info_check.setStyleSheet(
+                        "color: #fff; font-weight: bold; font-size: 11px; "
+                        "padding: 4px 6px; background: #c00; "
+                        "border: 1px solid #800; border-radius: 3px;")
+                    for info_id, character, evidence, why in violations:
+                        self.tab_generation.log(
+                            f"  🚨 穿帮:[{info_id}] {character} — 证据『{evidence[:30]}』,原因『{why[:30]}』",
+                            "warn")
+                else:
+                    self.tab_charlib.lbl_last_info_check.setText(
+                        f"✅ 最近检查:第{ch_num}章 无知识穿帮 @ {ts}")
+                    self.tab_charlib.lbl_last_info_check.setStyleSheet(
+                        "color: #060; font-weight: bold; font-size: 11px; "
+                        "padding: 4px 6px; background: #eeffee; "
+                        "border: 1px solid #aca; border-radius: 3px;")
+            except Exception:
+                pass
+            self.tab_generation.log(
+                f"✓ 知识穿帮检查完成:第{ch_num}章 {len(violations)} 处违规", "info")
+        except Exception as e:
+            self.tab_generation.log(f"⚠️ 知识穿帮检查解析失败:{e}", "warn")
+            try:
+                self.tab_charlib.lbl_last_info_check.setText(
+                    f"⚠ 最近检查:第{ch_num}章 JSON 解析失败({e}) "
+                    f"@ {_dt.now().strftime('%H:%M:%S')}")
+                self.tab_charlib.lbl_last_info_check.setStyleSheet(
+                    "color: #c00; font-size: 11px; padding: 4px 6px; "
+                    "background: #fff5f5; border: 1px solid #fcc; border-radius: 3px;")
+            except Exception:
+                pass
+
+    def _run_info_disclose_check(self, content, ch_num):
+        """章末让 AI 扫描新披露事件 — 谁本章新知道了什么"""
+        if not (hasattr(self.tab_charlib, "tbl_infos")
+                and hasattr(self.tab_charlib, "tbl_known_by")):
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        if self.tab_charlib.tbl_infos.rowCount() == 0:
+            print(f"[info-disclose v1.79] ch={ch_num} 库里没 info,跳过", flush=True)
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        # info 表
+        info_tbl_list = []
+        for r in range(self.tab_charlib.tbl_infos.rowCount()):
+            iid = self.tab_charlib.tbl_infos.item(r, 0)
+            ct = self.tab_charlib.tbl_infos.item(r, 1)
+            if iid and ct and iid.text().strip():
+                info_tbl_list.append({
+                    "info_id": iid.text().strip(),
+                    "content": ct.text().strip()})
+        kt = self._build_known_table_snapshot()
+        prompt = PROMPTS["info_disclose_check"].format(
+            info_table=json.dumps(info_tbl_list, ensure_ascii=False),
+            known_table=kt, ch_num=ch_num, content=content[:6000])
+        print(f"[info-disclose v1.79] ch={ch_num} 扫描披露事件, "
+              f"prompt {len(prompt)} 字", flush=True)
+        self.tab_generation.log(
+            f"🔒 信息披露追踪-第{ch_num}章 → AI({len(prompt)} 字 prompt)", "info")
+        self._send_to_ai(prompt, f"信息披露追踪-第{ch_num}章",
+                         target="info_disclose_check", ch_num=ch_num)
+
+    def _on_info_disclose_check_response(self, content, meta):
+        """AI 回复新披露事件 → 自动入库到 known_by"""
+        from PyQt5.QtWidgets import QTableWidgetItem
+        ch_num = meta.get("ch_num", 0)
+        print(f"[info-disclose v1.79] ch={ch_num} AI 原始回复({len(content or '')} 字) "
+              f"前 200: {(content or '')[:200]!r}", flush=True)
+        try:
+            text = self._extract_json_blob(content)
+            arr = json.loads(text)
+            if not isinstance(arr, list):
+                self.tab_generation.log(
+                    f"⚠️ 信息披露追踪:AI 返回的不是 JSON 数组(是 {type(arr).__name__}),"
+                    f"已忽略。原始前 200 字:{(content or '')[:200]}", "warn")
+                return
+            # 现有 known_by 索引(防去重)
+            ex_kbs = set()
+            tbl = self.tab_charlib.tbl_known_by
+            for r in range(tbl.rowCount()):
+                iid_it = tbl.item(r, 0)
+                ch_it = tbl.item(r, 1)
+                if iid_it and ch_it and iid_it.text().strip() and ch_it.text().strip():
+                    ex_kbs.add(f"{iid_it.text().strip()}|{ch_it.text().strip()}")
+            # 有效 info_ids 集合(过滤悬挂引用)
+            valid_ids = set()
+            for r in range(self.tab_charlib.tbl_infos.rowCount()):
+                it = self.tab_charlib.tbl_infos.item(r, 0)
+                if it and it.text().strip():
+                    valid_ids.add(it.text().strip())
+            count = 0
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                info_id = str(it.get("info_id", "")).strip()
+                to = str(it.get("to", "")).strip()
+                via = str(it.get("via", "")).strip()
+                if not (info_id and to):
+                    continue
+                if info_id not in valid_ids:
+                    self.tab_generation.log(
+                        f"  ⚠️ 跳过悬挂引用:[{info_id}] 不在 infos 表里", "warn")
+                    continue
+                k = f"{info_id}|{to}"
+                if k in ex_kbs:
+                    continue
+                row = tbl.rowCount()
+                tbl.insertRow(row)
+                for col, v in enumerate([info_id, to, via or f"第{ch_num}章新披露"]):
+                    tbl.setItem(row, col, QTableWidgetItem(v))
+                count += 1
+                ex_kbs.add(k)
+                self.tab_generation.log(
+                    f"  ✓ 新披露:[{info_id}] → {to} 通过『{via[:30]}』", "info")
+            self.tab_generation.log(
+                f"✓ 信息披露追踪完成:第{ch_num}章 新入库 {count} 条 known_by", "info")
+        except Exception as e:
+            self.tab_generation.log(f"⚠️ 信息披露追踪解析失败:{e}", "warn")
+
     def _post_chapter_chain(self, ch_num):
         """章节通过后的链式处理:Canon 抽取 → 6库抽取 → 章末技能 → 摘要 → 下一章"""
         if ch_num <= 0:
@@ -15169,6 +15868,17 @@ class MainWindow(QMainWindow):
             if _has_rel:
                 pipeline.append(("relation_change_check", ch_num))
 
+        # v1.79 BUG-059:信息隔离检查 — 两阶段
+        # 1) info_disclose_check:扫描本章新披露事件,自动入库到 known_by
+        # 2) info_check:扫描穿帮违规(某角色用了他不该知道的信息)— 标红警告,不自动修
+        # 顺序很重要:disclose 必须在 check 之前 — 因为 check 用的 known_by 表里
+        # 应包含本章新披露的人,否则会把"刚听完就用上的合法对话"误判为穿帮
+        if hasattr(self.tab_charlib, "tbl_infos"):
+            _has_info = self.tab_charlib.tbl_infos.rowCount() > 0
+            if _has_info:
+                pipeline.append(("info_disclose_check", ch_num))
+                pipeline.append(("info_check", ch_num))
+
         # after_chapter_generation 技能(固定自动触发)
         for s in self.tab_skills.get_after_chapter_skills():
             pipeline.append(("skill_after", ch_num, s))
@@ -15252,6 +15962,22 @@ class MainWindow(QMainWindow):
             ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
             if ch and ch.get("content"):
                 self._run_relation_change_check(ch["content"], ch_num)
+            else:
+                QTimer.singleShot(100, self._run_next_post_chapter_step)
+        elif step[0] == "info_disclose_check":
+            # v1.79 BUG-059:扫描新披露事件
+            ch_num = step[1]
+            ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
+            if ch and ch.get("content"):
+                self._run_info_disclose_check(ch["content"], ch_num)
+            else:
+                QTimer.singleShot(100, self._run_next_post_chapter_step)
+        elif step[0] == "info_check":
+            # v1.79 BUG-059:扫描穿帮违规(标红警告,不自动修)
+            ch_num = step[1]
+            ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
+            if ch and ch.get("content"):
+                self._run_info_check(ch["content"], ch_num)
             else:
                 QTimer.singleShot(100, self._run_next_post_chapter_step)
         elif step[0] == "skill_after":
