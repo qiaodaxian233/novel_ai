@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.85"
+APP_VERSION = "v1.86"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -4942,6 +4942,11 @@ class CharacterLibrary(QWidget):
         self.tree_plot.setEditTriggers(
             QTreeWidget.DoubleClicked | QTreeWidget.SelectedClicked)
         self.tree_plot.setSelectionMode(QAbstractItemView.SingleSelection)
+        # v1.86:右键菜单 — 反查相关数据(角色/伏笔/承诺/关系/信息/章节)
+        from PyQt5.QtCore import Qt as _Qt
+        self.tree_plot.setContextMenuPolicy(_Qt.CustomContextMenu)
+        self.tree_plot.customContextMenuRequested.connect(
+            self._show_plot_node_context_menu)
         lay.addWidget(self.tree_plot)
 
         tip = QLabel(
@@ -4949,7 +4954,8 @@ class CharacterLibrary(QWidget):
             "    4 层结构:故事(根)→ 阶段(几十章)→ 章节槽(几章)→ 剧情点(单章)。\n"
             "    每节点 5 字段:名/类型/章节范围/备注/已挂章号(v1.85 章末 AI 自动回流)。\n"
             "    支持拖拽重排;每章注入时,系统会找到当前章节所在的最近祖先节点。\n"
-            "    v1.85:章节生成后,AI 自动判定『本章写到了哪个节点』,把章号回流到对应节点的『已挂章号』列。")
+            "    v1.85:章节生成后,AI 自动判定『本章写到了哪个节点』,把章号回流到对应节点的『已挂章号』列。\n"
+            "    v1.86:右键节点 → 『🔍 反查相关数据』查看该节点关联的角色/伏笔/承诺/关系/信息。")
         tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
@@ -5035,6 +5041,267 @@ class CharacterLibrary(QWidget):
         else:
             idx = self.tree_plot.indexOfTopLevelItem(cur)
             self.tree_plot.takeTopLevelItem(idx)
+
+    # ── v1.86 BUG-063:多视角反查 ────────────────────────────
+    # 右键剧情树节点 → 弹窗显示该节点关联的角色/伏笔/承诺/关系/信息
+    # 反查算法基于该节点的 chapter_links 第 5 列 + ch_range 字段(扩大查找范围)
+
+    def _node_chapter_set(self, item):
+        """从节点的 chapter_links + ch_range 算出"该节点关联的章号集合"
+        返回 set[int]。ch_range 是用户预设范围,chapter_links 是 AI 回流的实际章号"""
+        chs = set()
+        # 1. chapter_links 第 5 列(逗号分隔)
+        if item.columnCount() > 4:
+            for c in (item.text(4) or "").split(","):
+                c = c.strip()
+                try:
+                    chs.add(int(c))
+                except ValueError:
+                    pass
+        # 2. ch_range 第 3 列("3-10" 或 "5")
+        cr = (item.text(2) or "").strip()
+        if cr:
+            if "-" in cr:
+                try:
+                    a, b = cr.split("-", 1)
+                    for ch in range(int(a), int(b) + 1):
+                        chs.add(ch)
+                except ValueError:
+                    pass
+            else:
+                try:
+                    chs.add(int(cr))
+                except ValueError:
+                    pass
+        return chs
+
+    def _compute_node_cross_refs(self, item):
+        """v1.86 核心反查算法:给定剧情树节点,返回关联的各库条目。
+        纯数据计算函数,无 UI 副作用,易测试。
+
+        返回 dict:{
+          "chapters":    [int, ...]               关联章号(排序)
+          "foreshadows": [(row, 内容, 埋设章, 回收章, 已回收), ...]
+          "promises":    [(row, 类型, 发起者→对象, 内容, 埋设章, 截止章), ...]
+          "rel_changes": [(row, A, B, value, 章号), ...]
+          "infos":       [(row, info_id, 内容, 来源章, 来源类型), ...]
+          "characters":  [(row, 姓名, 角色定位, 首次出场), ...]
+        }
+        """
+        chs = self._node_chapter_set(item)
+
+        # 1. 章节列表(直接复用 chs)
+        out = {"chapters": sorted(chs)}
+
+        # 2. 伏笔:埋设章 ∈ chs 或 回收章 ∈ chs
+        out["foreshadows"] = []
+        if hasattr(self, "tbl_fore"):
+            for r in range(self.tbl_fore.rowCount()):
+                set_ch_s = (self.tbl_fore.item(r, 0).text() if self.tbl_fore.item(r, 0) else "")
+                content_s = (self.tbl_fore.item(r, 1).text() if self.tbl_fore.item(r, 1) else "")
+                plan_ch_s = (self.tbl_fore.item(r, 2).text() if self.tbl_fore.item(r, 2) else "")
+                done_s = (self.tbl_fore.item(r, 3).text() if self.tbl_fore.item(r, 3) else "")
+                recover_ch_s = (self.tbl_fore.item(r, 4).text() if self.tbl_fore.item(r, 4) else "")
+                hit = False
+                for ch_s in (set_ch_s, recover_ch_s):
+                    try:
+                        if int(ch_s) in chs:
+                            hit = True
+                            break
+                    except ValueError:
+                        continue
+                if hit:
+                    out["foreshadows"].append(
+                        (r, content_s, set_ch_s, recover_ch_s or plan_ch_s, done_s))
+
+        # 3. 承诺:埋设章 ∈ chs 或 截止章 ∈ chs
+        out["promises"] = []
+        if hasattr(self, "tbl_promises"):
+            for r in range(self.tbl_promises.rowCount()):
+                set_ch_s = (self.tbl_promises.item(r, 0).text() if self.tbl_promises.item(r, 0) else "")
+                kind = (self.tbl_promises.item(r, 1).text() if self.tbl_promises.item(r, 1) else "")
+                a = (self.tbl_promises.item(r, 2).text() if self.tbl_promises.item(r, 2) else "")
+                b = (self.tbl_promises.item(r, 3).text() if self.tbl_promises.item(r, 3) else "")
+                content = (self.tbl_promises.item(r, 4).text() if self.tbl_promises.item(r, 4) else "")
+                deadline_s = (self.tbl_promises.item(r, 5).text() if self.tbl_promises.item(r, 5) else "")
+                hit = False
+                for ch_s in (set_ch_s, deadline_s):
+                    try:
+                        if int(ch_s) in chs:
+                            hit = True
+                            break
+                    except ValueError:
+                        continue
+                if hit:
+                    out["promises"].append((r, kind, f"{a}→{b}", content, set_ch_s, deadline_s))
+
+        # 4. 关系值变化:最近变化章 ∈ chs
+        out["rel_changes"] = []
+        if hasattr(self, "tbl_rel_values"):
+            for r in range(self.tbl_rel_values.rowCount()):
+                a = (self.tbl_rel_values.item(r, 0).text() if self.tbl_rel_values.item(r, 0) else "")
+                b = (self.tbl_rel_values.item(r, 1).text() if self.tbl_rel_values.item(r, 1) else "")
+                val = (self.tbl_rel_values.item(r, 2).text() if self.tbl_rel_values.item(r, 2) else "")
+                ch_s = (self.tbl_rel_values.item(r, 3).text() if self.tbl_rel_values.item(r, 3) else "")
+                try:
+                    if int(ch_s) in chs:
+                        out["rel_changes"].append((r, a, b, val, ch_s))
+                except ValueError:
+                    continue
+
+        # 5. 信息:来源章 ∈ chs
+        out["infos"] = []
+        if hasattr(self, "tbl_infos"):
+            for r in range(self.tbl_infos.rowCount()):
+                iid = (self.tbl_infos.item(r, 0).text() if self.tbl_infos.item(r, 0) else "")
+                content = (self.tbl_infos.item(r, 1).text() if self.tbl_infos.item(r, 1) else "")
+                src_ch_s = (self.tbl_infos.item(r, 2).text() if self.tbl_infos.item(r, 2) else "")
+                src_type = (self.tbl_infos.item(r, 3).text() if self.tbl_infos.item(r, 3) else "")
+                try:
+                    if int(src_ch_s) in chs:
+                        out["infos"].append((r, iid, content, src_ch_s, src_type))
+                except ValueError:
+                    continue
+
+        # 6. 角色:首次出场 ∈ chs(简化判定 — 用首次出场字段)
+        out["characters"] = []
+        if hasattr(self, "tbl_chars"):
+            for r in range(self.tbl_chars.rowCount()):
+                name = (self.tbl_chars.item(r, 0).text() if self.tbl_chars.item(r, 0) else "")
+                role = (self.tbl_chars.item(r, 1).text() if self.tbl_chars.item(r, 1) else "")
+                first_s = (self.tbl_chars.item(r, 7).text() if self.tbl_chars.item(r, 7) else "")
+                try:
+                    if int(first_s) in chs:
+                        out["characters"].append((r, name, role, first_s))
+                except ValueError:
+                    continue
+
+        return out
+
+    def _show_plot_node_context_menu(self, pos):
+        """v1.86:剧情树右键菜单 — 反查相关数据"""
+        from PyQt5.QtWidgets import QMenu
+        item = self.tree_plot.itemAt(pos)
+        if not item:
+            return
+        menu = QMenu(self.tree_plot)
+        act = menu.addAction("🔍 反查相关数据")
+        act.triggered.connect(lambda: self._open_node_cross_refs_dialog(item))
+        menu.exec_(self.tree_plot.viewport().mapToGlobal(pos))
+
+    def _open_node_cross_refs_dialog(self, item):
+        """v1.86:弹反查结果对话框"""
+        from PyQt5.QtWidgets import (
+            QDialog, QVBoxLayout, QGroupBox, QListWidget, QLabel,
+            QPushButton, QHBoxLayout, QScrollArea, QWidget)
+        from PyQt5.QtCore import Qt as _Qt
+        refs = self._compute_node_cross_refs(item)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"🔍 反查:{item.text(0)}({item.text(1)})")
+        dlg.resize(560, 600)
+        outer = QVBoxLayout(dlg)
+
+        # 顶部摘要
+        chs = refs["chapters"]
+        chs_str = ", ".join(str(c) for c in chs) if chs else "(暂无)"
+        totals = (f"📊 关联统计:章节 {len(chs)} | 角色 {len(refs['characters'])} | "
+                  f"伏笔 {len(refs['foreshadows'])} | 承诺 {len(refs['promises'])} | "
+                  f"关系变 {len(refs['rel_changes'])} | 信息 {len(refs['infos'])}")
+        head = QLabel(totals)
+        head.setStyleSheet(
+            "color:#fff;background:#3a6fc4;font-weight:bold;"
+            "padding:6px 8px;border-radius:4px;font-size:11px;")
+        head.setWordWrap(True)
+        outer.addWidget(head)
+
+        ch_label = QLabel(f"📖 关联章节:{chs_str}")
+        ch_label.setStyleSheet("color:#444;padding:4px 8px;font-size:11px;")
+        ch_label.setWordWrap(True)
+        outer.addWidget(ch_label)
+
+        # 可滚动内容区
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        body = QWidget()
+        body_lay = QVBoxLayout(body)
+        body_lay.setSpacing(8)
+
+        def _add_group(title, rows, empty_hint):
+            box = QGroupBox(title)
+            box_lay = QVBoxLayout(box)
+            if not rows:
+                lbl = QLabel(empty_hint)
+                lbl.setStyleSheet("color:#999;padding:8px;font-style:italic;")
+                box_lay.addWidget(lbl)
+            else:
+                lw = QListWidget()
+                for line in rows:
+                    lw.addItem(line)
+                lw.setMaximumHeight(min(180, 24 * len(rows) + 12))
+                box_lay.addWidget(lw)
+            body_lay.addWidget(box)
+
+        # 角色
+        char_rows = [
+            f"  • {name}({role}) — 首次出场:第 {first} 章"
+            for (r, name, role, first) in refs["characters"]
+        ]
+        _add_group(
+            f"👤 角色({len(char_rows)})", char_rows,
+            "(此节点关联章节里无新角色首次出场)")
+
+        # 伏笔
+        fore_rows = [
+            f"  • [{('✅已收' if done == '是' else '⏳待收')}] "
+            f"第{set_ch}章: 『{content[:30]}』"
+            + (f" → 第{recover}章" if recover and recover != set_ch else "")
+            for (r, content, set_ch, recover, done) in refs["foreshadows"]
+        ]
+        _add_group(
+            f"📌 伏笔({len(fore_rows)})", fore_rows,
+            "(无伏笔在此节点章节范围内埋设/回收)")
+
+        # 承诺
+        prom_rows = [
+            f"  • [{kind}] {pair} — 『{content[:30]}』 "
+            f"(第{set_ch}章埋 → 第{deadline}章截止)"
+            for (r, kind, pair, content, set_ch, deadline) in refs["promises"]
+        ]
+        _add_group(
+            f"⚡ 威胁承诺({len(prom_rows)})", prom_rows,
+            "(无承诺在此节点章节范围内埋设/截止)")
+
+        # 关系值变化
+        rel_rows = [
+            f"  • {a} ↔ {b}: {val} (第 {ch} 章)"
+            for (r, a, b, val, ch) in refs["rel_changes"]
+        ]
+        _add_group(
+            f"💞 关系值变动({len(rel_rows)})", rel_rows,
+            "(无关系值在此节点章节范围内变化)")
+
+        # 信息
+        info_rows = [
+            f"  • [{iid}/{src_type}] 第 {src_ch} 章: 『{content[:40]}』"
+            for (r, iid, content, src_ch, src_type) in refs["infos"]
+        ]
+        _add_group(
+            f"🔒 关键信息({len(info_rows)})", info_rows,
+            "(无关键信息在此节点章节范围内首次确立)")
+
+        scroll.setWidget(body)
+        outer.addWidget(scroll, stretch=1)
+
+        # 底部关闭按钮
+        bot = QHBoxLayout()
+        bot.addStretch()
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dlg.accept)
+        bot.addWidget(btn_close)
+        outer.addLayout(bot)
+
+        dlg.exec_()
 
     def _tree_to_list(self):
         """剧情树 → 扁平 list[{node_id, parent_id, name, kind, ch_range, note, chapter_links}]
