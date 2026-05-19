@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.86"
+APP_VERSION = "v1.87"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -3913,6 +3913,7 @@ class CharacterLibrary(QWidget):
         self._build_plot_tree_tab()       # v1.80 新增:🌳 剧情树(QTreeWidget 4 层)
         self._build_hooks_tab()      # 新增:钩子编年
         self._build_coolpts_tab()    # 新增:爽点编年
+        self._build_cross_graph_tab()  # v1.87 新增:🕸️ 关联图谱(QGraphicsView 跨表可视化)
 
         # v1.70: 切换到 🕸️ 关系网 子页时自动用最新数据刷新图
         self.sub_tabs.currentChanged.connect(self._on_sub_tab_changed)
@@ -5302,6 +5303,436 @@ class CharacterLibrary(QWidget):
         outer.addLayout(bot)
 
         dlg.exec_()
+
+    # ── v1.87 BUG-064:跨表关联可视化(系列收官)─────────────────
+    # 用 QGraphicsView 画"剧情节点 ↔ 角色 ↔ 伏笔 ↔ 承诺 ↔ 关系 ↔ 信息"网络图
+    # 节点用颜色区分类别,边用同章号关联(复用 v1.86 反查算法)
+    # 布局用力导向算法(Fruchterman-Reingold 简化版,纯 Python 实现)
+    # 不依赖 cytoscape.js / QtWebEngine,纯 PyQt5
+
+    def _build_cross_graph_tab(self):
+        from PyQt5.QtWidgets import (
+            QGraphicsView, QGraphicsScene, QVBoxLayout, QHBoxLayout,
+            QPushButton, QLabel, QSpinBox, QCheckBox)
+        from PyQt5.QtGui import QPainter
+        from PyQt5.QtCore import Qt
+
+        w = QWidget()
+        lay = QVBoxLayout(w)
+
+        # 顶部控件栏
+        ctl = QHBoxLayout()
+        btn_refresh = QPushButton("🔄 重新生成布局")
+        btn_refresh.setToolTip(
+            "扫描所有库,重建关联图谱。\n"
+            "如果改了剧情树 / 6 库数据,点这个刷新。")
+        btn_refresh.clicked.connect(self._render_cross_graph)
+        ctl.addWidget(btn_refresh)
+
+        ctl.addWidget(QLabel("迭代次数:"))
+        self.sb_graph_iters = QSpinBox()
+        self.sb_graph_iters.setRange(10, 200)
+        self.sb_graph_iters.setValue(50)
+        self.sb_graph_iters.setToolTip(
+            "力导向算法迭代次数。值大布局更稳定但更慢。50 一般够用。")
+        ctl.addWidget(self.sb_graph_iters)
+
+        ctl.addSpacing(20)
+        ctl.addWidget(QLabel("显示:"))
+        self.chk_show_chars = QCheckBox("👤 角色")
+        self.chk_show_chars.setChecked(True)
+        self.chk_show_chars.stateChanged.connect(
+            lambda _: self._render_cross_graph())
+        ctl.addWidget(self.chk_show_chars)
+
+        self.chk_show_fore = QCheckBox("📌 伏笔")
+        self.chk_show_fore.setChecked(True)
+        self.chk_show_fore.stateChanged.connect(
+            lambda _: self._render_cross_graph())
+        ctl.addWidget(self.chk_show_fore)
+
+        self.chk_show_promises = QCheckBox("⚡ 承诺")
+        self.chk_show_promises.setChecked(True)
+        self.chk_show_promises.stateChanged.connect(
+            lambda _: self._render_cross_graph())
+        ctl.addWidget(self.chk_show_promises)
+
+        self.chk_show_infos = QCheckBox("🔒 信息")
+        self.chk_show_infos.setChecked(True)
+        self.chk_show_infos.stateChanged.connect(
+            lambda _: self._render_cross_graph())
+        ctl.addWidget(self.chk_show_infos)
+
+        ctl.addStretch()
+        lay.addLayout(ctl)
+
+        # 主视图
+        self.cross_graph_scene = QGraphicsScene()
+        self.cross_graph_view = QGraphicsView(self.cross_graph_scene)
+        self.cross_graph_view.setRenderHint(QPainter.Antialiasing)
+        self.cross_graph_view.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.cross_graph_view.setTransformationAnchor(
+            QGraphicsView.AnchorUnderMouse)
+        # 滚轮缩放
+        self.cross_graph_view.wheelEvent = self._cross_graph_wheel
+        lay.addWidget(self.cross_graph_view, stretch=1)
+
+        # 底部提示
+        tip = QLabel(
+            "💡 v1.87 跨表关联可视化(系列收官)— 一图看尽剧情节点/角色/伏笔/承诺/信息的关联。\n"
+            "    边的含义:连同章号(剧情节点 chapter_links/ch_range + 其他库的章号字段)。\n"
+            "    交互:鼠标拖拽节点 / 滚轮缩放视图 / 顶部勾选过滤类别。\n"
+            "    布局:力导向算法(纯 Python 实现,无外部依赖)。空白图请点【🔄 重新生成布局】。")
+        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+
+        self.sub_tabs.addTab(w, "🕸 关联图谱")
+
+    def _cross_graph_wheel(self, event):
+        """滚轮缩放视图"""
+        factor = 1.2 if event.angleDelta().y() > 0 else 1 / 1.2
+        self.cross_graph_view.scale(factor, factor)
+
+    def _collect_graph_data(self):
+        """v1.87:收集图谱节点和边。
+        返回 (nodes, edges):
+          nodes = [{id, label, kind, color}]
+            kind ∈ {plot, char, fore, promise, info}
+          edges = [(node_id_a, node_id_b, label)]
+            label 通常是章号
+        """
+        nodes = []
+        edges = []
+        # 配色(v1.87 调色板 — 与盘古风格协调)
+        COLORS = {
+            "plot":    "#3a6fc4",  # 蓝
+            "char":    "#2da44e",  # 绿
+            "fore":    "#dd7e1c",  # 橙
+            "promise": "#cf222e",  # 红
+            "info":    "#8250df",  # 紫
+        }
+
+        # 1. 剧情树节点(始终显示 — 是中心枢纽)
+        plot_nodes_data = {}  # node_id → (ch_set, item)
+        if hasattr(self, "tree_plot"):
+            def walk(item):
+                nid = item.data(0, 256) or ""  # Qt.UserRole = 256
+                if nid and item.text(0).strip():
+                    label = item.text(0)[:14]  # 截短防爆
+                    nodes.append({
+                        "id": f"plot:{nid}",
+                        "label": label,
+                        "kind": "plot",
+                        "color": COLORS["plot"],
+                    })
+                    plot_nodes_data[f"plot:{nid}"] = (
+                        self._node_chapter_set(item), item)
+                for i in range(item.childCount()):
+                    walk(item.child(i))
+            for i in range(self.tree_plot.topLevelItemCount()):
+                walk(self.tree_plot.topLevelItem(i))
+
+        # 没剧情节点 — 没参考点,空图返回
+        if not plot_nodes_data:
+            return nodes, edges
+
+        # 类别过滤(根据顶部 checkbox)
+        show_chars = getattr(self, "chk_show_chars", None)
+        show_chars = show_chars.isChecked() if show_chars else True
+        show_fore = getattr(self, "chk_show_fore", None)
+        show_fore = show_fore.isChecked() if show_fore else True
+        show_promises = getattr(self, "chk_show_promises", None)
+        show_promises = show_promises.isChecked() if show_promises else True
+        show_infos = getattr(self, "chk_show_infos", None)
+        show_infos = show_infos.isChecked() if show_infos else True
+
+        # 2. 角色(只画跟剧情节点有关联的)
+        if show_chars and hasattr(self, "tbl_chars"):
+            for r in range(self.tbl_chars.rowCount()):
+                name = (self.tbl_chars.item(r, 0).text()
+                        if self.tbl_chars.item(r, 0) else "")
+                first_s = (self.tbl_chars.item(r, 7).text()
+                           if self.tbl_chars.item(r, 7) else "")
+                if not name:
+                    continue
+                try:
+                    first_ch = int(first_s)
+                except ValueError:
+                    continue
+                # 找哪些剧情节点包含这个章号
+                connected_plots = [
+                    pid for pid, (chs, _it) in plot_nodes_data.items()
+                    if first_ch in chs
+                ]
+                if connected_plots:
+                    cid = f"char:{r}"
+                    nodes.append({
+                        "id": cid,
+                        "label": name[:10],
+                        "kind": "char",
+                        "color": COLORS["char"],
+                    })
+                    for pid in connected_plots:
+                        edges.append((pid, cid, f"第{first_ch}章"))
+
+        # 3. 伏笔
+        if show_fore and hasattr(self, "tbl_fore"):
+            for r in range(self.tbl_fore.rowCount()):
+                set_ch_s = (self.tbl_fore.item(r, 0).text()
+                            if self.tbl_fore.item(r, 0) else "")
+                content = (self.tbl_fore.item(r, 1).text()
+                           if self.tbl_fore.item(r, 1) else "")
+                recover_ch_s = (self.tbl_fore.item(r, 4).text()
+                                if self.tbl_fore.item(r, 4) else "")
+                if not content:
+                    continue
+                connected_plots = []
+                for ch_s in (set_ch_s, recover_ch_s):
+                    try:
+                        ch = int(ch_s)
+                    except ValueError:
+                        continue
+                    for pid, (chs, _it) in plot_nodes_data.items():
+                        if ch in chs and pid not in connected_plots:
+                            connected_plots.append(pid)
+                if connected_plots:
+                    fid = f"fore:{r}"
+                    nodes.append({
+                        "id": fid,
+                        "label": content[:10],
+                        "kind": "fore",
+                        "color": COLORS["fore"],
+                    })
+                    # 用最早的章号作 label
+                    label_ch = set_ch_s or recover_ch_s
+                    for pid in connected_plots:
+                        edges.append((pid, fid, f"第{label_ch}章"))
+
+        # 4. 承诺
+        if show_promises and hasattr(self, "tbl_promises"):
+            for r in range(self.tbl_promises.rowCount()):
+                set_ch_s = (self.tbl_promises.item(r, 0).text()
+                            if self.tbl_promises.item(r, 0) else "")
+                kind = (self.tbl_promises.item(r, 1).text()
+                        if self.tbl_promises.item(r, 1) else "")
+                content = (self.tbl_promises.item(r, 4).text()
+                           if self.tbl_promises.item(r, 4) else "")
+                deadline_s = (self.tbl_promises.item(r, 5).text()
+                              if self.tbl_promises.item(r, 5) else "")
+                if not content:
+                    continue
+                connected_plots = []
+                for ch_s in (set_ch_s, deadline_s):
+                    try:
+                        ch = int(ch_s)
+                    except ValueError:
+                        continue
+                    for pid, (chs, _it) in plot_nodes_data.items():
+                        if ch in chs and pid not in connected_plots:
+                            connected_plots.append(pid)
+                if connected_plots:
+                    pid_ = f"promise:{r}"
+                    nodes.append({
+                        "id": pid_,
+                        "label": f"[{kind[:2]}]{content[:8]}",
+                        "kind": "promise",
+                        "color": COLORS["promise"],
+                    })
+                    label_ch = set_ch_s or deadline_s
+                    for pid in connected_plots:
+                        edges.append((pid, pid_, f"第{label_ch}章"))
+
+        # 5. 信息
+        if show_infos and hasattr(self, "tbl_infos"):
+            for r in range(self.tbl_infos.rowCount()):
+                iid = (self.tbl_infos.item(r, 0).text()
+                       if self.tbl_infos.item(r, 0) else "")
+                content = (self.tbl_infos.item(r, 1).text()
+                           if self.tbl_infos.item(r, 1) else "")
+                src_ch_s = (self.tbl_infos.item(r, 2).text()
+                            if self.tbl_infos.item(r, 2) else "")
+                if not iid:
+                    continue
+                try:
+                    src_ch = int(src_ch_s)
+                except ValueError:
+                    continue
+                connected_plots = [
+                    pid for pid, (chs, _it) in plot_nodes_data.items()
+                    if src_ch in chs
+                ]
+                if connected_plots:
+                    nid_ = f"info:{r}"
+                    label_show = iid if len(iid) <= 10 else iid[:10]
+                    nodes.append({
+                        "id": nid_,
+                        "label": label_show,
+                        "kind": "info",
+                        "color": COLORS["info"],
+                    })
+                    for pid in connected_plots:
+                        edges.append((pid, nid_, f"第{src_ch}章"))
+
+        return nodes, edges
+
+    def _force_directed_layout(self, nodes, edges, iters=50,
+                                width=800, height=600):
+        """v1.87:简化版 Fruchterman-Reingold 力导向布局。
+        节点初始随机位置,每轮迭代:
+          - 所有节点对之间施加斥力(防重叠)
+          - 边连接的节点对之间施加引力(往中心拉)
+          - 节点位置受温度限制,逐轮降温(模拟退火)
+        返回 {node_id: (x, y)}"""
+        import random
+        import math
+        if not nodes:
+            return {}
+        n = len(nodes)
+        # 理想边长 k
+        area = width * height
+        k = math.sqrt(area / n) * 0.6
+        # 初始位置(中心附近随机散开)
+        random.seed(42)  # 可重现
+        pos = {
+            node["id"]: [
+                width / 2 + random.uniform(-width / 4, width / 4),
+                height / 2 + random.uniform(-height / 4, height / 4),
+            ] for node in nodes
+        }
+        # 温度(逐轮降)
+        t = width / 10.0
+
+        node_ids = [n["id"] for n in nodes]
+        edge_set = [(a, b) for (a, b, _label) in edges
+                    if a in pos and b in pos]
+
+        for _it in range(iters):
+            # 1. 计算每个节点位移
+            disp = {nid: [0.0, 0.0] for nid in node_ids}
+            # 斥力(所有节点对)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    nid_a = node_ids[i]
+                    nid_b = node_ids[j]
+                    dx = pos[nid_a][0] - pos[nid_b][0]
+                    dy = pos[nid_a][1] - pos[nid_b][1]
+                    dist = math.sqrt(dx * dx + dy * dy) + 0.01
+                    # 斥力 = k² / dist
+                    force = (k * k) / dist
+                    disp[nid_a][0] += (dx / dist) * force
+                    disp[nid_a][1] += (dy / dist) * force
+                    disp[nid_b][0] -= (dx / dist) * force
+                    disp[nid_b][1] -= (dy / dist) * force
+            # 引力(只对相连节点)
+            for a, b in edge_set:
+                dx = pos[a][0] - pos[b][0]
+                dy = pos[a][1] - pos[b][1]
+                dist = math.sqrt(dx * dx + dy * dy) + 0.01
+                # 引力 = dist² / k
+                force = (dist * dist) / k
+                disp[a][0] -= (dx / dist) * force
+                disp[a][1] -= (dy / dist) * force
+                disp[b][0] += (dx / dist) * force
+                disp[b][1] += (dy / dist) * force
+            # 2. 应用位移(受温度限制)
+            for nid in node_ids:
+                dx, dy = disp[nid]
+                dlen = math.sqrt(dx * dx + dy * dy) + 0.01
+                # 位移最大不超过 t
+                step = min(dlen, t)
+                pos[nid][0] += (dx / dlen) * step
+                pos[nid][1] += (dy / dlen) * step
+                # 边界约束(不要跑出画布)
+                pos[nid][0] = max(20, min(width - 20, pos[nid][0]))
+                pos[nid][1] = max(20, min(height - 20, pos[nid][1]))
+            # 降温
+            t *= 0.95
+
+        return {nid: tuple(pos[nid]) for nid in node_ids}
+
+    def _render_cross_graph(self):
+        """v1.87:扫数据 → 布局 → 在 QGraphicsScene 上渲染图谱"""
+        from PyQt5.QtWidgets import (
+            QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsSimpleTextItem,
+            QGraphicsRectItem)
+        from PyQt5.QtGui import QBrush, QPen, QColor, QFont
+        from PyQt5.QtCore import Qt, QRectF
+
+        self.cross_graph_scene.clear()
+        nodes, edges = self._collect_graph_data()
+        if not nodes:
+            # 提示空数据
+            hint = QGraphicsSimpleTextItem(
+                "暂无数据可视化。\n请先在剧情树添加节点 + 在 6 库填数据,然后点【🔄 重新生成布局】。")
+            hint.setBrush(QBrush(QColor("#999")))
+            font = QFont()
+            font.setPointSize(12)
+            hint.setFont(font)
+            hint.setPos(50, 50)
+            self.cross_graph_scene.addItem(hint)
+            return
+
+        # 布局
+        iters = self.sb_graph_iters.value() if hasattr(self, "sb_graph_iters") else 50
+        pos = self._force_directed_layout(nodes, edges, iters=iters,
+                                           width=900, height=700)
+
+        # 先画边(在节点下)
+        edge_pen = QPen(QColor("#aaa"))
+        edge_pen.setWidth(1)
+        edge_label_brush = QBrush(QColor("#666"))
+        for a, b, label in edges:
+            if a not in pos or b not in pos:
+                continue
+            x1, y1 = pos[a]
+            x2, y2 = pos[b]
+            line = QGraphicsLineItem(x1, y1, x2, y2)
+            line.setPen(edge_pen)
+            self.cross_graph_scene.addItem(line)
+            # 边标签(章号)— 只在边足够长时显示,避免拥挤
+            import math
+            dlen = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+            if dlen > 80 and label:
+                mid_x = (x1 + x2) / 2
+                mid_y = (y1 + y2) / 2
+                lbl = QGraphicsSimpleTextItem(label)
+                lbl.setBrush(edge_label_brush)
+                font = QFont()
+                font.setPointSize(7)
+                lbl.setFont(font)
+                lbl.setPos(mid_x, mid_y)
+                self.cross_graph_scene.addItem(lbl)
+
+        # 再画节点
+        text_brush = QBrush(QColor("#fff"))
+        for node in nodes:
+            nid = node["id"]
+            if nid not in pos:
+                continue
+            x, y = pos[nid]
+            r = 30
+            ellipse = QGraphicsEllipseItem(x - r, y - r, r * 2, r * 2)
+            ellipse.setBrush(QBrush(QColor(node["color"])))
+            ellipse.setPen(QPen(QColor(node["color"]).darker(120), 2))
+            ellipse.setFlag(QGraphicsEllipseItem.ItemIsMovable)
+            ellipse.setToolTip(f"{node['kind']}: {node['label']}")
+            self.cross_graph_scene.addItem(ellipse)
+            # 标签
+            text = QGraphicsSimpleTextItem(node["label"])
+            text.setBrush(text_brush)
+            font = QFont()
+            font.setPointSize(8)
+            font.setBold(True)
+            text.setFont(font)
+            # 居中
+            text_rect = text.boundingRect()
+            text.setPos(x - text_rect.width() / 2, y - text_rect.height() / 2)
+            self.cross_graph_scene.addItem(text)
+
+        # 调整视图范围
+        self.cross_graph_view.setSceneRect(QRectF(0, 0, 900, 700))
+        self.cross_graph_view.resetTransform()
 
     def _tree_to_list(self):
         """剧情树 → 扁平 list[{node_id, parent_id, name, kind, ch_range, note, chapter_links}]
