@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.82"
+APP_VERSION = "v1.83"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -13105,12 +13105,12 @@ class MainWindow(QMainWindow):
     def _ask_backfill_charlib(self, n_chapters):
         """实际的弹问 + 触发补抽"""
         ret = QMessageBox.question(
-            self, "💡 6 库还是空的",
-            f"你已经写了 {n_chapters} 章,但 6 库(角色/关系/时间线/物品/战力/伏笔)还是空的。\n\n"
+            self, "💡 库还是空的",
+            f"你已经写了 {n_chapters} 章,但角色/关系/伏笔等库还是空的。\n\n"
             f"勾选「✨ 每章生成后自动抽取」只对【未来章节】生效。\n"
             f"要立刻给已有的 {n_chapters} 章一次性抽一遍吗?\n\n"
             f"  ✓ 是 → 现在就抽(每章约 30 秒,共需约 {n_chapters * 30 // 60 + 1} 分钟)\n"
-            f"  ✗ 否 → 不抽,你可以稍后点「🔄 立即从所有章节提取 6 库」按钮",
+            f"  ✗ 否 → 不抽,你可以稍后点「🔄 立即从所有章节提取」按钮",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes)
         if ret == QMessageBox.Yes:
@@ -13193,7 +13193,7 @@ class MainWindow(QMainWindow):
         )
         # v1.02:让用户看到 6 库抽取真的发出去了
         self.tab_generation.log(
-            f"🎭 第 {ch_num} 章 6 库抽取启动 → 发送 world_extract({len(prompt)} 字)",
+            f"🎭 第 {ch_num} 章 库抽取启动 → 发送 world_extract({len(prompt)} 字)",
             "info")
         self._send_to_ai(
             prompt,
@@ -13229,7 +13229,7 @@ class MainWindow(QMainWindow):
                 self._world_extract_retry = getattr(self, "_world_extract_retry", {})
                 self._world_extract_retry[ch_num] = retry_n + 1
                 self.tab_generation.log(
-                    f"⚠ 第{ch_num}章 6 库 JSON 解析失败({e}),"
+                    f"⚠ 第{ch_num}章 库抽取 JSON 解析失败({e}),"
                     f"疑似抓取串了,等 2s 后重试(第 {retry_n + 1}/1 次)",
                     "warn")
                 self.tab_generation.log(f"  原始前 200 字: {content[:200]}", "warn")
@@ -13240,7 +13240,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(2000, self._run_next_charlib_extract)
                 return
             self.tab_generation.log(
-                f"⚠ 第{ch_num}章 6 库 JSON 解析最终失败({e}),跳过此章",
+                f"⚠ 第{ch_num}章 库抽取 JSON 解析最终失败({e}),跳过此章",
                 "error")
             self.tab_generation.log(f"  原始前 300 字: {content[:300]}", "warn")
             QTimer.singleShot(500, self._run_next_charlib_extract)
@@ -13266,7 +13266,7 @@ class MainWindow(QMainWindow):
                 self._world_extract_retry = getattr(self, "_world_extract_retry", {})
                 self._world_extract_retry[ch_num] = retry_n + 1
                 self.tab_generation.log(
-                    f"⚠ 第{ch_num}章 6 库 AI 返回 5 类全空,疑似抓取串/AI 误解,"
+                    f"⚠ 第{ch_num}章 库抽取 AI 返回全部分类皆空,疑似抓取串/AI 误解,"
                     f"等 2s 后重试(第 {retry_n + 1}/1 次)",
                     "warn")
                 if not hasattr(self, "_charlib_batch_queue"):
@@ -14523,7 +14523,7 @@ class MainWindow(QMainWindow):
                     if state:   bits.append(f"状态-{state}")
                     rows.append(f"  · {name}:" + "; ".join(bits))
                 if rows:
-                    lines.append("[来源:角色与世界 6 库,共 {} 人]".format(len(rows)))
+                    lines.append("[来源:角色与世界库,共 {} 人]".format(len(rows)))
                     lines.extend(rows[:10])   # 最多 10 人,避免过长
         except Exception:
             pass
@@ -14806,7 +14806,7 @@ class MainWindow(QMainWindow):
             try:
                 added = self._merge_into_charlib(charlib_data)
             except Exception as _me:
-                self.tab_generation.log(f"同步 6 库失败:{_me}", "warn")
+                self.tab_generation.log(f"同步库失败:{_me}", "warn")
 
             self.tab_generation.log(
                 f"✓ Canon 抽取完成:Canon Tab +{count} 条 / "
@@ -16873,7 +16873,7 @@ class MainWindow(QMainWindow):
                     from PyQt5.QtWidgets import QTableWidgetItem
                     for c, v in enumerate(cells):
                         tbl.setItem(row, c, QTableWidgetItem(str(v)))
-                filled.append(f"角色 {len(chars)} 个 → 6 库")
+                filled.append(f"角色 {len(chars)} 个 → 角色库")
             except Exception as e:
                 print(f"[import] 填充角色失败: {e}", flush=True)
 
@@ -19136,7 +19136,7 @@ class MainWindow(QMainWindow):
             "<ul>"
             "<li>挂载真实 Chrome / Edge,自动驱动 DeepSeek/豆包/Gemini/元宝/小米AI/ChatGPT 镜像</li>"
             "<li>盘古超级系统:禁用词过滤 + 感官铁律 + 压爆震 + 黄金三章公式</li>"
-            "<li>角色与世界 6 库(角色/关系/时间线/物品/战力/伏笔)自动同步</li>"
+            "<li>角色与世界库自动同步(角色/关系/时间线/物品/战力/伏笔/威胁承诺/剧情进度/信息隔离/剧情树)</li>"
             "<li>30 项质检 + 🔧 AI 自动修复</li>"
             "<li>章节元信息面板(钩子/爽点/伏笔/下一章选项,点选项自动指引下章)</li>"
             "<li>项目自动保存(每章+60s+章后立即)+ 最近 10 次版本备份</li>"
