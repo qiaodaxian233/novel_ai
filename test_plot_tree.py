@@ -163,14 +163,14 @@ def test_C1_tree_plot_is_qtreewidget(src):
     assert "self.tree_plot = QTreeWidget()" in src
 
 
-def test_C2_tree_plot_has_4_columns(src):
-    """剧情树必须 4 列"""
-    assert "self.tree_plot.setColumnCount(4)" in src
+def test_C2_tree_plot_has_5_columns(src):
+    """v1.85 起剧情树必须 5 列(原 v1.80 4 列 + v1.85 新增"已挂章号"列)"""
+    assert "self.tree_plot.setColumnCount(5)" in src
 
 
 def test_C3_tree_plot_headers(src):
-    """列头必须是:节点名/类型/章节范围/备注"""
-    for h in ("节点名", "类型", "章节范围", "备注"):
+    """列头必须是:节点名/类型/章节范围/备注/已挂章号"""
+    for h in ("节点名", "类型", "章节范围", "备注", "已挂章号"):
         assert h in src
 
 

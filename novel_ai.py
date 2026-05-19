@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.84"
+APP_VERSION = "v1.85"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -690,6 +690,29 @@ PROMPTS = {
         "   - 『第{ch_num}章读到 X 留的字条』\n"
         "5. 群体披露(如『当众宣布』)→ 每个具名旁观者各列一条;无名群众不算\n"
         "6. 主角【自己出场知道一切】的设定类信息默认就是『出生即知』,不需要本章重复披露 — 不要列主角自己\n"
+        "7. 只输出 JSON,不加任何说明文字"
+    ),
+
+    # ─────────────────────────────────────────────────────────────
+    # v1.85 BUG-062:写作模式回流(章节回标到剧情树节点)
+    # ─────────────────────────────────────────────────────────────
+    # 与 v1.80 注入的镜像:注入是"按章号找节点"(读),回流是"按内容找节点"(写)。
+    # 章末 AI 扫描本章正文,判定它推进了哪些剧情树节点,把章号挂回节点第 5 列。
+    # 多对一支持:N 章可挂同节点;同章号去重不重复。
+    "chapter_to_plot_node": (
+        "请扫描【本章正文】,判断本章主要涉及/推进了【剧情树】中的哪些节点。\n"
+        "目的:把章号反向挂到对应剧情节点,方便作者一眼看出『某节点已被哪些章节写过』。\n\n"
+        "【剧情树节点表(权威)】:\n{plot_tree}\n\n"
+        "【本章正文】(第 {ch_num} 章):\n{content}\n\n"
+        "请严格输出 JSON 数组,只列【本章涉及到的节点 id】:\n"
+        '[{{"node_id": "N-001", "reason": "本章为什么涉及该节点(20字内,如:主角终于遇到导师)"}}]\n\n'
+        "硬规则:\n"
+        "1. 本章没有明显对应任何节点 → 返回 []\n"
+        "2. node_id 必须从上面剧情树表里取,不要凭空造\n"
+        "3. 优先选最具体的节点(剧情点 > 章节槽 > 阶段 > 故事)— 多数情况只挂 1 个节点\n"
+        "4. 一章可能同时推进多个并列节点(如『遇到导师』+『得到秘籍』),但通常 ≤ 3 个\n"
+        "5. 如果本章是『过场/铺垫/养成』内容,没明确推进任何节点 → 返回 []\n"
+        "6. 不要把章号写进 reason(系统会自动挂)— reason 只写为什么\n"
         "7. 只输出 JSON,不加任何说明文字"
     ),
 }
@@ -4905,14 +4928,15 @@ class CharacterLibrary(QWidget):
         top.addStretch()
         lay.addLayout(top)
 
-        # QTreeWidget — 4 列
+        # QTreeWidget — 5 列(v1.85 加"已挂章号"列)
         self.tree_plot = QTreeWidget()
-        self.tree_plot.setColumnCount(4)
-        self.tree_plot.setHeaderLabels(["节点名", "类型", "章节范围", "备注"])
-        self.tree_plot.setColumnWidth(0, 280)
-        self.tree_plot.setColumnWidth(1, 100)
-        self.tree_plot.setColumnWidth(2, 100)
-        self.tree_plot.setColumnWidth(3, 300)
+        self.tree_plot.setColumnCount(5)
+        self.tree_plot.setHeaderLabels(["节点名", "类型", "章节范围", "备注", "已挂章号"])
+        self.tree_plot.setColumnWidth(0, 260)
+        self.tree_plot.setColumnWidth(1, 80)
+        self.tree_plot.setColumnWidth(2, 90)
+        self.tree_plot.setColumnWidth(3, 240)
+        self.tree_plot.setColumnWidth(4, 120)
         # 拖拽重排
         self.tree_plot.setDragDropMode(QAbstractItemView.InternalMove)
         self.tree_plot.setEditTriggers(
@@ -4923,8 +4947,9 @@ class CharacterLibrary(QWidget):
         tip = QLabel(
             "💡 剧情树是【作者主动规划的故事架构】,与其他 9 库(被动抽取)不同。\n"
             "    4 层结构:故事(根)→ 阶段(几十章)→ 章节槽(几章)→ 剧情点(单章)。\n"
-            "    每节点 4 字段:名/类型/章节范围/备注。类型:故事/阶段/章节槽/剧情点(双击编辑)。\n"
-            "    支持拖拽重排;每章注入时,系统会找到当前章节所在的最近祖先节点,告诉 AI『当前在 X→Y 阶段』。")
+            "    每节点 5 字段:名/类型/章节范围/备注/已挂章号(v1.85 章末 AI 自动回流)。\n"
+            "    支持拖拽重排;每章注入时,系统会找到当前章节所在的最近祖先节点。\n"
+            "    v1.85:章节生成后,AI 自动判定『本章写到了哪个节点』,把章号回流到对应节点的『已挂章号』列。")
         tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
@@ -4956,7 +4981,7 @@ class CharacterLibrary(QWidget):
         from PyQt5.QtWidgets import QTreeWidgetItem
         from PyQt5.QtCore import Qt
         nid = self._next_plot_node_id()
-        item = QTreeWidgetItem(["新故事", "故事", "", "(根节点,整本书的主线)"])
+        item = QTreeWidgetItem(["新故事", "故事", "", "(根节点,整本书的主线)", ""])
         item.setData(0, Qt.UserRole, nid)
         item.setFlags(item.flags() | Qt.ItemIsEditable)
         self.tree_plot.addTopLevelItem(item)
@@ -4977,7 +5002,7 @@ class CharacterLibrary(QWidget):
                     "章节槽": "剧情点", "剧情点": "剧情点"}
         new_kind = kind_map.get(parent_kind, "剧情点")
         nid = self._next_plot_node_id()
-        item = QTreeWidgetItem(["新" + new_kind, new_kind, "", ""])
+        item = QTreeWidgetItem(["新" + new_kind, new_kind, "", "", ""])
         item.setData(0, Qt.UserRole, nid)
         item.setFlags(item.flags() | Qt.ItemIsEditable)
         cur.addChild(item)
@@ -5012,8 +5037,8 @@ class CharacterLibrary(QWidget):
             self.tree_plot.takeTopLevelItem(idx)
 
     def _tree_to_list(self):
-        """剧情树 → 扁平 list[{node_id, parent_id, name, kind, ch_range, note}]
-        持久化与 AI 通信都用这个格式"""
+        """剧情树 → 扁平 list[{node_id, parent_id, name, kind, ch_range, note, chapter_links}]
+        持久化与 AI 通信都用这个格式。v1.85 加 chapter_links 字段(写作模式回流)"""
         from PyQt5.QtCore import Qt
         out = []
         def walk(item, parent_id):
@@ -5025,6 +5050,7 @@ class CharacterLibrary(QWidget):
                 "kind": item.text(1),
                 "ch_range": item.text(2),
                 "note": item.text(3),
+                "chapter_links": (item.text(4) if item.columnCount() > 4 else ""),  # v1.85
             })
             for i in range(item.childCount()):
                 walk(item.child(i), nid)
@@ -5054,6 +5080,7 @@ class CharacterLibrary(QWidget):
                 str(rec.get("kind", "")),
                 str(rec.get("ch_range", "")),
                 str(rec.get("note", "")),
+                str(rec.get("chapter_links", "")),  # v1.85
             ])
             item.setData(0, Qt.UserRole, nid)
             item.setFlags(item.flags() | Qt.ItemIsEditable)
@@ -5270,9 +5297,10 @@ class CharacterLibrary(QWidget):
             "infos":         tbl_to_list(self.tbl_infos, 4),        # v1.79
             "known_by":      tbl_to_list(self.tbl_known_by, 3),     # v1.79
             # v1.80 剧情树:直接序列化为扁平 list[dict],不走 tbl_to_list(因为是树)
+            # v1.85:加第 7 字段 chapter_links(已写章节回流)
             "plot_branches":
                 [[r["node_id"], r["parent_id"], r["name"], r["kind"],
-                  r["ch_range"], r["note"]]
+                  r["ch_range"], r["note"], r.get("chapter_links", "")]
                  for r in self._tree_to_list()] if hasattr(self, "tree_plot") else [],
             "hooks":      tbl_to_list(self.tbl_hooks, 4),  # 新增
             "cool_pts":   tbl_to_list(self.tbl_cool, 3),   # 新增
@@ -5319,7 +5347,7 @@ class CharacterLibrary(QWidget):
             "goals":           ["name", "priority", "status", "set_ch"],
             "infos":           ["id", "content", "source_ch", "source_type"],
             "known_by":        ["info_id", "character", "via"],
-            "plot_branches":   ["node_id", "parent_id", "name", "kind", "ch_range", "note"],
+            "plot_branches":   ["node_id", "parent_id", "name", "kind", "ch_range", "note", "chapter_links"],
             "hooks":       ["ch", "hook", "type", "resolved"],
             "cool_pts":    ["ch", "scene", "score"],
         }
@@ -5432,7 +5460,7 @@ class CharacterLibrary(QWidget):
                 "infos":           ["id", "content", "source_ch", "source_type"],   # v1.79
                 "known_by":        ["info_id", "character", "via"],                 # v1.79
                 "info_disclosures": ["info_id", "to", "via"],                       # v1.79(同 known_by 但来自 disclosure 抽取)
-                "plot_branches":    ["node_id", "parent_id", "name", "kind", "ch_range", "note"],  # v1.80
+                "plot_branches":    ["node_id", "parent_id", "name", "kind", "ch_range", "note", "chapter_links"],  # v1.80 / v1.85 加 chapter_links
             }
             keys = DICT_KEY_MAPS_LOCAL.get(schema_key, [])
             out = []
@@ -5855,6 +5883,21 @@ class CharacterLibrary(QWidget):
                     existing_id = by_key[dedupe_key]
                     if raw_id:
                         node_remap[raw_id] = existing_id
+                    # v1.85:同节点的 chapter_links 合并去重(避免覆盖已有)
+                    new_ch_links = str(rec.get("chapter_links", "")).strip()
+                    if new_ch_links and existing_id in existing_items:
+                        existing_item = existing_items[existing_id]
+                        cur = (existing_item.text(4) or "").strip()
+                        merged = set(c.strip() for c in cur.split(",") if c.strip())
+                        for c in new_ch_links.split(","):
+                            c = c.strip()
+                            if c:
+                                merged.add(c)
+                        try:
+                            sorted_merged = sorted(merged, key=lambda x: int(x))
+                        except ValueError:
+                            sorted_merged = sorted(merged)
+                        existing_item.setText(4, ", ".join(sorted_merged))
                     continue
                 # 新节点 — 分配 final_id
                 if (raw_id and raw_id not in used_ids
@@ -5865,10 +5908,11 @@ class CharacterLibrary(QWidget):
                     final_id = _next_node_id()
                 if raw_id and final_id != raw_id:
                     node_remap[raw_id] = final_id
-                # 建 item
+                # 建 item(v1.85:第 5 列 chapter_links)
                 ch_range = str(rec.get("ch_range", "")).strip()
                 note = str(rec.get("note", "")).strip()
-                item = QTreeWidgetItem([name, kind, ch_range, note])
+                chapter_links = str(rec.get("chapter_links", "")).strip()
+                item = QTreeWidgetItem([name, kind, ch_range, note, chapter_links])
                 item.setData(0, Qt.UserRole, final_id)
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
                 # 挂到正确父节点
@@ -11523,6 +11567,11 @@ class MainWindow(QMainWindow):
             self._on_info_check_response(content, meta)
             if getattr(self, "_post_chapter_pipeline", None):
                 QTimer.singleShot(500, self._run_next_post_chapter_step)
+        elif target == "chapter_to_plot_node":
+            # v1.85 BUG-062:章末写作回流(把章号挂到剧情树节点第 5 列)
+            self._on_chapter_to_plot_node_response(content, meta)
+            if getattr(self, "_post_chapter_pipeline", None):
+                QTimer.singleShot(500, self._run_next_post_chapter_step)
         elif target == "critique_rhythm":
             ch_num = meta.get("ch_num", 0)
             self._on_critique_score_response(content, "rhythm", ch_num)
@@ -16351,6 +16400,113 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.tab_generation.log(f"⚠️ 信息披露追踪解析失败:{e}", "warn")
 
+    # ──────────────────────────────────────────────────────────
+    # v1.85 BUG-062:写作模式回流(章末把章号反向挂到剧情树节点)
+    # ──────────────────────────────────────────────────────────
+    # 与 v1.79 info_check 对照:都是【侦测式】检查 — AI 返回的不是新建数据,
+    # 而是【本章对应哪些已存在节点】。命中后改 tree_plot 第 5 列(append 章号,
+    # 不覆盖,同节点可被多章命中),同时去重(同章号不重复挂)。
+    # 与 v1.80 注入逻辑的对照:v1.80 是"按章号找节点"(读),v1.85 是"按内容找节点"(写)。
+
+    def _run_chapter_to_plot_node(self, content, ch_num):
+        """章末让 AI 反查本章对应剧情树哪些节点"""
+        if not hasattr(self.tab_charlib, "tree_plot"):
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        nodes = self.tab_charlib._tree_to_list()
+        if not nodes:
+            print(f"[plot-reflow v1.85] ch={ch_num} 剧情树空,跳过", flush=True)
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        # 给 AI 一个精简版表(id + kind + name + ch_range)— 不含 chapter_links 避免循环
+        simplified = []
+        for n in nodes:
+            if not n["node_id"] or not n["name"]:
+                continue
+            simplified.append({
+                "node_id": n["node_id"],
+                "kind": n["kind"],
+                "name": n["name"],
+                "ch_range": n.get("ch_range", ""),
+            })
+        if not simplified:
+            print(f"[plot-reflow v1.85] ch={ch_num} 剧情树全是无名节点,跳过", flush=True)
+            QTimer.singleShot(100, self._run_next_post_chapter_step)
+            return
+        prompt = PROMPTS["chapter_to_plot_node"].format(
+            plot_tree=json.dumps(simplified, ensure_ascii=False),
+            ch_num=ch_num,
+            content=content[:6000])
+        print(f"[plot-reflow v1.85] ch={ch_num} 反查 {len(simplified)} 个剧情节点, "
+              f"prompt {len(prompt)} 字", flush=True)
+        self.tab_generation.log(
+            f"🌳 写作回流-第{ch_num}章 → AI({len(simplified)} 节点, {len(prompt)} 字)",
+            "info")
+        self._send_to_ai(prompt, f"写作回流-第{ch_num}章",
+                         target="chapter_to_plot_node", ch_num=ch_num)
+
+    def _on_chapter_to_plot_node_response(self, content, meta):
+        """AI 反查结果 → 章号 append 到对应节点的 chapter_links 列(第 5 列)"""
+        from PyQt5.QtCore import Qt
+        ch_num = meta.get("ch_num", 0)
+        print(f"[plot-reflow v1.85] ch={ch_num} AI 原始({len(content or '')} 字) "
+              f"前 200: {(content or '')[:200]!r}", flush=True)
+        try:
+            text = self._extract_json_blob(content)
+            arr = json.loads(text)
+            if not isinstance(arr, list):
+                self.tab_generation.log(
+                    f"⚠️ 写作回流:AI 返回的不是 JSON 数组(是 {type(arr).__name__}),"
+                    f"已忽略", "warn")
+                return
+            # 建 node_id → QTreeWidgetItem 索引(扫全树)
+            id_to_item = {}
+            tree = self.tab_charlib.tree_plot
+            def _scan(item):
+                nid = item.data(0, Qt.UserRole)
+                if nid:
+                    id_to_item[str(nid)] = item
+                for i in range(item.childCount()):
+                    _scan(item.child(i))
+            for i in range(tree.topLevelItemCount()):
+                _scan(tree.topLevelItem(i))
+
+            count = 0
+            for it in arr:
+                if not isinstance(it, dict):
+                    continue
+                node_id = str(it.get("node_id", "")).strip()
+                reason = str(it.get("reason", "")).strip()
+                if not node_id:
+                    continue
+                if node_id not in id_to_item:
+                    self.tab_generation.log(
+                        f"  ⚠️ 跳过悬挂节点 id:{node_id}(不在剧情树里)", "warn")
+                    continue
+                # 追加章号到第 5 列(逗号分隔,去重)
+                item = id_to_item[node_id]
+                cur = (item.text(4) or "").strip()
+                existing = set(c.strip() for c in cur.split(",") if c.strip())
+                ch_str = str(ch_num)
+                if ch_str in existing:
+                    continue  # 已挂过,跳
+                existing.add(ch_str)
+                # 排序后写回 — 章号按数字升序
+                try:
+                    sorted_chs = sorted(existing, key=lambda x: int(x))
+                except ValueError:
+                    sorted_chs = sorted(existing)
+                item.setText(4, ", ".join(sorted_chs))
+                count += 1
+                self.tab_generation.log(
+                    f"  ✓ 第{ch_num}章 → 节点[{node_id}]『{item.text(0)}』"
+                    f"{('(' + reason[:25] + ')') if reason else ''}",
+                    "info")
+            self.tab_generation.log(
+                f"✓ 写作回流完成:第{ch_num}章 挂到 {count} 个剧情节点", "info")
+        except Exception as e:
+            self.tab_generation.log(f"⚠️ 写作回流解析失败:{e}", "warn")
+
     def _post_chapter_chain(self, ch_num):
         """章节通过后的链式处理:Canon 抽取 → 6库抽取 → 章末技能 → 摘要 → 下一章"""
         if ch_num <= 0:
@@ -16448,6 +16604,13 @@ class MainWindow(QMainWindow):
             if _has_info:
                 pipeline.append(("info_disclose_check", ch_num))
                 pipeline.append(("info_check", ch_num))
+
+        # v1.85 BUG-062:写作模式回流 — AI 反查本章对应剧情树哪些节点
+        # 必须挂在所有结构化抽取/检查之后(因为它依赖前面所有数据稳定后再跑)
+        # 是【侦测式】检查 — 只把章号挂到节点(第 5 列),不改剧情树结构
+        if hasattr(self.tab_charlib, "tree_plot"):
+            if self.tab_charlib.tree_plot.topLevelItemCount() > 0:
+                pipeline.append(("chapter_to_plot_node", ch_num))
 
         # after_chapter_generation 技能(固定自动触发)
         for s in self.tab_skills.get_after_chapter_skills():
@@ -16548,6 +16711,14 @@ class MainWindow(QMainWindow):
             ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
             if ch and ch.get("content"):
                 self._run_info_check(ch["content"], ch_num)
+            else:
+                QTimer.singleShot(100, self._run_next_post_chapter_step)
+        elif step[0] == "chapter_to_plot_node":
+            # v1.85 BUG-062:写作模式回流 — 反查本章对应剧情树节点
+            ch_num = step[1]
+            ch = self.chapters[ch_num - 1] if 0 < ch_num <= len(self.chapters) else None
+            if ch and ch.get("content"):
+                self._run_chapter_to_plot_node(ch["content"], ch_num)
             else:
                 QTimer.singleShot(100, self._run_next_post_chapter_step)
         elif step[0] == "skill_after":
