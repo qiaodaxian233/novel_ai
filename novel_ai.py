@@ -8,7 +8,7 @@
 - 三种启动模式:attach(连接已开调试 Chrome,最稳)/ standalone / temp
 - 内置盘古超级系统(禁用词过滤 + 感官铁律 + 压爆震 + 黄金三章公式)
 - 章节列表 / 项目存档(JSON) / 一键保存所有章节
-- 角色与世界 6 库自动同步 / 30 项质检 + AI 自动修复 / 章节元信息面板
+- 角色与世界全部库自动同步(角色/关系/伏笔/承诺/弧线/信息/剧情树等)/ 30 项质检 + AI 自动修复 / 章节元信息面板
 
 运行依赖:
     pip install PyQt5 selenium
@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.81"
+APP_VERSION = "v1.82"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -3910,8 +3910,10 @@ class CharacterLibrary(QWidget):
             lambda v: _QS_charlib("NovelAI", "CharLib").setValue("inject", bool(v)))
         btn_row.addWidget(self.chk_inject)
 
-        # 每章生成完后自动抽取 6 库(默认勾上,QSettings 记住用户选择)
-        self.chk_auto_extract = QCheckBox("✨ 每章生成后自动抽取到 6 库")
+        # 每章生成完后自动抽取到所有库(默认勾上,QSettings 记住用户选择)
+        # v1.81 文案修正:库数从 v1.50 初的 6 个扩到 v1.80 时的 10+ 个,
+        # 文案改用"全部库"避免误导用户以为只有 6 个
+        self.chk_auto_extract = QCheckBox("✨ 每章生成后自动抽取到全部库")
         # 从 QSettings 读上次选择,首次默认 True(推荐使用)
         from PyQt5.QtCore import QSettings as _QS
         _settings = _QS("NovelAI", "UserPrefs")
@@ -3919,10 +3921,12 @@ class CharacterLibrary(QWidget):
             _settings.value("auto_extract_6lib", True, type=bool))
         self.chk_auto_extract.setToolTip(
             "勾选后,每生成【未来章节】时自动调用 AI 提取:\n"
-            "  角色 / 关系 / 时间线 / 物品 / 战力 / 伏笔\n"
-            "并合并到这 6 个表里。\n\n"
+            "  角色 / 关系 / 时间线 / 物品 / 战力 / 伏笔(原 6 库)\n"
+            "  + 威胁承诺(v1.77) / 弧线-关系值-目标(v1.78)\n"
+            "  + 信息隔离(v1.79) / 剧情树(v1.80)\n"
+            "并合并到对应的表里。\n\n"
             "⚠️ 注意:此勾选【只对勾选之后生成的章节】生效。\n"
-            "  已有章节请点旁边的「🔄 立即从所有章节提取 6 库」按钮补抽。\n\n"
+            "  已有章节请点旁边的「🔄 立即从所有章节提取」按钮补抽。\n\n"
             "代价:每章多 1 次 AI 调用。如果你 AI 额度有限,可以关掉,\n"
             "改成手动批量提取(旁边那个按钮)。")
         self.chk_auto_extract.setStyleSheet("QCheckBox { color:#b4884e; font-weight:bold; }")
@@ -3938,7 +3942,7 @@ class CharacterLibrary(QWidget):
         self.chk_auto_sync_hero.setChecked(
             _cs.value("auto_sync_hero_state", True, type=bool))
         self.chk_auto_sync_hero.setToolTip(
-            "勾选后,AI 抽 6 库时顺便提取本章末主角的 5 个状态字段\n"
+            "勾选后,AI 抽全部库时顺便提取本章末主角的 5 个状态字段\n"
             "  (年龄/修为/位置/势力/心境),自动填到上方表单。\n\n"
             "✗ 取消:AI 不抽,你可以点上方『🔄 从时间线同步』按钮手动同步\n"
             "       (本地正则,不烧 token)\n\n"
@@ -3951,7 +3955,7 @@ class CharacterLibrary(QWidget):
 
         btn_row.addStretch()
         
-        self.btn_extract_from_chapters = QPushButton("🔄 立即从所有章节提取 6 库")
+        self.btn_extract_from_chapters = QPushButton("🔄 立即从所有章节提取")
         self.btn_extract_from_chapters.setStyleSheet(
             "background:#3498db;color:white;padding:6px 12px;border-radius:3px;")
         btn_row.addWidget(self.btn_extract_from_chapters)
@@ -4813,7 +4817,7 @@ class CharacterLibrary(QWidget):
             self.tbl_known_by.removeRow(r)
 
     # ── 5e. 剧情树子页(v1.80 BUG-060)─────────────────────
-    # 与其他 sub-tab 的核心差异:用 QTreeWidget(不是 QTableWidget) — 整套 6 库唯一的树形 UI。
+    # 与其他 sub-tab 的核心差异:用 QTreeWidget(不是 QTableWidget) — 整套 CharLib 唯一的树形 UI。
     # 节点 4 层:故事(根)→ 阶段 → 章节槽 → 剧情点
     # 每节点 4 字段:节点名 / kind(故事/阶段/章节槽/剧情点)/ ch_range / note
     # 节点用 hidden role 存 node_id(N-001 自动续号),AI 抽取扁平 list[parent_id, ...]
@@ -6374,7 +6378,7 @@ class CharacterLibrary(QWidget):
                 "时间线为空,无法同步。\n\n"
                 "可以:\n"
                 "  • 手动在下方时间线添加事件 + 状态变化\n"
-                "  • 写完章节后点『6 库提取』让 AI 自动抽取时间线\n"
+                "  • 写完章节后点『立即从所有章节提取』让 AI 自动抽取时间线\n"
                 "  • 在创作设置打开『AI 写完每章自动同步主角状态』")
             return
         
@@ -6646,7 +6650,7 @@ class CharacterLibrary(QWidget):
         """生成一份完整 prompt 复制到剪贴板,用户贴给 DeepSeek/ChatGPT 提取设定。
         
         弹对话框让用户选章节范围 — 全部 / 最近 N 章 / 指定区间 / 不附带正文。
-        AI 返回的 JSON 直接保存为 .json 文件后,用『导入库』就能一键合并到当前 6 库。
+        AI 返回的 JSON 直接保存为 .json 文件后,用『导入库』就能一键合并到当前所有库。
         """
         from PyQt5.QtWidgets import QApplication, QMessageBox
         
@@ -13282,7 +13286,7 @@ class MainWindow(QMainWindow):
         kb_n = added.get("kb", 0)     # v1.79
         pt_n = added.get("pt", 0)     # v1.80
         self.tab_generation.log(
-            f"✓ 第{ch_num}章 6 库提取完成: 角色+{added['ch']} 关系+{added['rel']} "
+            f"✓ 第{ch_num}章 库提取完成: 角色+{added['ch']} 关系+{added['rel']} "
             f"物品+{added['it']} 时间线+{added['ev']} 伏笔+{added['fo']}"
             + (f" 战力+{pw_n}" if pw_n else "")
             + (f" 承诺+{pr_n}" if pr_n else "")
