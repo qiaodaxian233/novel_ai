@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.79"
+APP_VERSION = "v1.80"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -309,6 +309,9 @@ PROMPTS = {
         '  "info_disclosures": [\n'
         '    {{"info_id": "INFO-XXX", "to": "知情人(角色名)", "via": "通过何途径知道(如:第{ch_num}章亲口告诉/第{ch_num}章亲眼见/出生即知)"}}\n'
         "  ],\n"
+        '  "plot_branches": [\n'
+        '    {{"node_id": "N-001", "parent_id": "", "name": "节点名(如:复仇前期/得知线索/遇到导师)", "kind": "故事/阶段/章节槽/剧情点", "ch_range": "如 1-10 或 5(可空)", "note": "可选备注(20字内)"}}\n'
+        "  ],\n"
         '  "hero_state": {{"age": "本章末主角年龄(数字字符串)", "realm": "本章末主角修为/境界(如:金丹中期)", "location": "本章末主角所在地", "faction": "本章末主角所属势力/门派", "mood": "本章末主角心境(如:愤怒/决绝/平静)"}}\n'
         "}}\n\n"
         "提取规则:\n"
@@ -356,7 +359,15 @@ PROMPTS = {
         "      * 『第{ch_num}章亲眼见』(亲眼见到证据)\n"
         "      * 『第{ch_num}章读到 X 的信』(信件/书札)\n"
         "    - 关键:【知情链断了不要补】 — 路人甲若没见证披露事件,就不能列他在 known_by 里\n"
-        "    - 本章没有信息披露事件 → 留空 []\n\n"
+        "    - 本章没有信息披露事件 → 留空 []\n"
+        "17. plot_branches(剧情树规划)只列【本章新规划/调整】的剧情节点。\n"
+        "    剧情树是【作者主动规划的故事架构】,不是被动抽取出来的事件 — 大多数章节本字段都应留空 []。\n"
+        "    只在以下情况列:① 本章作者正在埋一个大阶段的开端 ② 主角设立了一个【可作为剧情阶段】的中长期目标(已在 goals 列过的不要重复) ③ 本章发生了关键转折点(可作为剧情树节点的)\n"
+        "    扁平 list 形式,每条:\n"
+        "    - node_id 用 N-001/N-002... 自动续号(本章一次性给的 N-001 N-002... 系统会去重)\n"
+        "    - parent_id 引用本章或已有节点的 node_id;留空 = 根节点(故事整体)\n"
+        "    - kind 四选一:【故事】=最顶层(整本书) / 【阶段】=多章范围的阶段 / 【章节槽】=连续几章的子段 / 【剧情点】=单章关键情节\n"
+        "    - ch_range 格式『起-止』或单个数(章节槽必填,剧情点单数;故事/阶段可空)\n\n"
         "已有数据(避免重复提取):\n{existing}\n\n"
         "本章是第 {ch_num} 章,正文:\n{content}"
     ),
@@ -3876,6 +3887,7 @@ class CharacterLibrary(QWidget):
         self._build_promises_tab()   # v1.77 新增:⚡ 威胁承诺
         self._build_plot_progress_tab()   # v1.78 新增:📈 剧情进度(弧线/关系值/目标)
         self._build_info_isolation_tab()  # v1.79 新增:🔒 信息隔离(infos + known_by)
+        self._build_plot_tree_tab()       # v1.80 新增:🌳 剧情树(QTreeWidget 4 层)
         self._build_hooks_tab()      # 新增:钩子编年
         self._build_coolpts_tab()    # 新增:爽点编年
 
@@ -4800,6 +4812,202 @@ class CharacterLibrary(QWidget):
         for r in rows:
             self.tbl_known_by.removeRow(r)
 
+    # ── 5e. 剧情树子页(v1.80 BUG-060)─────────────────────
+    # 与其他 sub-tab 的核心差异:用 QTreeWidget(不是 QTableWidget) — 整套 6 库唯一的树形 UI。
+    # 节点 4 层:故事(根)→ 阶段 → 章节槽 → 剧情点
+    # 每节点 4 字段:节点名 / kind(故事/阶段/章节槽/剧情点)/ ch_range / note
+    # 节点用 hidden role 存 node_id(N-001 自动续号),AI 抽取扁平 list[parent_id, ...]
+    # 后处理建树;持久化用 _tree_to_dict / _dict_to_tree 双向序列化
+    def _build_plot_tree_tab(self):
+        from PyQt5.QtWidgets import (QTreeWidget, QTreeWidgetItem,
+                                     QAbstractItemView, QInputDialog,
+                                     QHBoxLayout)
+        from PyQt5.QtCore import Qt
+        w = QWidget()
+        lay = QVBoxLayout(w)
+
+        # 顶部工具栏 — 6 操作按钮
+        top = QHBoxLayout()
+        btn_add_root = QPushButton("➕ 加根节点(故事)")
+        btn_add_root.clicked.connect(self._add_plot_root)
+        btn_add_child = QPushButton("➕ 加子节点")
+        btn_add_child.clicked.connect(self._add_plot_child)
+        btn_del = QPushButton("➖ 删除节点(含子孙)")
+        btn_del.clicked.connect(self._del_plot_node)
+        btn_expand = QPushButton("⊟ 展开全部")
+        btn_expand.clicked.connect(lambda: self.tree_plot.expandAll())
+        btn_collapse = QPushButton("⊞ 折叠全部")
+        btn_collapse.clicked.connect(lambda: self.tree_plot.collapseAll())
+        top.addWidget(btn_add_root)
+        top.addWidget(btn_add_child)
+        top.addWidget(btn_del)
+        top.addWidget(btn_expand)
+        top.addWidget(btn_collapse)
+        top.addStretch()
+        lay.addLayout(top)
+
+        # QTreeWidget — 4 列
+        self.tree_plot = QTreeWidget()
+        self.tree_plot.setColumnCount(4)
+        self.tree_plot.setHeaderLabels(["节点名", "类型", "章节范围", "备注"])
+        self.tree_plot.setColumnWidth(0, 280)
+        self.tree_plot.setColumnWidth(1, 100)
+        self.tree_plot.setColumnWidth(2, 100)
+        self.tree_plot.setColumnWidth(3, 300)
+        # 拖拽重排
+        self.tree_plot.setDragDropMode(QAbstractItemView.InternalMove)
+        self.tree_plot.setEditTriggers(
+            QTreeWidget.DoubleClicked | QTreeWidget.SelectedClicked)
+        self.tree_plot.setSelectionMode(QAbstractItemView.SingleSelection)
+        lay.addWidget(self.tree_plot)
+
+        tip = QLabel(
+            "💡 剧情树是【作者主动规划的故事架构】,与其他 9 库(被动抽取)不同。\n"
+            "    4 层结构:故事(根)→ 阶段(几十章)→ 章节槽(几章)→ 剧情点(单章)。\n"
+            "    每节点 4 字段:名/类型/章节范围/备注。类型:故事/阶段/章节槽/剧情点(双击编辑)。\n"
+            "    支持拖拽重排;每章注入时,系统会找到当前章节所在的最近祖先节点,告诉 AI『当前在 X→Y 阶段』。")
+        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+
+        self.sub_tabs.addTab(w, "🌳 剧情树")
+
+    # ── 5e' 剧情树操作方法 ────────────────────────────
+    # node_id 存在 QTreeWidgetItem.data(0, Qt.UserRole) — 持久化用,UI 不显示
+    _NODE_ROLE = 256  # Qt.UserRole, 但避免硬依赖,用数字
+
+    def _next_plot_node_id(self):
+        """扫描树,找下一个可用 N-XXX id"""
+        from PyQt5.QtCore import Qt
+        used = set()
+        def walk(item):
+            nid = item.data(0, Qt.UserRole)
+            if nid:
+                used.add(str(nid))
+            for i in range(item.childCount()):
+                walk(item.child(i))
+        for i in range(self.tree_plot.topLevelItemCount()):
+            walk(self.tree_plot.topLevelItem(i))
+        n = 1
+        while f"N-{n:03d}" in used:
+            n += 1
+        return f"N-{n:03d}"
+
+    def _add_plot_root(self):
+        from PyQt5.QtWidgets import QTreeWidgetItem
+        from PyQt5.QtCore import Qt
+        nid = self._next_plot_node_id()
+        item = QTreeWidgetItem(["新故事", "故事", "", "(根节点,整本书的主线)"])
+        item.setData(0, Qt.UserRole, nid)
+        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        self.tree_plot.addTopLevelItem(item)
+        item.setExpanded(True)
+
+    def _add_plot_child(self):
+        """对选中节点加子节点"""
+        from PyQt5.QtWidgets import QTreeWidgetItem, QMessageBox
+        from PyQt5.QtCore import Qt
+        cur = self.tree_plot.currentItem()
+        if not cur:
+            QMessageBox.information(
+                self, "提示", "请先选中一个节点(作为父节点),再点『加子节点』。")
+            return
+        # 子节点 kind 默认基于父节点 kind 推断
+        parent_kind = cur.text(1)
+        kind_map = {"故事": "阶段", "阶段": "章节槽",
+                    "章节槽": "剧情点", "剧情点": "剧情点"}
+        new_kind = kind_map.get(parent_kind, "剧情点")
+        nid = self._next_plot_node_id()
+        item = QTreeWidgetItem(["新" + new_kind, new_kind, "", ""])
+        item.setData(0, Qt.UserRole, nid)
+        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        cur.addChild(item)
+        cur.setExpanded(True)
+        self.tree_plot.setCurrentItem(item)
+
+    def _del_plot_node(self):
+        """删除选中节点(含全部子孙)"""
+        from PyQt5.QtWidgets import QMessageBox
+        cur = self.tree_plot.currentItem()
+        if not cur:
+            QMessageBox.information(self, "提示", "请先选中一个节点。")
+            return
+        # 统计子孙数
+        def count_descendants(item):
+            n = item.childCount()
+            for i in range(item.childCount()):
+                n += count_descendants(item.child(i))
+            return n
+        descn = count_descendants(cur)
+        if descn > 0:
+            ret = QMessageBox.question(
+                self, "确认删除",
+                f"节点『{cur.text(0)}』下有 {descn} 个子孙节点,确认删除吗?")
+            if ret != QMessageBox.Yes:
+                return
+        parent = cur.parent()
+        if parent:
+            parent.removeChild(cur)
+        else:
+            idx = self.tree_plot.indexOfTopLevelItem(cur)
+            self.tree_plot.takeTopLevelItem(idx)
+
+    def _tree_to_list(self):
+        """剧情树 → 扁平 list[{node_id, parent_id, name, kind, ch_range, note}]
+        持久化与 AI 通信都用这个格式"""
+        from PyQt5.QtCore import Qt
+        out = []
+        def walk(item, parent_id):
+            nid = item.data(0, Qt.UserRole) or ""
+            out.append({
+                "node_id": str(nid),
+                "parent_id": str(parent_id or ""),
+                "name": item.text(0),
+                "kind": item.text(1),
+                "ch_range": item.text(2),
+                "note": item.text(3),
+            })
+            for i in range(item.childCount()):
+                walk(item.child(i), nid)
+        for i in range(self.tree_plot.topLevelItemCount()):
+            walk(self.tree_plot.topLevelItem(i), "")
+        return out
+
+    def _list_to_tree(self, records):
+        """扁平 list → 剧情树(重建 QTreeWidget)
+        records: list[{node_id, parent_id, name, kind, ch_range, note}]
+        悬挂引用(parent_id 找不到)→ 当根节点处理"""
+        from PyQt5.QtWidgets import QTreeWidgetItem
+        from PyQt5.QtCore import Qt
+        self.tree_plot.clear()
+        if not records:
+            return
+        # 1. 建 id → item 索引(先全建出来)
+        by_id = {}
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            nid = str(rec.get("node_id", "")).strip()
+            if not nid:
+                continue
+            item = QTreeWidgetItem([
+                str(rec.get("name", "")),
+                str(rec.get("kind", "")),
+                str(rec.get("ch_range", "")),
+                str(rec.get("note", "")),
+            ])
+            item.setData(0, Qt.UserRole, nid)
+            item.setFlags(item.flags() | Qt.ItemIsEditable)
+            by_id[nid] = (item, str(rec.get("parent_id", "")).strip())
+        # 2. 第二遍挂父子(parent_id 存在 → addChild;不存在 → top level)
+        for nid, (item, pid) in by_id.items():
+            if pid and pid in by_id:
+                by_id[pid][0].addChild(item)
+            else:
+                # 悬挂引用或根节点
+                self.tree_plot.addTopLevelItem(item)
+        self.tree_plot.expandAll()
+
     # ── 6. 钩子编年子页 ────────────────────────────────────
     def _build_hooks_tab(self):
         from PyQt5.QtWidgets import QTableWidget
@@ -5002,6 +5210,11 @@ class CharacterLibrary(QWidget):
             "goals":         tbl_to_list(self.tbl_goals, 4),        # v1.78
             "infos":         tbl_to_list(self.tbl_infos, 4),        # v1.79
             "known_by":      tbl_to_list(self.tbl_known_by, 3),     # v1.79
+            # v1.80 剧情树:直接序列化为扁平 list[dict],不走 tbl_to_list(因为是树)
+            "plot_branches":
+                [[r["node_id"], r["parent_id"], r["name"], r["kind"],
+                  r["ch_range"], r["note"]]
+                 for r in self._tree_to_list()] if hasattr(self, "tree_plot") else [],
             "hooks":      tbl_to_list(self.tbl_hooks, 4),  # 新增
             "cool_pts":   tbl_to_list(self.tbl_cool, 3),   # 新增
             "hero_state": {
@@ -5042,6 +5255,7 @@ class CharacterLibrary(QWidget):
             "goals":           ["name", "priority", "status", "set_ch"],
             "infos":           ["id", "content", "source_ch", "source_type"],
             "known_by":        ["info_id", "character", "via"],
+            "plot_branches":   ["node_id", "parent_id", "name", "kind", "ch_range", "note"],
             "hooks":       ["ch", "hook", "type", "resolved"],
             "cool_pts":    ["ch", "scene", "score"],
         }
@@ -5088,6 +5302,17 @@ class CharacterLibrary(QWidget):
         list_to_tbl(self.tbl_goals,      normalize(data.get("goals", []), "goals"), 4)            # v1.78
         list_to_tbl(self.tbl_infos,      normalize(data.get("infos", []), "infos"), 4)            # v1.79
         list_to_tbl(self.tbl_known_by,   normalize(data.get("known_by", []), "known_by"), 3)      # v1.79
+        # v1.80:剧情树 — normalize 后是 list-of-list,转回 dict 再喂给 _list_to_tree
+        if hasattr(self, "tree_plot"):
+            plot_keys = DICT_KEY_MAPS.get("plot_branches", [])
+            plot_norm = normalize(data.get("plot_branches", []), "plot_branches")
+            plot_dicts = []
+            for row in plot_norm:
+                d = {}
+                for i, k in enumerate(plot_keys):
+                    d[k] = row[i] if i < len(row) else ""
+                plot_dicts.append(d)
+            self._list_to_tree(plot_dicts)
         list_to_tbl(self.tbl_hooks,     normalize(data.get("hooks", []), "hooks"), 4)
         list_to_tbl(self.tbl_cool,      normalize(data.get("cool_pts", []), "cool_pts"), 3)
         
@@ -5110,7 +5335,8 @@ class CharacterLibrary(QWidget):
         from PyQt5.QtWidgets import QTableWidgetItem
         added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "pr": 0,
                  "arc": 0, "rv": 0, "gl": 0,                # v1.78
-                 "info": 0, "kb": 0}                         # v1.79
+                 "info": 0, "kb": 0,                         # v1.79
+                 "pt": 0}                                    # v1.80 plot tree
         if not data:
             return added
         
@@ -5135,6 +5361,7 @@ class CharacterLibrary(QWidget):
                 "infos":           ["id", "content", "source_ch", "source_type"],   # v1.79
                 "known_by":        ["info_id", "character", "via"],                 # v1.79
                 "info_disclosures": ["info_id", "to", "via"],                       # v1.79(同 known_by 但来自 disclosure 抽取)
+                "plot_branches":    ["node_id", "parent_id", "name", "kind", "ch_range", "note"],  # v1.80
             }
             keys = DICT_KEY_MAPS_LOCAL.get(schema_key, [])
             out = []
@@ -5492,6 +5719,97 @@ class CharacterLibrary(QWidget):
                 added["kb"] = added.get("kb", 0) + 1
                 ex_kbs.add(k)
 
+        # v1.80:剧情树 plot_branches(扁平 list 合并)
+        # 去重 key:(name, kind, parent_name) — 因为 AI 给的 node_id 是占位符不可靠
+        # parent_id remap:AI 给的 N-XXX → 真实 N-YYY 重映射,用 node_remap 表
+        if hasattr(self, "tree_plot"):
+            from PyQt5.QtCore import Qt
+            from PyQt5.QtWidgets import QTreeWidgetItem
+            # 1. 扫描现有树,建索引:
+            #    by_key[(name, kind, parent_node_id)] = node_id
+            #    used_ids = {N-001, N-002, ...}
+            existing_items = {}  # node_id → QTreeWidgetItem
+            by_key = {}  # (name, kind, parent_node_id) → node_id
+            used_ids = set()
+
+            def _scan(item, parent_id):
+                nid = item.data(0, Qt.UserRole)
+                nid = str(nid) if nid else ""
+                if nid:
+                    existing_items[nid] = item
+                    used_ids.add(nid)
+                key = (item.text(0), item.text(1), parent_id)
+                by_key[key] = nid
+                for i in range(item.childCount()):
+                    _scan(item.child(i), nid)
+            for i in range(self.tree_plot.topLevelItemCount()):
+                _scan(self.tree_plot.topLevelItem(i), "")
+
+            def _next_node_id():
+                n = 1
+                while f"N-{n:03d}" in used_ids:
+                    n += 1
+                new_id = f"N-{n:03d}"
+                used_ids.add(new_id)
+                return new_id
+
+            # 2. AI 给的 list:node_id 是占位符,parent_id 也可能是占位符
+            #    需要先按 dict 顺序遍历(假设 AI 顺序给的 — 父先于子)
+            #    用 node_remap[raw_id] = final_id
+            node_remap = {}
+            records = _as_dict_list(data.get("plot_branches"), "plot_branches")
+            for rec in records:
+                name = str(rec.get("name", "")).strip()
+                kind = str(rec.get("kind", "故事")).strip() or "故事"
+                if not name:
+                    continue
+                raw_id = str(rec.get("node_id", "")).strip()
+                raw_parent = str(rec.get("parent_id", "")).strip()
+                # parent_id 重映射:① 先看是不是 AI 给的占位符(在 node_remap)
+                #                  ② 再看是不是已有树里的 id(直接用)
+                #                  ③ 都不是 → 当根节点处理(parent_id="")
+                if raw_parent:
+                    if raw_parent in node_remap:
+                        parent_id = node_remap[raw_parent]
+                    elif raw_parent in existing_items:
+                        parent_id = raw_parent
+                    else:
+                        parent_id = ""  # 悬挂引用 → 当根
+                else:
+                    parent_id = ""
+                # 去重 key:(name, kind, parent_id)
+                dedupe_key = (name, kind, parent_id)
+                if dedupe_key in by_key:
+                    # 已存在 → 记 remap(给后续子节点用),不新建
+                    existing_id = by_key[dedupe_key]
+                    if raw_id:
+                        node_remap[raw_id] = existing_id
+                    continue
+                # 新节点 — 分配 final_id
+                if (raw_id and raw_id not in used_ids
+                        and re.match(r"^N-\d{3}$", raw_id)):
+                    final_id = raw_id
+                    used_ids.add(final_id)
+                else:
+                    final_id = _next_node_id()
+                if raw_id and final_id != raw_id:
+                    node_remap[raw_id] = final_id
+                # 建 item
+                ch_range = str(rec.get("ch_range", "")).strip()
+                note = str(rec.get("note", "")).strip()
+                item = QTreeWidgetItem([name, kind, ch_range, note])
+                item.setData(0, Qt.UserRole, final_id)
+                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                # 挂到正确父节点
+                if parent_id and parent_id in existing_items:
+                    existing_items[parent_id].addChild(item)
+                    existing_items[parent_id].setExpanded(True)
+                else:
+                    self.tree_plot.addTopLevelItem(item)
+                existing_items[final_id] = item
+                by_key[dedupe_key] = final_id
+                added["pt"] = added.get("pt", 0) + 1
+
         return added
     
     # ── 注入到提示词 ───────────────────────────────────────
@@ -5807,6 +6125,84 @@ class CharacterLibrary(QWidget):
                     hint_block += (
                         "\n  ⚠ 本章出场角色【不应】触及的信息:" + ", ".join(sec_lines))
                 parts.append(hint_block)
+
+        # 5e. 剧情树定位(v1.80 BUG-060)— 当前主线进度
+        # 找到 current_chapter 所在的最具体节点(剧情点 > 章节槽 > 阶段 > 故事),
+        # 输出"当前在 X → Y → Z 路径下"+ 同阶段剩余章数,让 AI 知道宏观位置
+        if hasattr(self, "tree_plot") and current_chapter:
+            try:
+                ch = int(current_chapter)
+            except (TypeError, ValueError):
+                ch = 0
+            if ch > 0:
+                # 扁平 list 形式扫描
+                from PyQt5.QtCore import Qt as _Qt
+                flat_nodes = []
+                # 节点结构:{node_id, parent_id, name, kind, ch_range, note}
+                def _walk(item, parent_id):
+                    nid = item.data(0, _Qt.UserRole)
+                    nid = str(nid) if nid else ""
+                    flat_nodes.append({
+                        "id": nid, "parent_id": parent_id,
+                        "name": item.text(0), "kind": item.text(1),
+                        "ch_range": item.text(2), "note": item.text(3),
+                    })
+                    for i in range(item.childCount()):
+                        _walk(item.child(i), nid)
+                for i in range(self.tree_plot.topLevelItemCount()):
+                    _walk(self.tree_plot.topLevelItem(i), "")
+
+                def _node_covers(node, ch):
+                    """节点的 ch_range 是否覆盖 ch"""
+                    cr = (node.get("ch_range") or "").strip()
+                    if not cr:
+                        return False
+                    if "-" in cr:
+                        parts_r = cr.split("-", 1)
+                        try:
+                            a, b = int(parts_r[0]), int(parts_r[1])
+                            return a <= ch <= b
+                        except ValueError:
+                            return False
+                    try:
+                        return int(cr) == ch
+                    except ValueError:
+                        return False
+
+                # 优先级:剧情点 > 章节槽 > 阶段(剧情点最精确)
+                _PRIORITY = {"剧情点": 0, "章节槽": 1, "阶段": 2, "故事": 3}
+                covering = [n for n in flat_nodes if _node_covers(n, ch)]
+                if covering:
+                    covering.sort(key=lambda x: _PRIORITY.get(x["kind"], 9))
+                    target = covering[0]
+                    # 回溯祖先链
+                    by_id = {n["id"]: n for n in flat_nodes if n["id"]}
+                    path = [target]
+                    cur_pid = target["parent_id"]
+                    while cur_pid and cur_pid in by_id:
+                        path.append(by_id[cur_pid])
+                        cur_pid = by_id[cur_pid]["parent_id"]
+                    path.reverse()  # 根 → 目标
+                    path_str = " → ".join(f"[{n['kind']}]{n['name']}" for n in path)
+
+                    # 算同阶段剩余章数(如果目标节点 ch_range 是范围)
+                    rem_hint = ""
+                    cr = target.get("ch_range", "").strip()
+                    if "-" in cr:
+                        try:
+                            _a, _b = cr.split("-", 1)
+                            b_int = int(_b)
+                            if b_int >= ch:
+                                rem_hint = f",本节点剩余 {b_int - ch + 1} 章"
+                        except ValueError:
+                            pass
+                    note = target.get("note", "").strip()
+                    note_hint = f"\n  备注:{note}" if note else ""
+                    parts.append(
+                        f"【当前主线进度(本章在剧情树中的位置 — 用于把握宏观节奏)】\n"
+                        f"  位置:{path_str}{rem_hint}{note_hint}\n"
+                        f"  写作约束:本章内容应推进【{target['name']}】这个节点的进展,"
+                        f"避免无意义偏离。")
 
         # 6. 战力等级体系(防止跨级混乱)
         powers = []
@@ -12850,12 +13246,14 @@ class MainWindow(QMainWindow):
         # v1.77:加上 promises(威胁承诺)一起算
         # v1.78:加上 arcs / relations_value / goals(剧情进度)一起算
         # v1.79:加上 infos / info_disclosures(信息隔离)一起算
+        # v1.80:加上 plot_branches(剧情树)一起算
         all_empty = not any(
             (data.get(k) or []) for k in
             ("characters", "relations", "items", "events", "foreshadows",
              "power_levels", "promises",
              "arcs", "relations_value", "goals",
-             "infos", "info_disclosures")
+             "infos", "info_disclosures",
+             "plot_branches")
         )
         if all_empty:
             retry_n = getattr(self, "_world_extract_retry", {}).get(ch_num, 0)
@@ -12881,6 +13279,7 @@ class MainWindow(QMainWindow):
         gl_n = added.get("gl", 0)     # v1.78
         info_n = added.get("info", 0) # v1.79
         kb_n = added.get("kb", 0)     # v1.79
+        pt_n = added.get("pt", 0)     # v1.80
         self.tab_generation.log(
             f"✓ 第{ch_num}章 6 库提取完成: 角色+{added['ch']} 关系+{added['rel']} "
             f"物品+{added['it']} 时间线+{added['ev']} 伏笔+{added['fo']}"
@@ -12891,6 +13290,7 @@ class MainWindow(QMainWindow):
             + (f" 目标+{gl_n}" if gl_n else "")
             + (f" 信息+{info_n}" if info_n else "")
             + (f" 知情+{kb_n}" if kb_n else "")
+            + (f" 树节点+{pt_n}" if pt_n else "")
             + (f" 主角状态+{hero_n}" if hero_n else ""),
             "success")
         # 触发下一章
@@ -12903,6 +13303,7 @@ class MainWindow(QMainWindow):
         added = {"ch": 0, "rel": 0, "it": 0, "ev": 0, "fo": 0, "pw": 0, "pr": 0,
                  "arc": 0, "rv": 0, "gl": 0,                # v1.78
                  "info": 0, "kb": 0,                         # v1.79
+                 "pt": 0,                                    # v1.80 plot tree
                  "hero": 0}
 
         def existing_names(tbl, col=0):
@@ -13255,6 +13656,13 @@ class MainWindow(QMainWindow):
                     cl.tbl_known_by.setItem(row, col, QTableWidgetItem(v))
                 added["kb"] = added.get("kb", 0) + 1
                 ex_kbs.add(k)
+
+        # v1.80:剧情树 plot_branches(直接委托 CharacterLibrary.merge_dicts 的逻辑)
+        # 因为 plot_branches 的合并比其他更复杂(扁平 list 重建树 + node_id remap),
+        # 不重复实现,只把 plot_branches 字段切出来调一次 cl.merge_dicts
+        if hasattr(cl, "tree_plot") and (data.get("plot_branches") or []):
+            sub_added = cl.merge_dicts({"plot_branches": data.get("plot_branches", [])})
+            added["pt"] = added.get("pt", 0) + sub_added.get("pt", 0)
 
         # v1.64+v1.74:hero_state 字段(B 方案 — AI 写完每章后自动同步主角状态)
         # 由 QSettings 开关控制,默认开启
