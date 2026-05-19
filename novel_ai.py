@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.83"
+APP_VERSION = "v1.84"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -3910,6 +3910,39 @@ class CharacterLibrary(QWidget):
             lambda v: _QS_charlib("NovelAI", "CharLib").setValue("inject", bool(v)))
         btn_row.addWidget(self.chk_inject)
 
+        # v1.84:POV 模式 — 让 AI 用某个角色的视角写本章,自动按其已知信息边界收窄注入
+        # 配合 v1.79 信息隔离,直接堵"路人甲突然知道主角秘密"这种 OOC bug
+        btn_row.addSpacing(20)
+        btn_row.addWidget(QLabel("👁 视角:"))
+        self.cb_pov_mode = QComboBox()
+        self.cb_pov_mode.addItems(["全知视角", "主角 POV", "角色 POV"])
+        self.cb_pov_mode.setCurrentText(
+            _cls.value("pov_mode", "全知视角", type=str))
+        self.cb_pov_mode.setToolTip(
+            "v1.84 新增。选择本章用哪个视角生成:\n"
+            "  • 全知视角:注入全部库信息(默认,适合上帝视角叙事)\n"
+            "  • 主角 POV:只注入主角已知的信息(从角色库第 1 个角色取)\n"
+            "  • 角色 POV:只注入指定角色已知的信息(在右边输入角色名)\n\n"
+            "选 POV 模式时会自动:\n"
+            "  ① 关系热点只显示 POV 角色参与的关系对\n"
+            "  ② 信息边界只显示 POV 知道的信息\n"
+            "  ③ 在 prompt 加『以 X 视角写本章』的视角约束\n\n"
+            "配合 v1.79 信息隔离,从根上堵 OOC bug(路人开上帝视角)。")
+        self.cb_pov_mode.currentTextChanged.connect(
+            lambda t: _QS_charlib("NovelAI", "CharLib").setValue("pov_mode", t))
+        self.cb_pov_mode.currentTextChanged.connect(self._on_pov_mode_changed)
+        btn_row.addWidget(self.cb_pov_mode)
+
+        self.le_pov_character = QLineEdit()
+        self.le_pov_character.setPlaceholderText("仅『角色 POV』时填角色名(如:林悦)")
+        self.le_pov_character.setMaximumWidth(180)
+        self.le_pov_character.setText(_cls.value("pov_character", "", type=str))
+        self.le_pov_character.textChanged.connect(
+            lambda t: _QS_charlib("NovelAI", "CharLib").setValue("pov_character", t))
+        # 初始化禁用状态(只有"角色 POV"时可用)
+        self.le_pov_character.setEnabled(self.cb_pov_mode.currentText() == "角色 POV")
+        btn_row.addWidget(self.le_pov_character)
+
         # 每章生成完后自动抽取到所有库(默认勾上,QSettings 记住用户选择)
         # v1.81 文案修正:库数从 v1.50 初的 6 个扩到 v1.80 时的 10+ 个,
         # 文案改用"全部库"避免误导用户以为只有 6 个
@@ -4816,6 +4849,28 @@ class CharacterLibrary(QWidget):
         for r in rows:
             self.tbl_known_by.removeRow(r)
 
+    # v1.84:POV 模式切换 — 只有"角色 POV"才启用角色名输入框
+    def _on_pov_mode_changed(self, mode):
+        self.le_pov_character.setEnabled(mode == "角色 POV")
+
+    def _resolve_pov_character(self):
+        """v1.84:解析当前 POV 模式对应的角色名。
+        返回 (mode, character_name) — character_name 为空表示全知视角"""
+        mode = self.cb_pov_mode.currentText() if hasattr(self, "cb_pov_mode") else "全知视角"
+        if mode == "全知视角":
+            return ("全知视角", "")
+        if mode == "主角 POV":
+            # 取角色库第 1 个角色当主角(惯例 — 角色库第一条通常是主角)
+            if hasattr(self, "tbl_chars") and self.tbl_chars.rowCount() > 0:
+                first = self.tbl_chars.item(0, 0)
+                if first and first.text().strip():
+                    return ("主角 POV", first.text().strip())
+            return ("主角 POV", "")  # 角色库空,fallback 全知
+        if mode == "角色 POV":
+            name = (self.le_pov_character.text() or "").strip() if hasattr(self, "le_pov_character") else ""
+            return ("角色 POV", name)
+        return ("全知视角", "")
+
     # ── 5e. 剧情树子页(v1.80 BUG-060)─────────────────────
     # 与其他 sub-tab 的核心差异:用 QTreeWidget(不是 QTableWidget) — 整套 CharLib 唯一的树形 UI。
     # 节点 4 层:故事(根)→ 阶段 → 章节槽 → 剧情点
@@ -5229,6 +5284,11 @@ class CharacterLibrary(QWidget):
                 "mood":     self.hero_mood.text(),
             },
             "auto_inject": self.chk_inject.isChecked(),
+            # v1.84:POV 模式持久化(全知 / 主角 POV / 角色 POV + 角色名)
+            "pov_mode": (self.cb_pov_mode.currentText()
+                          if hasattr(self, "cb_pov_mode") else "全知视角"),
+            "pov_character": (self.le_pov_character.text()
+                              if hasattr(self, "le_pov_character") else ""),
         }
     
     def load(self, data):
@@ -5328,6 +5388,13 @@ class CharacterLibrary(QWidget):
         self.hero_mood.setText(hs.get("mood", "平静"))
         
         self.chk_inject.setChecked(data.get("auto_inject", True))
+        # v1.84:POV 模式加载
+        if hasattr(self, "cb_pov_mode"):
+            pov_mode = data.get("pov_mode", "全知视角")
+            if pov_mode in ("全知视角", "主角 POV", "角色 POV"):
+                self.cb_pov_mode.setCurrentText(pov_mode)
+        if hasattr(self, "le_pov_character"):
+            self.le_pov_character.setText(data.get("pov_character", ""))
     
     def merge_dicts(self, data):
         """把外部 JSON(list-of-dict 格式)合并进当前表(去重,不清空)。
@@ -5827,12 +5894,31 @@ class CharacterLibrary(QWidget):
         
         返回:
           str: 拼好的注入文本块,直接 append 到提示词后面
+
+        v1.84 新增 POV 模式:
+          - 通过 self.cb_pov_mode + self.le_pov_character 读出 POV 角色
+          - 选 POV 模式时,关系热点/信息边界都按 POV 角色已知信息收窄
+          - 末尾自动追加"以 X 视角写本章"指令段
         """
         if not self.chk_inject.isChecked():
             return ""
-        
+
         parts = []
-        
+
+        # v1.84:解析 POV 模式(全知 / 主角 POV / 角色 POV)
+        pov_mode, pov_character = "全知视角", ""
+        try:
+            pov_mode, pov_character = self._resolve_pov_character()
+        except Exception:
+            pass
+        # POV 模式下,把 POV 角色名加入 mentioned_names(确保该角色信息一定被注入)
+        if pov_character:
+            if mentioned_names is None:
+                mentioned_names = set()
+            elif not isinstance(mentioned_names, set):
+                mentioned_names = set(mentioned_names)
+            mentioned_names.add(pov_character)
+
         # 1. 主角当前状态
         hs = (
             f"年龄 {self.hero_age.text()}, "
@@ -6041,6 +6127,11 @@ class CharacterLibrary(QWidget):
                 if mentioned_names:
                     if not (a in mentioned_names or b in mentioned_names):
                         continue
+                # v1.84:POV 模式下,只显示 POV 角色参与的关系对
+                # (POV 角色对外界的关系是他能感知的,与他无关的关系热点不应被他"感知到")
+                if pov_character:
+                    if not (a == pov_character or b == pov_character):
+                        continue
                 hot.append((abs(val), val, a, b))
             hot.sort(key=lambda x: -x[0])
             if hot:
@@ -6057,8 +6148,9 @@ class CharacterLibrary(QWidget):
                     else:
                         tone = "中性"
                     lines.append(f"  • {a} → {b}: {v:+d} [{tone}]")
+                pov_label = f"({pov_character} 视角)" if pov_character else ""
                 parts.append(
-                    "【当前关系热点(写到对应角色时,情绪反应须符合该关系值)】\n"
+                    f"【当前关系热点{pov_label}(写到对应角色时,情绪反应须符合该关系值)】\n"
                     + "\n".join(lines))
 
         # 当前目标 — 只注入【进行中】的目标
@@ -6085,6 +6177,7 @@ class CharacterLibrary(QWidget):
         # 5d. 信息隔离(v1.79 BUG-059)— 角色已知信息边界
         # 仅对本章 mentioned_names 中的角色注入,防止 OOC(主角不在场也合理);
         # 若 mentioned_names 为空(没传或全空),整段不出 — 因为没法精确定向。
+        # v1.84:POV 模式下只显示 POV 单一角色的边界(更严格)
         if hasattr(self, "tbl_infos") and hasattr(self, "tbl_known_by") and mentioned_names:
             # 1. 建 info_id → content 索引
             info_content = {}
@@ -6105,29 +6198,39 @@ class CharacterLibrary(QWidget):
                 if not (iid and ch) or iid not in info_content:
                     continue
                 by_char.setdefault(ch, set()).add(iid)
-            # 3. 只输出 mentioned_names 中的角色
+            # 3. 输出范围:POV 模式只 POV 角色,否则 mentioned 全部
+            if pov_character:
+                target_chars = {pov_character} & set(by_char.keys())
+            else:
+                target_chars = set(by_char.keys()) & set(mentioned_names)
             lines = []
-            # 严格匹配 — 完整名字匹配(不做子串,避免"林"匹配"林远""林悦"乱套)
-            for ch in sorted(set(by_char.keys()) & set(mentioned_names)):
+            for ch in sorted(target_chars):
                 ids = sorted(by_char[ch])
-                # 把 id 和内容片段都显示
                 snippets = [f"{iid}({info_content.get(iid, '?')[:20]})" for iid in ids]
                 lines.append(f"  • {ch} 已知: " + ", ".join(snippets))
             if lines:
                 # 同时列出"全文有但本章角色都不知道"的信息(警示用)
                 all_info_ids = set(info_content.keys())
                 known_in_chapter = set()
-                for ch in (set(by_char.keys()) & set(mentioned_names)):
+                for ch in target_chars:
                     known_in_chapter |= by_char[ch]
                 secrets = all_info_ids - known_in_chapter
-                hint_block = (
-                    "【本章出场角色已知信息边界(严守 — 不在已知列表的信息,该角色绝对不能提及/利用/暗示)】\n"
-                    + "\n".join(lines))
+                if pov_character:
+                    title = f"【{pov_character} POV 已知信息边界(本章 ONLY 用此视角写,不能让 {pov_character} 暴露他不知道的信息)】"
+                else:
+                    title = "【本章出场角色已知信息边界(严守 — 不在已知列表的信息,该角色绝对不能提及/利用/暗示)】"
+                hint_block = title + "\n" + "\n".join(lines)
                 if secrets:
                     sec_lines = [f"{iid}({info_content.get(iid, '?')[:20]})"
                                  for iid in sorted(secrets)[:8]]
-                    hint_block += (
-                        "\n  ⚠ 本章出场角色【不应】触及的信息:" + ", ".join(sec_lines))
+                    if pov_character:
+                        hint_block += (
+                            f"\n  ⚠ {pov_character} 【不应】触及/暗示的信息:"
+                            + ", ".join(sec_lines))
+                    else:
+                        hint_block += (
+                            "\n  ⚠ 本章出场角色【不应】触及的信息:"
+                            + ", ".join(sec_lines))
                 parts.append(hint_block)
 
         # 5e. 剧情树定位(v1.80 BUG-060)— 当前主线进度
@@ -6235,10 +6338,24 @@ class CharacterLibrary(QWidget):
             if recent:
                 lines = [f"  • 第{c}章: {e}" + (f" [{ch}]" if ch else "") for c, e, ch in recent]
                 parts.append("【最近重大事件】\n" + "\n".join(lines))
-        
+
+        # v1.84:POV 模式 — 在所有库信息之后,补一段强约束的视角指令
+        if pov_character:
+            pov_block = (
+                f"【⚠️ 本章 POV 模式 — 严格遵守】\n"
+                f"  本章使用【{pov_character}】的视角写作。\n"
+                f"  规则:\n"
+                f"    1. 只描写【{pov_character}】能感知到的:他的所见/所闻/所想/所感\n"
+                f"    2. 不能写【{pov_character}】不在场的场景(切场景需明确『后来听 X 说』)\n"
+                f"    3. 不能让【{pov_character}】突然知道他【上方信息边界】之外的事实\n"
+                f"    4. 其他角色的内心活动【不能直接写】 — 只能通过 {pov_character} 的观察推断\n"
+                f"    5. 描写【{pov_character}】用『他/她』或姓名,不要用『我』(第三人称限知)"
+            )
+            parts.append(pov_block)
+
         if not parts:
             return ""
-        
+
         return "\n\n" + "═" * 30 + "\n📚 角色与世界状态(必须严格遵守):\n" + "═" * 30 + "\n\n" + "\n\n".join(parts)
     
     # ── v1.64:主角状态自动同步 ───────────────────────────────
