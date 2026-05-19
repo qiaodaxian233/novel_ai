@@ -1037,6 +1037,14 @@ class PanguEngine:
         本地快速 lint:扫禁用词 + 长句检测 + 段落长度统计。
         不调用 AI,纯字符串/正则。
         返回 dict 含 score(0-100)、issues(list)。
+
+        v1.81 BUG-061 修复:
+        - 禁用词单次扣分 2→1(原系数过严,单章踩 5 词就扣 10 分)
+        - 长句门 25→35 字(中文小说 25 字是短句,35 中等,>50 才长)
+        - 段落门 3→5 句(允许必要的叙述展开)
+        - 破折号/省略号:容忍少量,>3 次/>2 次才扣分
+
+        v1.81 校准目标:质量良好的章节应在 90+ 分,设 95 分门可达。
         """
         issues: List[str] = []
         score = 100
@@ -1044,44 +1052,47 @@ class PanguEngine:
         if not text or not text.strip():
             return {"score": 0, "issues": ["内容为空"], "stats": {}}
 
-        # 1. 禁用词
+        # 1. 禁用词(v1.81:每次 -1,上限 30)
         forbidden = cls.detect_forbidden_words(text)
         if forbidden:
             top = ", ".join(f"{w}×{c}" for w, c in forbidden[:5])
-            issues.append(f"出现禁用词: {top}")
-            score -= min(40, sum(c for _, c in forbidden) * 2)
+            total = sum(c for _, c in forbidden)
+            issues.append(f"出现禁用词: {top}(共 {total} 次)")
+            score -= min(30, total)
 
-        # 2. 长句(单句>25 字,以中文逗号/句号/问号/感叹号/分号/省略号为切分)
-        sents = re.split(r"[,，。!?!?;；\n]", text)
-        long_sents = [s.strip() for s in sents if len(s.strip()) > 25]
+        # 2. 长句(v1.81:门槛 35 字)
+        sents = re.split(r"[,,。!?!?;;\n]", text)
+        long_sents = [s.strip() for s in sents if len(s.strip()) > 35]
         if long_sents:
-            issues.append(f"长句(>25 字)数量: {len(long_sents)} 句")
-            score -= min(20, len(long_sents))
+            issues.append(f"长句(>35 字)数量: {len(long_sents)} 句")
+            score -= min(15, len(long_sents))
 
-        # 3. 段落长度(每段>3 句视为超标)
+        # 3. 段落长度(v1.81:门槛 5 句)
         paragraphs = [p for p in text.split("\n") if p.strip()]
         over_paragraphs = []
         for i, p in enumerate(paragraphs, 1):
             sents_in_p = re.split(r"[。!?!?]", p)
             sents_in_p = [s for s in sents_in_p if s.strip()]
-            if len(sents_in_p) > 3:
+            if len(sents_in_p) > 5:
                 over_paragraphs.append(i)
         if over_paragraphs:
-            issues.append(f"超 3 句的段落: 第 {over_paragraphs[:6]} 段")
-            score -= min(15, len(over_paragraphs))
+            issues.append(f"超 5 句的段落: 第 {over_paragraphs[:6]} 段")
+            score -= min(10, len(over_paragraphs))
 
-        # 4. 破折号检测(盘古禁用)
-        if "——" in text or "—" in text:
-            cnt = text.count("——") + text.count("—") - text.count("——") * 2  # 单破折号
-            if cnt < 0:  # 修正:含双破折号
-                cnt = (text.count("——")) + max(0, text.count("—") - text.count("——") * 2)
-            issues.append(f"出现破折号(盘古禁用,应改用逗号/句号/省略号)")
-            score -= 5
+        # 4. 破折号(v1.81:>3 次才扣)
+        em_cnt = text.count("——") + text.count("—") - text.count("——") * 2
+        if em_cnt < 0:
+            em_cnt = text.count("——") + max(0, text.count("—") - text.count("——") * 2)
+        if em_cnt > 3:
+            issues.append(f"破折号过多({em_cnt} 处,盘古建议改用逗号/句号/省略号)")
+            score -= min(5, em_cnt - 3)
 
-        # 5. 三连点省略号(盘古要求六连点 ......)
-        if re.search(r"(?<!\.)\.{3}(?!\.)", text) or "…" in text:
-            issues.append("省略号未用六连点(......)")
-            score -= 5
+        # 5. 省略号格式(v1.81:>2 次才扣)
+        bad_ellipsis_cnt = len(re.findall(r"(?<!\.)\.{3}(?!\.)", text)) + text.count("…")
+        if bad_ellipsis_cnt > 2:
+            issues.append(
+                f"非六连点省略号 {bad_ellipsis_cnt} 处(盘古建议用 ......)")
+            score -= min(5, bad_ellipsis_cnt - 2)
 
         score = max(0, score)
         return {
@@ -1095,6 +1106,156 @@ class PanguEngine:
                 "forbidden_word_kinds": len(forbidden),
             },
         }
+
+    # v1.81 新增:带精确定位的 lint(给死磕重写注入用)
+    @classmethod
+    def lint_with_locations(cls, text: str) -> Dict[str, object]:
+        """与 quick_chapter_lint 类似,但返回每个违规的精确位置。
+        用于死磕重写时给 AI 提供"上次哪一句踩了哪个词"的具体指引,
+        而不是只说"你用了 3 次想"(AI 不知道改哪)。
+        """
+        violations: List[Dict] = []
+        if not text or not text.strip():
+            return {"score": 0, "violations": [], "summary": "内容为空"}
+
+        paragraphs = [p for p in text.split("\n") if p.strip()]
+
+        # 1. 禁用词逐个定位
+        active_forbidden = cls.get_active_forbidden_words()
+        for w in active_forbidden:
+            if w not in text:
+                continue
+            for para_idx, p in enumerate(paragraphs, 1):
+                start = 0
+                same_para_cnt = 0
+                while True:
+                    pos = p.find(w, start)
+                    if pos < 0:
+                        break
+                    s = max(0, pos - 8)
+                    e = min(len(p), pos + len(w) + 8)
+                    snippet = p[s:e]
+                    if w in ("顿时", "连忙", "显然", "似乎", "或许", "可能",
+                            "一定", "十分", "几乎", "立刻", "确实", "渐渐",
+                            "略微", "猛地", "暂时", "瞬间"):
+                        advice = "副词类 → 直接删除,或换具体动作"
+                    elif w in ("知道", "觉得", "意识到", "感觉到", "想",
+                              "认为", "不知道", "他知道", "她知道", "我知道"):
+                        advice = "心理动词 → 换具体动作/对话(如『他咬牙』替代『他想』)"
+                    elif w in ("仿佛", "如同", "一抹", "一股", "一丝"):
+                        advice = "比喻词 → 改直接断言(去掉『仿佛』『如同』直接写)"
+                    elif w in ("嘴角", "脸色", "紧锁"):
+                        advice = "微小动作套话 → 换更有信息量的动作"
+                    else:
+                        advice = "套话 → 整句重写,用具体动作/对话表达"
+                    violations.append({
+                        "type": "forbidden",
+                        "word": w,
+                        "snippet": snippet,
+                        "para_no": para_idx,
+                        "advice": advice,
+                    })
+                    start = pos + len(w)
+                    same_para_cnt += 1
+                    if same_para_cnt >= 3:
+                        break
+
+        # 2. 长句定位
+        for para_idx, p in enumerate(paragraphs, 1):
+            sents = re.split(r"([,,。!?!?;;])", p)
+            full_sents = []
+            cur = ""
+            for piece in sents:
+                cur += piece
+                if piece in (",", ",", "。", "!", "?", "!", "?", ";", ";"):
+                    if cur.strip():
+                        full_sents.append(cur.strip())
+                    cur = ""
+            if cur.strip():
+                full_sents.append(cur.strip())
+            for s in full_sents:
+                if len(s) > 35:
+                    snippet = s[:30] + "..." if len(s) > 30 else s
+                    violations.append({
+                        "type": "long_sent",
+                        "snippet": snippet,
+                        "para_no": para_idx,
+                        "advice": f"长句({len(s)}字)→ 切成 2-3 个短句",
+                    })
+
+        # 3. 长段定位
+        for para_idx, p in enumerate(paragraphs, 1):
+            sents_in_p = re.split(r"[。!?!?]", p)
+            sents_in_p = [s for s in sents_in_p if s.strip()]
+            if len(sents_in_p) > 5:
+                violations.append({
+                    "type": "long_para",
+                    "snippet": p[:40] + "...",
+                    "para_no": para_idx,
+                    "advice": f"段落 {len(sents_in_p)} 句 → 拆成 2-3 段",
+                })
+
+        # 4&5
+        em_cnt = text.count("——") + text.count("—") - text.count("——") * 2
+        if em_cnt < 0:
+            em_cnt = text.count("——") + max(
+                0, text.count("—") - text.count("——") * 2)
+        if em_cnt > 3:
+            violations.append({
+                "type": "dash",
+                "snippet": f"全文 {em_cnt} 处破折号",
+                "para_no": 0,
+                "advice": "改用逗号/句号/省略号",
+            })
+        bad_ellipsis_cnt = len(re.findall(r"(?<!\.)\.{3}(?!\.)", text)) + text.count("…")
+        if bad_ellipsis_cnt > 2:
+            violations.append({
+                "type": "ellipsis",
+                "snippet": f"全文 {bad_ellipsis_cnt} 处非六连点省略号",
+                "para_no": 0,
+                "advice": "改用六连点 ......",
+            })
+
+        score = cls.quick_chapter_lint(text)["score"]
+
+        # 生成 summary(精炼版,给 AI prompt 用)
+        forbidden_grouped = {}
+        for v in violations:
+            if v["type"] == "forbidden":
+                forbidden_grouped.setdefault(v["word"], []).append(
+                    (v["para_no"], v["snippet"]))
+        summary_lines = []
+        if forbidden_grouped:
+            sorted_words = sorted(
+                forbidden_grouped.items(), key=lambda x: -len(x[1]))
+            for w, occurrences in sorted_words[:5]:
+                first_few = occurrences[:3]
+                examples = " / ".join(
+                    f"第{p}段『{s}』" for p, s in first_few)
+                advice = next(
+                    v["advice"] for v in violations
+                    if v["type"] == "forbidden" and v["word"] == w)
+                summary_lines.append(
+                    f"  ⚠ 禁用词【{w}】出现 {len(occurrences)} 次: {examples}\n    → {advice}")
+
+        long_sent_v = [v for v in violations if v["type"] == "long_sent"]
+        if long_sent_v:
+            for v in long_sent_v[:3]:
+                summary_lines.append(
+                    f"  ⚠ 长句(第{v['para_no']}段):『{v['snippet']}』\n    → {v['advice']}")
+
+        long_para_v = [v for v in violations if v["type"] == "long_para"]
+        if long_para_v:
+            paras_no = ", ".join(
+                f"第{v['para_no']}段" for v in long_para_v[:5])
+            summary_lines.append(f"  ⚠ 段落过长:{paras_no}\n    → 拆段")
+
+        for v in violations:
+            if v["type"] in ("dash", "ellipsis"):
+                summary_lines.append(f"  ⚠ {v['snippet']}\n    → {v['advice']}")
+
+        summary = "\n".join(summary_lines) if summary_lines else "无具体违规"
+        return {"score": score, "violations": violations, "summary": summary}
 
     # ----- 完整 spec 懒加载 -----
     def get_full_spec(self) -> str:

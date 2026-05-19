@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.80"
+APP_VERSION = "v1.81"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -9944,10 +9944,11 @@ class GenerationControl(QWidget):
         self.quality_threshold.setRange(0, 100); self.quality_threshold.setValue(75)
         self.quality_threshold.setSuffix(" 分")
         self.quality_threshold.setToolTip(
-            "盘古质量评分阈值(0-100)。\n"
-            "评分低于此值 → 触发死磕重写(直到达标或用尽次数上限)。\n"
+            "盘古质量评分阈值(0-100)。v1.81 已校准评分曲线。\n"
+            "评分低于此值 → 触发死磕重写(死磕时会注入上次的精确定位)。\n"
             "设 0 = 关闭分数门(只看字数/钩子/禁用词)。\n"
-            "设 75 = 中等严苛(推荐),设 85 = 严苛,设 90+ = 强迫症")
+            "设 75 = 宽松(几乎一次过),设 85 = 中等(推荐),设 95 = 严苛。\n"
+            "v1.81 校准:质量良好的章节通常 90+ 分,设 95 分门可达但仍需 AI 努力。")
         crow.addWidget(self.quality_threshold)
 
         self.btn_start = QPushButton("▶ 开始连续生成")
@@ -14930,20 +14931,23 @@ class MainWindow(QMainWindow):
             pass
 
         # 4. 盘古综合评分门(分数低于阈值 → 死磕)
+        # v1.81 BUG-061:改用 lint_with_locations,记录精确定位给死磕用
         ran_checks.append("盘古综合评分")
+        score_locations_summary = ""  # 存定位给死磕注入
         try:
             threshold = self.tab_generation.quality_threshold.value()
             if threshold > 0:
                 from pangu_system import get_default_engine
                 eng = get_default_engine()
-                lint = eng.quick_chapter_lint(content)
+                # v1.81:用 lint_with_locations 拿精确定位
+                lint = eng.lint_with_locations(content)
                 score = lint.get("score", 0)
                 if score < threshold:
-                    score_issues = lint.get("issues", [])
+                    score_locations_summary = lint.get("summary", "")
                     issues.append(
                         f"评分不达标:盘古综合评分 {score}/100 < 阈值 {threshold}。"
-                        f"主要问题: {'; '.join(score_issues[:3]) if score_issues else '段落/句式/禁用词复合问题'}。"
-                        f"分数到 {threshold} 才放行"
+                        f"差 {threshold - score} 分。"
+                        f"具体违规已记录(下次重写时会附带定位)"
                     )
                 else:
                     self.tab_generation.log(
@@ -14953,6 +14957,9 @@ class MainWindow(QMainWindow):
                     f"  · 评分门已关闭(阈值=0,跳过)", "info")
         except Exception as _se:
             self.tab_generation.log(f"评分门跑失败(忽略):{_se}", "warn")
+
+        # 把定位信息暂存到 self(下面会被 retry 函数读)
+        self._last_lint_locations = score_locations_summary
 
         # 汇总
         if issues:
@@ -15020,9 +15027,43 @@ class MainWindow(QMainWindow):
                 "重写完后自查一遍,如果还有任何禁用词,继续删继续换,直到清零。\n"
             )
 
+        # v1.81 BUG-061:把上次校验的精确定位 summary 注入 retry prompt
+        # 这是关键修复 — 旧版只告诉 AI"用了 3 次想",新版告诉 AI"第 11 段『林远想站直』
+        # 这里要改",让 AI 能精准修而不是再瞎写一次
+        locations_block = ""
+        loc_summary = getattr(self, "_last_lint_locations", "")
+        if loc_summary and loc_summary != "无具体违规":
+            locations_block = (
+                "\n\n🎯【上次违规的精确定位(必须逐条修复)】\n"
+                + loc_summary
+                + "\n\n重写时,请逐条对照上面的【段号 / 原文片段 / 修复建议】,"
+                "把对应位置改掉。不要换一批别的禁用词,要让分数真正上升。\n"
+            )
+
+        # v1.81:分数进度提示(让 AI 知道目标 vs 现状的 gap)
+        score_progress_block = ""
+        try:
+            threshold = self.tab_generation.quality_threshold.value()
+            # 从 reasons 里抽取上次分数
+            for r in reasons:
+                m_score = re.search(r"评分不达标[::]\s*盘古综合评分\s*(\d+)/100", r)
+                if m_score:
+                    last_score = int(m_score.group(1))
+                    gap = threshold - last_score
+                    score_progress_block = (
+                        f"\n\n📊【分数进度】上次 {last_score}/100,"
+                        f"目标 ≥ {threshold},缺 {gap} 分。\n"
+                        f"重写时优先修扣分最重的项(通常是禁用词数量)。\n"
+                    )
+                    break
+        except Exception:
+            pass
+
         stronger = (meta.get("original_prompt", "")
                     + "\n\n【上次问题清单(必须修正)】\n" + reason_block
                     + forbidden_extra
+                    + locations_block          # v1.81 新增
+                    + score_progress_block     # v1.81 新增
                     + "\n\n请重写本章,严格规避以上所有问题。")
         self._pending_task_target = new_meta
         self.tab_generation.log(

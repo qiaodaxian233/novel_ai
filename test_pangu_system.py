@@ -150,20 +150,25 @@ class TestPanguCore(unittest.TestCase):
         self.assertTrue(any("禁用词" in i for i in r["issues"]))
 
     def test_lint_catches_long_sentence(self):
-        # 单句超 25 字
-        long = "他抬起头来仔细地观察着远方的山峦那里似乎有着不同寻常的光芒"
+        # v1.81:门槛 35 字。这里给一个 40+ 字的长句
+        long = "他抬起头来仔细地观察着远方那座山峦的山峰下方似乎有着一道不同寻常的金色光芒在闪动而且看起来还在缓缓移动接近"
         r = self.engine.quick_chapter_lint(long)
-        self.assertTrue(any("长句" in i for i in r["issues"]))
+        self.assertTrue(any("长句" in i for i in r["issues"]),
+                        f"应检测到长句,实际 issues: {r['issues']}")
 
     def test_lint_catches_dash(self):
-        bad = "他——还是来了。"
+        # v1.81:>3 处破折号才扣分(避免对话偶尔用一次就扣)
+        bad = "他——还是来了。她——也跟着来了。他——叹了口气。她——也叹气。"
         r = self.engine.quick_chapter_lint(bad)
-        self.assertTrue(any("破折号" in i for i in r["issues"]))
+        self.assertTrue(any("破折号" in i for i in r["issues"]),
+                        f"应检测到破折号,实际 issues: {r['issues']}")
 
     def test_lint_catches_ellipsis_three_dots(self):
-        bad = "他叹了口气。"  + "..."  # 三点而非六点
+        # v1.81:>2 处非六连点才扣
+        bad = "他叹了口气..." + "她也叹气..." + "我也叹气..."  # 3 处三连点
         r = self.engine.quick_chapter_lint(bad)
-        self.assertTrue(any("省略号" in i for i in r["issues"]))
+        self.assertTrue(any("省略号" in i for i in r["issues"]),
+                        f"应检测到省略号,实际 issues: {r['issues']}")
 
     def test_lint_empty(self):
         r = self.engine.quick_chapter_lint("")
