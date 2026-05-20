@@ -72,9 +72,22 @@ class TestParseScore(unittest.TestCase):
         self.assertEqual(score, 7.0)
 
     def test_fallback_unknown_format(self):
+        """BUG-062 修改后:全失败的兜底分应是 ≥ 阈值(10.0),
+        避免 parser 故障被当成'评分不足'触发死磕(雪崩)。
+        旧版返回 5.0 是错的,会让 AI 抓串 / JSON 残留时整个流水线死循环。"""
         score, reason = self.parse('一些不带格式的文本')
-        self.assertEqual(score, 5.0)
-        self.assertIn("文本", reason)
+        self.assertEqual(score, 10.0)
+        self.assertIn("parse", reason.lower())
+
+    def test_fallback_does_not_trigger_death_grind(self):
+        """BUG-062 回归:节奏稽核 AI 返回了'章节正文'(典型抓取错位)→
+        parser 拿不到 JSON → 兜底必须返回 ≥ 阈值 7,不能再返回 5.0。"""
+        leaked_chapter = "第 11 章 那封信\n\n手机在床头柜上震了三次。\n林星杳翻身坐起来"
+        score, _ = self.parse(leaked_chapter)
+        self.assertGreaterEqual(
+            score, 7.0,
+            "节奏 parser 拿到章节正文(抓取错位场景)时不能返回 <7 的分数,"
+            "否则会触发死磕,死磕又遇到同样的抓取错位,雪崩")
 
 
 class TestReadmeConsistency(unittest.TestCase):

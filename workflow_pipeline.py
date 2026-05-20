@@ -355,7 +355,9 @@ class RhythmScoreStep(PipelineStep):
         解析 AI 评分返回。优先级:
         1. JSON 格式 {"score":8,"reason":"..."} (含 markdown code block 包裹的)
         2. 旧格式 "8/10,reason"
-        3. 兜底返回 (5.0, text[:200])
+        3. 兜底返回 (10.0, "[parse 失败,跳过]") — 不让 parser 故障变成"评分不足"
+           误判触发死磕。对齐 _on_critique_score_response 旧路径的"parse 失败
+           只 log,不计 issue"行为(BUG-062)。
         """
         import json as _json
         raw = (text or "").strip()
@@ -378,8 +380,9 @@ class RhythmScoreStep(PipelineStep):
             score = float(m.group(1))
             reason = re.sub(r'.*?\d+\s*/\s*10\s*[,，。\n]?', '', raw, count=1).strip()[:200]
             return score, reason
-        # 全失败:中性分 + 截断的原文
-        return 5.0, raw[:200]
+        # 全失败:返回 10.0(高于任何阈值)让上层跳过此维度,
+        # 而不是返回 5.0(恒 < 阈值 7)让 parser 故障直接触发死磕。
+        return 10.0, "[parse 失败,跳过本维度评分]"
 
 
 class CharacterScoreStep(PipelineStep):
@@ -658,6 +661,24 @@ class GenerationWorkflow:
             self._mw._batch_remaining = 0
             return
 
+        # ★ BUG-062 防御(对齐旧路径 _handle_chapter_response 的 BUG-027 哨兵):
+        #   DeepSeek 串行任务有时回复抓取错位 → 抓到的不是章节,
+        #   是上一轮 JSON 稽核的残留 / 短回复 / "输入内容并非小说章节正文" 之类提示。
+        #   如果章节正文 < 500 字 且 retry_left > 0,认定 AI 没听懂指令 / 抓串了,
+        #   直接重发原指令,不进入校验流程(不然短回复会被节奏稽核 AI 当不及格
+        #   再触发死磕,死磕完又拿到下一个串错位,雪崩)。
+        if meta.get("target") != "golden_three":
+            ck_len = len(content.strip())
+            if ck_len < 500 and ctx.retry_left > 0:
+                self._mw.tab_generation.log(
+                    f"⚠ 收到异常短的'章节回复'({ck_len} 字),疑似抓取错位/AI 误解指令,"
+                    f"重发(剩余 {ctx.retry_left} 次)",
+                    "warn")
+                ctx.content = ""
+                ctx.issues = ["内容明显异常(疑似抓取错位),重发"]
+                self._retry(ctx)
+                return
+
         ctx.content = content
         ctx.issues = []  # 每次(含 retry)重置 issues
 
@@ -689,6 +710,19 @@ class GenerationWorkflow:
     def _retry(self, ctx: PipelineContext):
         mw = self._mw
         if ctx.retry_left <= 0:
+            # ★ BUG-062 硬下限:死磕用尽 + 内容异常短(<800 字)→ 拒绝入库,
+            #   防止 JSON 评分残留 / 抓取错位的废话当成章节进 chapters[],
+            #   下一章 prompt 又把这串废话当"上一章正文"喂给 AI → 雪崩。
+            ck_len = len(ctx.content.strip()) if ctx.content else 0
+            if ck_len < 800 and ctx.extras.get("_target_golden_three") is not True:
+                mw.tab_generation.log(
+                    f"✗ 死磕次数用尽,且内容异常({ck_len} 字 < 800)— "
+                    f"拒绝入库,本章标记 FAILED。请检查 AI 站点状态后手动重写,"
+                    f"避免污染下一章上下文", "error")
+                # 不调 _accept,不进 chapters[],不触发后置链。
+                # 仅减 batch_remaining,让批量循环能继续(若用户在另一会话继续)。
+                mw._batch_remaining = max(0, getattr(mw, "_batch_remaining", 0) - 1)
+                return
             mw.tab_generation.log("✗ 死磕次数用尽,接受这章(质量不达标)", "warn")
             self._accept(ctx)
             return
@@ -738,13 +772,72 @@ class GenerationWorkflow:
             mw._split_and_save_golden_three(ctx.content)
             ch_num = len(mw.chapters)
         else:
-            ch_title = mw._extract_chapter_title(ctx.content) or f"第{ctx.ch_num}章"
-            ch_body = mw._strip_chapter_title(ctx.content)
-            mw.chapters.append({"title": ch_title, "content": ch_body, "summary": ""})
+            # ★ BUG-062:对齐 _accept_chapter_and_continue 的入库数据形态。
+            #   之前 workflow 路径只调 _strip_chapter_title 就 append,
+            #   完全跳过了 parse_chapter_meta / 伏笔自动同步 / 钩子爽点同步,
+            #   导致两条路径产出的 chapter dict 字段不一致 + lifespan_loops
+            #   不更新 + 角色与世界 6 库的钩子编年/爽点编年不更新。
+            pangu_meta = None
+            body_for_title = ctx.content
+            try:
+                from pangu_system import parse_chapter_meta as _pangu_parse
+                pangu_meta = _pangu_parse(ctx.content)
+                body_for_title = pangu_meta.get("body") or ctx.content
+                _stripped = len(ctx.content) - len(body_for_title)
+                if _stripped > 0:
+                    mw.tab_generation.log(
+                        f"✓ 已剥离章节尾部元信息 {_stripped} 字 → 切到【章节编辑器】"
+                        f"Tab,字数下方📌米色面板可看钩子/爽点/伏笔/下一章选项",
+                        "info")
+                elif ("本章完" in ctx.content or "【断章钩子】" in ctx.content
+                      or "断章钩子" in ctx.content or "下一章选项" in ctx.content):
+                    mw.tab_generation.log(
+                        "⚠️ 检测到元信息标记但剥离失败(parse_chapter_meta 没匹配)。"
+                        "请把这段章节末尾 30 行复制发给开发者,以便加新匹配规则",
+                        "warn")
+            except ImportError:
+                pass
+            except Exception as _pm_e:
+                mw.tab_generation.log(
+                    f"盘古元信息解析失败(降级保留原文):{_pm_e}", "warn")
+
+            ch_title = mw._extract_chapter_title(body_for_title) or f"第{ctx.ch_num}章"
+            ch_body = mw._strip_chapter_title(body_for_title)
+            chapter = {"title": ch_title, "content": ch_body, "summary": ""}
+
+            # 元信息字段挂到 chapter dict
+            if pangu_meta:
+                if pangu_meta.get("hook"):
+                    chapter["hook"] = pangu_meta["hook"]
+                if pangu_meta.get("cool_points"):
+                    chapter["cool_points"] = pangu_meta["cool_points"]
+                if pangu_meta.get("next_options"):
+                    chapter["next_options"] = pangu_meta["next_options"]
+                _sp = len(pangu_meta.get("seeds_planted", []))
+                _pd = len(pangu_meta.get("seeds_paid", []))
+                if _sp or _pd:
+                    parts = []
+                    if _sp: parts.append(f"埋雷 {_sp} 条")
+                    if _pd: parts.append(f"收雷 {_pd} 条")
+                    chapter["_pangu_seeds_summary"] = " / ".join(parts)
+
+            mw.chapters.append(chapter)
+
+            # 6 库同步(BUG-014 / v1.23 BUG-041 引入的旧路径功能,workflow 之前漏)
+            if pangu_meta:
+                try:
+                    mw._sync_pangu_seeds_to_lifespan(pangu_meta, ctx.ch_num)
+                except Exception as _e_l:
+                    mw.tab_generation.log(f"伏笔同步失败:{_e_l}", "warn")
+                try:
+                    mw._sync_hook_and_cool_to_charlib(pangu_meta, ctx.ch_num)
+                except Exception as _e_h:
+                    mw.tab_generation.log(f"钩子/爽点同步失败:{_e_h}", "warn")
+
             mw._refresh_chapter_list()
             if mw.tab_generation.auto_save.isChecked():
                 mw._save_chapter_to_disk(mw.chapters[-1])
-            actual = len(re.sub(r'\s', '', ctx.content))
+            actual = len(re.sub(r'\s', '', ch_body))
             mw.tab_generation.log(
                 f"✓ 第 {ctx.ch_num} 章生成成功!字数:{actual} 字", "success")
             ch_num = ctx.ch_num
