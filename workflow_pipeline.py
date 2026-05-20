@@ -767,6 +767,14 @@ class GenerationWorkflow:
     def _accept(self, ctx: PipelineContext):
         mw = self._mw
 
+        # 📋 管家:章节流程开始(workflow 路径)
+        try:
+            import housekeeper as _hk_mod
+            _hk = _hk_mod.get_housekeeper()
+            _hk.start_chapter(ctx.ch_num, path_tag="workflow")
+        except Exception:
+            pass
+
         # 入库
         if ctx.extras.get("_target_golden_three"):
             mw._split_and_save_golden_three(ctx.content)
@@ -783,6 +791,14 @@ class GenerationWorkflow:
                 from pangu_system import parse_chapter_meta as _pangu_parse
                 pangu_meta = _pangu_parse(ctx.content)
                 body_for_title = pangu_meta.get("body") or ctx.content
+                # 📋 管家:记录内容长度 + 元信息
+                try:
+                    import housekeeper as _hk_mod
+                    _hk = _hk_mod.get_housekeeper()
+                    _hk.record_content(ctx.content, body_for_title)
+                    _hk.record_pangu_meta(pangu_meta)
+                except Exception:
+                    pass
                 _stripped = len(ctx.content) - len(body_for_title)
                 if _stripped > 0:
                     mw.tab_generation.log(
@@ -795,11 +811,21 @@ class GenerationWorkflow:
                         "⚠️ 检测到元信息标记但剥离失败(parse_chapter_meta 没匹配)。"
                         "请把这段章节末尾 30 行复制发给开发者,以便加新匹配规则",
                         "warn")
+                    try:
+                        import housekeeper as _hk_mod
+                        _hk_mod.get_housekeeper().warn("元信息剥离失败")
+                    except Exception:
+                        pass
             except ImportError:
                 pass
             except Exception as _pm_e:
                 mw.tab_generation.log(
                     f"盘古元信息解析失败(降级保留原文):{_pm_e}", "warn")
+                try:
+                    import housekeeper as _hk_mod
+                    _hk_mod.get_housekeeper().record_pangu_meta_failed(str(_pm_e))
+                except Exception:
+                    pass
 
             ch_title = mw._extract_chapter_title(body_for_title) or f"第{ctx.ch_num}章"
             ch_body = mw._strip_chapter_title(body_for_title)
@@ -827,17 +853,40 @@ class GenerationWorkflow:
             if pangu_meta:
                 try:
                     mw._sync_pangu_seeds_to_lifespan(pangu_meta, ctx.ch_num)
+                    try:
+                        import housekeeper as _hk_mod
+                        _hk_mod.get_housekeeper().record_step("seeds_sync_lifespan", True)
+                    except Exception:
+                        pass
                 except Exception as _e_l:
                     mw.tab_generation.log(f"伏笔同步失败:{_e_l}", "warn")
                 try:
                     mw._sync_hook_and_cool_to_charlib(pangu_meta, ctx.ch_num)
+                    try:
+                        import housekeeper as _hk_mod
+                        _hk_mod.get_housekeeper().record_step("hook_cool_sync", True)
+                    except Exception:
+                        pass
                 except Exception as _e_h:
                     mw.tab_generation.log(f"钩子/爽点同步失败:{_e_h}", "warn")
 
             mw._refresh_chapter_list()
             if mw.tab_generation.auto_save.isChecked():
                 mw._save_chapter_to_disk(mw.chapters[-1])
+                try:
+                    import housekeeper as _hk_mod
+                    _hk_mod.get_housekeeper().record_step("auto_save", True)
+                except Exception:
+                    pass
             actual = len(re.sub(r'\s', '', ch_body))
+            # 📋 管家:字数门
+            try:
+                import housekeeper as _hk_mod
+                _hk = _hk_mod.get_housekeeper()
+                _target = getattr(mw, "_batch_target_words", 0) or 0
+                _hk.record_word_count(int(_target or 0), actual)
+            except Exception:
+                pass
             mw.tab_generation.log(
                 f"✓ 第 {ctx.ch_num} 章生成成功!字数:{actual} 字", "success")
             ch_num = ctx.ch_num
@@ -846,6 +895,17 @@ class GenerationWorkflow:
         ctx.ch_num = ch_num  # golden_three 后修正
 
         QTimer.singleShot(300, lambda: self._run_post_chain(ctx))
+
+        # 📋 管家:章节流程结束(workflow 路径)
+        try:
+            import housekeeper as _hk_mod
+            _hk = _hk_mod.get_housekeeper()
+            _hk.record_step("post_chapter_chain", True)
+            _final = _hk.finalize_chapter()
+            if _final:
+                mw.tab_generation.log(_final.render_oneliner(), "info")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # 7-H. Phase 4: POST_CHAIN

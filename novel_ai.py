@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.89"
+APP_VERSION = "v1.90"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -52,6 +52,11 @@ try:
     RELATION_GRAPH_AVAILABLE = True
 except ImportError:
     RELATION_GRAPH_AVAILABLE = False
+try:
+    import housekeeper as _housekeeper_mod
+    HOUSEKEEPER_AVAILABLE = True
+except ImportError:
+    HOUSEKEEPER_AVAILABLE = False
 import time
 import random
 import socket
@@ -11376,6 +11381,31 @@ class MainWindow(QMainWindow):
         a_rl_reset = QAction("🔄 重置 RL 学习数据(慎用)", self)
         a_rl_reset.triggered.connect(self.reset_flow_rl)
         tm.addAction(a_rl_reset)
+        tm.addSeparator()
+        a_hk_show = QAction("📋 管家日报(本次会话章节健康汇总)", self)
+        a_hk_show.triggered.connect(self.show_housekeeper_summary)
+        tm.addAction(a_hk_show)
+
+    def show_housekeeper_summary(self):
+        """📋 管家日报弹窗(P1 — 章末聚合 / pipeline 健康度 / 跨章累计)"""
+        if not HOUSEKEEPER_AVAILABLE:
+            QMessageBox.information(
+                self, "管家未启用",
+                "管家模块未启用(housekeeper.py 可能没找到)。\n"
+                "确认仓库根目录有 housekeeper.py 文件。")
+            return
+        try:
+            hk = _housekeeper_mod.get_housekeeper()
+            summary = hk.render_session_summary()
+            recent_lines = []
+            for r in hk.history[-5:]:
+                recent_lines.append("  " + r.render_oneliner())
+            if recent_lines:
+                summary += "\n\n— 最近 {} 章详情 —\n".format(len(recent_lines))
+                summary += "\n".join(recent_lines)
+            QMessageBox.information(self, "📋 管家日报", summary)
+        except Exception as e:
+            QMessageBox.warning(self, "管家日报查询失败", str(e))
 
     def show_flow_rl_status(self):
         """显示流程 RL 学习状态"""
@@ -15959,6 +15989,15 @@ class MainWindow(QMainWindow):
 
     def _accept_chapter_and_continue(self, content, meta):
         """章节通过校验或死磕用尽 → 入库并触发后续链"""
+        # 📋 管家:章节流程开始(P1 — 章末日报)
+        try:
+            if HOUSEKEEPER_AVAILABLE:
+                _hk = _housekeeper_mod.get_housekeeper()
+                _hk_ch = meta.get("ch_num", len(self.chapters) + 1)
+                _hk.start_chapter(_hk_ch, path_tag="main")
+        except Exception:
+            pass
+
         # ★ RL 反馈:章节成功 → 加分(根据死磕次数决定加多少)
         try:
             if self.flow_rl and meta.get("target") not in ("golden_three",):
@@ -15998,6 +16037,14 @@ class MainWindow(QMainWindow):
                 from pangu_system import parse_chapter_meta as _pangu_parse
                 pangu_meta = _pangu_parse(content)
                 body_clean = pangu_meta.get("body") or content
+                # 📋 管家:记录内容长度 + 元信息
+                try:
+                    if HOUSEKEEPER_AVAILABLE:
+                        _hk = _housekeeper_mod.get_housekeeper()
+                        _hk.record_content(content, body_clean)
+                        _hk.record_pangu_meta(pangu_meta)
+                except Exception:
+                    pass
                 # 诊断日志:让用户能看到是否真的剥离了元信息
                 _stripped = len(content) - len(body_clean)
                 if _stripped > 0:
@@ -16012,10 +16059,22 @@ class MainWindow(QMainWindow):
                         "⚠️ 检测到元信息标记但剥离失败(parse_chapter_meta 没匹配)。"
                         "请把这段章节末尾 30 行复制发给开发者,以便加新匹配规则",
                         "warn")
+                    # 📋 管家:剥离失败告警
+                    try:
+                        if HOUSEKEEPER_AVAILABLE:
+                            _housekeeper_mod.get_housekeeper().warn("元信息剥离失败")
+                    except Exception:
+                        pass
             except ImportError:
                 pass
             except Exception as _pm_e:
                 self.tab_generation.log(f"盘古元信息解析失败(降级保留原文):{_pm_e}", "warn")
+                # 📋 管家:记录解析失败
+                try:
+                    if HOUSEKEEPER_AVAILABLE:
+                        _housekeeper_mod.get_housekeeper().record_pangu_meta_failed(str(_pm_e))
+                except Exception:
+                    pass
 
             ch_title = self._extract_chapter_title(body_clean) or f"第{ch_num}章"
             ch_body = self._strip_chapter_title(body_clean)
@@ -16045,11 +16104,34 @@ class MainWindow(QMainWindow):
                 self._sync_pangu_seeds_to_lifespan(pangu_meta, ch_num)
                 # ── 钩子 + 爽点 自动写入 🎭 角色与世界 → 🎣 钩子编年 / 🎯 爽点编年
                 self._sync_hook_and_cool_to_charlib(pangu_meta, ch_num)
+                # 📋 管家:两个 sync 跑完
+                try:
+                    if HOUSEKEEPER_AVAILABLE:
+                        _hk = _housekeeper_mod.get_housekeeper()
+                        _hk.record_step("seeds_sync_lifespan", True)
+                        _hk.record_step("hook_cool_sync", True)
+                except Exception:
+                    pass
 
             self._refresh_chapter_list()
             if self.tab_generation.auto_save.isChecked():
                 self._save_chapter_to_disk(self.chapters[-1])
+                # 📋 管家:auto_save 跑了
+                try:
+                    if HOUSEKEEPER_AVAILABLE:
+                        _housekeeper_mod.get_housekeeper().record_step("auto_save", True)
+                except Exception:
+                    pass
             actual = len(re.sub(r'\s', '', ch_body))
+            # 📋 管家:字数门记录
+            try:
+                if HOUSEKEEPER_AVAILABLE:
+                    _hk = _housekeeper_mod.get_housekeeper()
+                    _target = meta.get("target_words") or \
+                        getattr(self, "_batch_target_words", 0) or 0
+                    _hk.record_word_count(int(_target or 0), actual)
+            except Exception:
+                pass
             self.tab_generation.log(
                 f"✓ 第 {ch_num} 章生成成功!字数:{actual} 字", "success")
             if pangu_meta and (pangu_meta.get("hook") or pangu_meta.get("cool_points")
@@ -16086,12 +16168,32 @@ class MainWindow(QMainWindow):
                             f"🔬 13法静态扫描: ✓ 通过(说/道 {static.say_count}/"
                             f"{static.say_allowed})",
                             "success")
+                    # 📋 管家:记录 13 法扫描结果
+                    try:
+                        if HOUSEKEEPER_AVAILABLE:
+                            _housekeeper_mod.get_housekeeper().record_dialogue_critic(
+                                reds=len(reds),
+                                say_count=static.say_count,
+                                say_allowed=static.say_allowed)
+                    except Exception:
+                        pass
         except Exception as _e:
             print(f"[auto dc] 失败: {_e}", flush=True)
 
         # 后置链:Canon 抽取 → 摘要 → after_chapter 技能 → 下一章
         # (用 QTimer 错开,避免一窝蜂砸到 worker)
         self._post_chapter_chain(last_ch_num)
+
+        # 📋 管家:章节流程结束,生成日报
+        try:
+            if HOUSEKEEPER_AVAILABLE:
+                _hk = _housekeeper_mod.get_housekeeper()
+                _hk.record_step("post_chapter_chain", True)
+                _final = _hk.finalize_chapter()
+                if _final:
+                    self.tab_generation.log(_final.render_oneliner(), "info")
+        except Exception:
+            pass
 
     def _sync_hook_and_cool_to_charlib(self, pangu_meta: dict, ch_num: int):
         """把【断章钩子】+【本章爽点】写入 🎭 角色与世界 → 🎣 钩子编年 / 🎯 爽点编年
