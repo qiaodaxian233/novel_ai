@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.88"
+APP_VERSION = "v1.89"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -9100,7 +9100,20 @@ class BrowserWorker(QObject):
             except Exception:
                 pass
 
-        # 2.0) 长文本附件模式：超过 1500 字符时转成 txt 文件上传
+        # ★★★ BUG-028 回归修复 v1.89:指纹必须在 prompt 发送前抓
+        #     原代码把 prev_response_fingerprint 抓在 _dispatch_send 之后(line 9180+),
+        #     此时 DeepSeek 已经在 DOM 里插了空 assistant 占位槽,
+        #     _grab_last_response 抓到 "|0",后续 wait 循环里抓到的章节残留
+        #     与 "|0" 永远不等 → 防串失效。
+        #     修法:挪到 _inject_prompt 前抓,确保指纹是真正的上一轮回复。
+        prev_response_fingerprint = ""
+        try:
+            _prev_text = self._grab_last_response(prof) or ""
+            prev_response_fingerprint = f"{_prev_text[:100]}|{len(_prev_text)}"
+        except Exception:
+            pass
+
+        # 2.0) 长文本附件模式:超过 1500 字符时转成 txt 文件上传
         # 优势：绕过审核（附件不进入文本审核）+ 避免输入框卡顿
         upload_threshold = task.get("upload_threshold", 0)  # 0 = 全部走附件,绕过审核
         use_attachment = (
@@ -9169,15 +9182,8 @@ class BrowserWorker(QObject):
         # 4) 等新回复出现(对话条数 +1 OR 抓到内容)
         # 因 DeepSeek 计数策略 prev/cur 在短回复时容易失灵,加内容兜底
         # 提速:30s deadline → 15s,轮询 0.5s → 0.2s
-        # ★ 关键修复:发送前先记录"上一条回复的指纹",抓取时必须确认是新回复
-        #   防止串行任务时抓到上一轮的输出(BUG-027 后续根治)
-        prev_response_fingerprint = ""
-        try:
-            _prev_text = self._grab_last_response(prof) or ""
-            # 用前 100 字 + 长度作指纹(全文比较太慢)
-            prev_response_fingerprint = f"{_prev_text[:100]}|{len(_prev_text)}"
-        except Exception:
-            pass
+        # ★ 指纹防串:prev_response_fingerprint 已在 line 9102 (发送前) 捕获
+        #   抓到内容时必须确认指纹变化,否则是上一轮残留 → 继续等
 
         time.sleep(1.5)  # 给 DOM 渲染新回复块的最短时间(原 3s)
         deadline = time.time() + 15
