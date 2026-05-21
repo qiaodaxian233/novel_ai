@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.92"
+APP_VERSION = "v1.93"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -4049,15 +4049,20 @@ class CharacterLibrary(QWidget):
         btn_add.clicked.connect(self._add_character)
         btn_del = QPushButton("➖ 删除选中")
         btn_del.clicked.connect(self._del_character)
-        top.addWidget(btn_add); top.addWidget(btn_del); top.addStretch()
+        # v1.93 BUG-067:同名不同姓检查(避免 AI 写正文时混淆)
+        btn_lint = QPushButton("🔍 同名检查")
+        btn_lint.setToolTip("扫描角色库,找出 name 完全相同的角色 — AI 写正文时容易混淆,建议改名(保留姓氏)")
+        btn_lint.clicked.connect(self._on_check_duplicate_names)
+        top.addWidget(btn_add); top.addWidget(btn_del); top.addWidget(btn_lint); top.addStretch()
         lay.addLayout(top)
         
         # 表格
         from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
-        self.tbl_chars = QTableWidget(0, 8)
+        # v1.93 BUG-067:加"退场章节"列(放 first_ch 之后,列 8)
+        self.tbl_chars = QTableWidget(0, 9)
         self.tbl_chars.setHorizontalHeaderLabels([
             "姓名", "角色定位", "外貌", "性格", "口头禅/标志",
-            "能力/职业", "当前状态", "首次出场"
+            "能力/职业", "当前状态", "首次出场", "退场章节"
         ])
         self.tbl_chars.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.tbl_chars.horizontalHeader().setStretchLastSection(True)
@@ -4070,11 +4075,13 @@ class CharacterLibrary(QWidget):
         self.tbl_chars.setColumnWidth(4, 120)
         self.tbl_chars.setColumnWidth(5, 120)
         self.tbl_chars.setColumnWidth(6, 120)
+        self.tbl_chars.setColumnWidth(7, 80)   # v1.93 BUG-067:首次出场原本最后列,加 last_ch 后让它固定 80
         lay.addWidget(self.tbl_chars)
         
         tip = QLabel(
             "💡 提示: 双击单元格直接编辑。【角色定位】填:主角/女主/配角/导师/反派/路人。\n"
-            "    【当前状态】会随剧情更新,写章节时自动注入此字段保证前后一致。")
+            "    【当前状态】会随剧情更新,写章节时自动注入此字段保证前后一致。\n"
+            "    【退场章节】留空表示尚未退场;AI 不会自动填,需手动标记(用于长篇人物管理)。")
         tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
@@ -4085,7 +4092,8 @@ class CharacterLibrary(QWidget):
         from PyQt5.QtWidgets import QTableWidgetItem
         r = self.tbl_chars.rowCount()
         self.tbl_chars.insertRow(r)
-        defaults = ["新角色", "配角", "", "", "", "", "", ""]
+        # v1.93 BUG-067:9 列默认值(末尾加"退场章节"空字符串)
+        defaults = ["新角色", "配角", "", "", "", "", "", "", ""]
         for c, v in enumerate(defaults):
             self.tbl_chars.setItem(r, c, QTableWidgetItem(v))
     
@@ -4093,6 +4101,64 @@ class CharacterLibrary(QWidget):
         rows = sorted(set(idx.row() for idx in self.tbl_chars.selectedIndexes()), reverse=True)
         for r in rows:
             self.tbl_chars.removeRow(r)
+
+    def _on_check_duplicate_names(self):
+        """v1.93 BUG-067:同名不同姓检查 — 扫角色库找 name 完全相同的角色。
+
+        借鉴竞品由风写作 v1.1.7 思路 — AI 写正文时,两个同名角色容易混淆。
+        建议改名(保留姓氏),让 AI 能区分。
+
+        本 MVP 只做完全重名检测;包含/被包含(如"林清"vs"林清歌")留 v1.94。
+        """
+        # 把表格数据读成 (name, role) 列表,纯逻辑用 staticmethod 处理(便于单测)
+        rows_data = []
+        for r in range(self.tbl_chars.rowCount()):
+            name_item = self.tbl_chars.item(r, 0)
+            role_item = self.tbl_chars.item(r, 1)
+            name = (name_item.text().strip() if name_item else "")
+            role = (role_item.text().strip() if role_item else "")
+            rows_data.append((name, role))
+        conflicts = self._find_duplicate_names(rows_data)
+        if not conflicts:
+            QMessageBox.information(
+                self, "🔍 同名检查",
+                f"✓ 角色库共 {self.tbl_chars.rowCount()} 个角色,未发现重名冲突。")
+            return
+        # 拼报告
+        lines = [
+            f"⚠ 发现 {len(conflicts)} 组重名角色(共 {sum(len(rs) for rs in conflicts.values())} 个角色):",
+            "",
+        ]
+        for name, rows in conflicts.items():
+            roles = " / ".join(f"第{r+1}行({role or '未填角色定位'})" for r, role in rows)
+            lines.append(f"  • 「{name}」— {roles}")
+        lines.extend([
+            "",
+            "💡 建议:把其中一个改名(保留姓氏即可)。",
+            "AI 写正文时,完全同名的角色会被混淆,即使角色定位/外貌不同也容易写错。",
+        ])
+        QMessageBox.warning(self, "🔍 同名检查 — 发现冲突", "\n".join(lines))
+
+    @staticmethod
+    def _find_duplicate_names(rows_data):
+        """v1.93 BUG-067:纯函数 — 找重名角色组。
+
+        Args:
+            rows_data: [(name: str, role: str), ...] — 角色表所有行的 (name, role)
+
+        Returns:
+            {name: [(row_idx, role), ...], ...} — 只包含 ≥2 次出现的 name。
+            空名(name == "")不计入(还没填好的行不算冲突)。
+
+        测试用例覆盖:正例(重名)+ 反例(无重名)+ 边界(空表 / 单角色 / 空名)。
+        """
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for idx, (name, role) in enumerate(rows_data):
+            name = (name or "").strip()
+            if name:  # 空名不算
+                groups[name].append((idx, role))
+        return {n: rs for n, rs in groups.items() if len(rs) >= 2}
     
     # ── 2. 关系图谱子页 ────────────────────────────────────
     def _build_relations_tab(self):
@@ -5957,6 +6023,8 @@ class CharacterLibrary(QWidget):
                 out.append(row)
             return out
 
+        # v1.93 BUG-067:故意保持 8(不传 last_ch)— relation_graph.build_graph_data 接口
+        # 注释明确按 8 列设计,加 last_ch 也会被它在 row[0:8] 截掉,传 8 更干净。
         chars_rows = _tbl_to_rows(self.tbl_chars, 8)
         relations_rows = _tbl_to_rows(self.tbl_relations, 4)
         try:
@@ -5987,7 +6055,7 @@ class CharacterLibrary(QWidget):
             return out
         
         return {
-            "characters": tbl_to_list(self.tbl_chars, 8),
+            "characters": tbl_to_list(self.tbl_chars, 9),  # v1.93 BUG-067:加 last_ch 列
             "relations":  tbl_to_list(self.tbl_relations, 4),
             "timeline":   tbl_to_list(self.tbl_timeline, 3),
             "items":      tbl_to_list(self.tbl_items, 5),
@@ -6038,7 +6106,7 @@ class CharacterLibrary(QWidget):
         # ── dict → row 字段映射(列序对齐 _build_*_tab 的 setHorizontalHeaderLabels)──
         DICT_KEY_MAPS = {
             "characters":  ["name", "role", "appearance", "personality",
-                            "mark", "ability", "state", "first_ch"],
+                            "mark", "ability", "state", "first_ch", "last_ch"],  # v1.93 BUG-067:+last_ch
             "relations":   ["a", "type", "b", "note"],
             "timeline":    ["ch", "event", "state_change"],
             "items":       ["name", "type", "owner", "source_ch", "ability"],
@@ -6085,7 +6153,9 @@ class CharacterLibrary(QWidget):
         if not timeline_raw:
             timeline_raw = data.get("events", [])
         
-        list_to_tbl(self.tbl_chars,     normalize(data.get("characters", []), "characters"), 8)
+        # v1.93 BUG-067:tbl_chars 列数 9(原 8 + last_ch)。
+        # normalize 已按 DICT_KEY_MAPS_LOCAL["characters"] 的 9 字段转出 9 元素 list。
+        list_to_tbl(self.tbl_chars,     normalize(data.get("characters", []), "characters"), 9)
         list_to_tbl(self.tbl_relations, normalize(data.get("relations", []), "relations"), 4)
         list_to_tbl(self.tbl_timeline,  normalize(timeline_raw, "timeline"), 3)
         list_to_tbl(self.tbl_items,     normalize(data.get("items", []), "items"), 5)
@@ -6150,7 +6220,7 @@ class CharacterLibrary(QWidget):
             """容忍 list-of-list 也喂进来。"""
             DICT_KEY_MAPS_LOCAL = {
                 "characters":  ["name", "role", "appearance", "personality",
-                                "mark", "ability", "state", "first_ch"],
+                                "mark", "ability", "state", "first_ch", "last_ch"],  # v1.93 BUG-067:+last_ch
                 "relations":   ["a", "type", "b", "note"],
                 "timeline":    ["ch", "event", "state_change"],
                 "items":       ["name", "type", "owner", "source_ch", "ability"],
@@ -6182,10 +6252,12 @@ class CharacterLibrary(QWidget):
                 continue
             row = self.tbl_chars.rowCount()
             self.tbl_chars.insertRow(row)
+            # v1.93 BUG-067:9 列(末尾加 last_ch,AI 不填 → "" 兜底)
             vals = [name, c.get("role", "配角"), c.get("appearance", ""),
                     c.get("personality", ""), c.get("mark", ""),
                     c.get("ability", ""), c.get("state", ""),
-                    str(c.get("first_ch", ""))]
+                    str(c.get("first_ch", "")),
+                    str(c.get("last_ch", ""))]
             for col, v in enumerate(vals):
                 self.tbl_chars.setItem(row, col, QTableWidgetItem(str(v)))
             added["ch"] += 1
