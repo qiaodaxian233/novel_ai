@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.96"
+APP_VERSION = "v1.97"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -11399,9 +11399,12 @@ class MainWindow(QMainWindow):
         # 批量生成状态
         self._batch_remaining = 0
         self._batch_paused = False
-        # 当前任务的语义,用于把回复填到正确位置
-        # 例如 {"target": "chapter_content"|"inspiration"|"chapter_outline"|..., "ch_num": 7}
-        self._pending_task_target = None
+        # v1.97 BUG-071 治本:把单变量 _pending_task_target 改成字典映射 task_id -> meta
+        # 旧字段保留为 None 做兼容兜底(任何外部代码若残留访问,拿到 None 不会崩)
+        # 字典 key 是 worker 的 task_id(== _send_to_ai 的 label),value 是 meta dict
+        # 例如 {"摘要-第7章": {"target": "chapter_summary", "ch_num": 7, ...}, ...}
+        self._pending_task_targets = {}
+        self._pending_task_target = None  # deprecated,仅做兼容兜底
         # 一键生成对话记忆的流水线状态
         # 列表元素:(step_name, arg)  step_name ∈ "summary"|"character"|"long_term"
         self._full_memory_pipeline = []
@@ -12333,7 +12336,8 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.tab_generation)
         self.tab_generation.log(f"准备发送:{label} ({len(prompt)} 字符)", "info")
         # 记录这次任务的目标位置(由 _on_response_received 处理回填)
-        self._pending_task_target = {"target": target, "label": label, **extra}
+        # v1.97 BUG-071:字典写入 — key=label(== worker 侧 task_id),避免并发任务串台
+        self._pending_task_targets[label] = {"target": target, "label": label, **extra}
         # 应用人类延迟
         type_delay = 30 if self.tab_settings.delay_check.isChecked() else 5
         # 投递任务
@@ -12359,9 +12363,11 @@ class MainWindow(QMainWindow):
 
     def _on_response_received(self, task_id, content):
         """worker 回调:某次提示词的 AI 回复已抓取完毕"""
+        # v1.97 BUG-071:从字典按 task_id 取本任务的 meta,避免并发任务串台
+        # (task_id 由 worker 端从 submit 时的 task_id 字段透传回来,等于 _send_to_ai 的 label)
         # Phase B:盘古质检结果路由(优先级最高,不走原回填逻辑)
         try:
-            tgt = (self._pending_task_target or {}).get("target", "") if hasattr(self, "_pending_task_target") else ""
+            tgt = self._pending_task_targets.get(task_id, {}).get("target", "")
             if tgt == "pangu_qcheck":
                 # 拿当前章节原文做段落映射
                 _cur_idx = self.tab_editor.current_index if hasattr(self.tab_editor, "current_index") else 0
@@ -12369,37 +12375,37 @@ class MainWindow(QMainWindow):
                 if self.chapters and isinstance(_cur_idx, int) and 0 <= _cur_idx < len(self.chapters):
                     _orig = self.chapters[_cur_idx].get("content", "")
                 self._on_pangu_qcheck_response(content, _orig)
-                self._pending_task_target = None
+                self._pending_task_targets.pop(task_id, None)
                 return
             if tgt == "pangu_spiral":
                 QMessageBox.information(self, "🌀 盘古 P1-P7 螺旋诊断", content[:3000])
-                self._pending_task_target = None
+                self._pending_task_targets.pop(task_id, None)
                 return
             if tgt == "pangu_mode":
                 self.tab_generation.log(f"✓ 盘古模式切换完成:\n{content[:200]}", "info")
-                self._pending_task_target = None
+                self._pending_task_targets.pop(task_id, None)
                 return
             if tgt == "pangu_autofix":
                 # AI 修复完成 → 把内容回填当前章节
-                meta = self._pending_task_target or {}
+                meta = self._pending_task_targets.get(task_id, {})
                 ch_idx = meta.get("ch_idx", -1)
                 orig = meta.get("original_chapter", "")
                 self._on_pangu_autofix_response(content, ch_idx, orig)
-                self._pending_task_target = None
+                self._pending_task_targets.pop(task_id, None)
                 return
             if tgt == "laodao_critique":
                 # 老刀毒舌点评返回 → 弹窗展示
-                meta = self._pending_task_target or {}
+                meta = self._pending_task_targets.get(task_id, {})
                 self._on_laodao_critique_response(content, meta)
-                self._pending_task_target = None
+                self._pending_task_targets.pop(task_id, None)
                 return
             if tgt == "laodao_autofix":
                 # 老刀按建议重写返回 → 回填章节
-                meta = self._pending_task_target or {}
+                meta = self._pending_task_targets.get(task_id, {})
                 ch_idx = meta.get("ch_idx", -1)
                 orig = meta.get("original_chapter", "")
                 self._on_laodao_autofix_response(content, ch_idx, orig)
-                self._pending_task_target = None
+                self._pending_task_targets.pop(task_id, None)
                 return
         except Exception as _e_dispatch:
             # ★ BUG-031 治本:不再静默吞 dispatch 异常,且若 target 是已被路由的
@@ -12425,11 +12431,11 @@ class MainWindow(QMainWindow):
                 "pangu_autofix", "laodao_critique", "laodao_autofix",
             }
             try:
-                _tgt = (self._pending_task_target or {}).get("target", "")
+                _tgt = self._pending_task_targets.get(task_id, {}).get("target", "")
             except Exception:
                 _tgt = ""
             if _tgt in _ROUTED_TARGETS:
-                self._pending_task_target = None
+                self._pending_task_targets.pop(task_id, None)
                 return
         if not content or not content.strip():
             self.tab_generation.log(f"任务『{task_id}』未抓到内容(选择器需调整)", "warn")
@@ -12438,10 +12444,11 @@ class MainWindow(QMainWindow):
             self.tab_generation.log(
                 f"任务『{task_id}』抓取成功,{len(content)} 字符", "success")
 
-        meta = self._pending_task_target or {}
+        # v1.97 BUG-071:主 dispatch 也按 task_id 取 meta,跟 pangu/laodao 路由一致
+        meta = self._pending_task_targets.get(task_id, {})
         target = meta.get("target")
-        # ★ 关键:先清空 pending,handler 才能在内部重新设置(链式任务依赖此)
-        self._pending_task_target = None
+        # ★ 关键:先 pop pending,handler 才能在内部重新设置(链式任务依赖此)
+        self._pending_task_targets.pop(task_id, None)
 
         # 根据目标自动回填
         if target == "inspiration":
@@ -12806,25 +12813,30 @@ class MainWindow(QMainWindow):
                 self._continue_ai_audit_chain()
             self._run_canon_audit(content, ch_num, on_canon_done)
         elif next_kind == "rhythm":
-            self._pending_task_target = {
+            # v1.97 BUG-071:dead code — 下面 _send_to_ai 会立刻用 label 覆盖,且 _audit_resume 字段全文无人读
+            # 保留只是不动既有调用顺序的稳健起见,改用字典写法保持代码一致
+            _label_rhythm = f"节奏稽核-第{ch_num}章"
+            self._pending_task_targets[_label_rhythm] = {
                 "target": "critique_rhythm",
                 "ch_num": ch_num,
                 "_audit_resume": True,
             }
             prompt = PROMPTS["critique_rhythm"].format(content=content[:6000])
-            self._send_to_ai(prompt, f"节奏稽核-第{ch_num}章",
+            self._send_to_ai(prompt, _label_rhythm,
                              target="critique_rhythm", ch_num=ch_num)
         elif next_kind == "character":
             # v1.23 BUG-041:用统一接口,合并 6 库 + memory prose 两个数据源
             chars = self.get_unified_chars_summary() or "(暂无)"
             prompt = PROMPTS["critique_character"].format(
                 characters=chars, content=content[:6000])
-            self._pending_task_target = {
+            # v1.97 BUG-071:dead code(同上,下面 _send_to_ai 会立刻覆盖),改字典保持一致
+            _label_char = f"人设稽核-第{ch_num}章"
+            self._pending_task_targets[_label_char] = {
                 "target": "critique_character",
                 "ch_num": ch_num,
                 "_audit_resume": True,
             }
-            self._send_to_ai(prompt, f"人设稽核-第{ch_num}章",
+            self._send_to_ai(prompt, _label_char,
                              target="critique_character", ch_num=ch_num)
 
     def _on_critique_score_response(self, content, kind, ch_num):
@@ -16363,7 +16375,8 @@ class MainWindow(QMainWindow):
                     + locations_block          # v1.81 新增
                     + score_progress_block     # v1.81 新增
                     + "\n\n请重写本章,严格规避以上所有问题。")
-        self._pending_task_target = new_meta
+        # v1.97 BUG-071:字典写入 key=label,死磕重写跟其他任务并发不串台
+        self._pending_task_targets[new_meta.get("label", "章节")] = new_meta
         self.tab_generation.log(
             f"⚠ 章节质量未达标 ({len(reasons)} 个问题),死磕重写中... "
             f"(本次第 {meta.get('retry_count_used', 0) + 1} 轮,上限 {meta.get('retry_left', retry)} 次)",
@@ -19372,7 +19385,8 @@ class MainWindow(QMainWindow):
         if not self.worker.is_ready():
             QMessageBox.warning(self, "提示", "请先启动浏览器"); return
         # target=None,弹窗让用户选回填位置
-        self._pending_task_target = {"target": None, "label": "手动抓取"}
+        # v1.97 BUG-071:字典写入 key="手动抓取"(== worker submit 的 task_id)
+        self._pending_task_targets["手动抓取"] = {"target": None, "label": "手动抓取"}
         self.worker.submit({"action": "just_grab", "task_id": "手动抓取"})
 
     def optimize_chapter(self, content):
