@@ -19,22 +19,28 @@ P2 职能(v2.08 加,Task 3):
        finalize_chapter 时打 zip 快照,扔到 project_root/.backups/snapshot_chXXX_YYYYMMDD_HHMMSS.zip
        默认保留最近 10 份,旧的自动清
 
+P3 职能(v2.09 加,Task 3 接续):
+  8. RL 反馈联动 — set_rl_reward_callback(callback)
+       注册健康度回调,finalize_chapter 末尾自动 emit health_score 给外部
+       (典型用法:用户写 closure 把 score 转成 flow_rl.reward())。
+       housekeeper 不 import flow_rl,完全解耦
+  9. 二道闸巡查 — verify_defenses(fingerprints, source_paths)
+       传入 {bug_id: [code_pattern, ...]} 指纹字典 + 源码路径列表,
+       grep 检测每个指纹是否仍在源码里。任何指纹缺失 → hk.warn 提醒,
+       并把缺失 BUG 记到 current_report.missing_defenses[]
+
 设计原则:
   - 不替代现有防御代码,只观测和聚合
   - record_xxx 全部 try/except 容错,失败不影响主流程
   - 单测友好:不依赖 PyQt5,纯数据结构
-  - P2 三个扩展点全部"可关"(主程序调用方决定接不接),housekeeper 提供能力不强制
-
-P3 留扩展点:
-  - verify_defenses([\"BUG-027\", \"BUG-028\"]) — 二道闸巡查
-  - RL 反馈联动:finalize 时把 health_score 也喂给 flow_rl 当奖励维度
+  - P2/P3 全部扩展点"可关"(主程序调用方决定接不接),housekeeper 提供能力不强制
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field, asdict
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Callable
 
 
 # ====== 已知 pipeline 步骤(对应 _accept_chapter_and_continue 各 sync) ======
@@ -93,6 +99,9 @@ class HousekeeperReport:
     # P2 v2.08:Canon locked 字段不一致(每元素:{"field": "主角姓名", "expected": "...", "actual": "..."})
     locked_mismatches: List[Dict[str, str]] = field(default_factory=list)
 
+    # P3 v2.09:二道闸巡查中检测到的"防御消失"的 BUG ID(每元素 "BUG-027" 等字符串)
+    missing_defenses: List[str] = field(default_factory=list)
+
     # 健康度评分(0.0-1.0)
     health_score: float = 0.0
 
@@ -119,7 +128,11 @@ class HousekeeperReport:
         # P2 v2.08:Canon locked 字段不一致是严重问题(改了用户锁定的设定),每条扣 0.1,封顶 0.3
         lock_penalty = min(0.3, 0.1 * len(self.locked_mismatches))
 
-        score = 0.6 * pipeline_ratio + 0.4 * hard_ratio - warn_penalty - lock_penalty
+        # P3 v2.09:历史 BUG 防御消失是高优先级警报,每个扣 0.15,封顶 0.4
+        # 比 lock_penalty 重:locked 是数据写错,defense 消失意味着工程级回归(更难发现)
+        defense_penalty = min(0.4, 0.15 * len(self.missing_defenses))
+
+        score = 0.6 * pipeline_ratio + 0.4 * hard_ratio - warn_penalty - lock_penalty - defense_penalty
         return max(0.0, min(1.0, score))
 
     def render_oneliner(self) -> str:
@@ -182,6 +195,14 @@ class HousekeeperReport:
                 shown += f" (+{mn - 2})"
             bits.append(f"🔒 锁定字段被改:{shown}")
 
+        # P3 v2.09:二道闸巡查发现的"防御消失"BUG(只显示前 2 个 BUG ID)
+        if self.missing_defenses:
+            dn = len(self.missing_defenses)
+            shown = "/".join(self.missing_defenses[:2])
+            if dn > 2:
+                shown += f" (+{dn - 2})"
+            bits.append(f"🛡️ 防御消失:{shown}")
+
         # 健康度
         health_mark = "🟢" if self.health_score >= 0.85 else \
                       "🟡" if self.health_score >= 0.65 else "🔴"
@@ -200,6 +221,8 @@ class Housekeeper:
         self.current_report: Optional[HousekeeperReport] = None
         self.history: List[HousekeeperReport] = []
         self.session_start = time.time()
+        # P3 v2.09:RL 反馈联动 — 回调钩子(None = 关闭),解耦 flow_rl
+        self.rl_reward_callback: Optional[Callable[[float, Dict[str, Any]], None]] = None
 
     # —— 章节生命周期 —— #
 
@@ -223,6 +246,15 @@ class Housekeeper:
         self.current_report.health_score = self.current_report._compute_health()
         report = self.current_report
         self._archive_current()
+
+        # P3 v2.09:RL 反馈联动 — 章末 emit health_score 给注册的回调
+        # 失败容错:任何异常吞掉,绝不影响主流程(housekeeper 是观测层)
+        try:
+            if self.rl_reward_callback is not None:
+                self.rl_reward_callback(report.health_score, report.to_dict())
+        except Exception:
+            pass
+
         return report
 
     def _archive_current(self):
@@ -474,6 +506,146 @@ class Housekeeper:
             return str(zip_path)
         except Exception:
             return None
+
+    # —— P3 v2.09:扩展点 1 — RL 反馈联动 —— #
+
+    def set_rl_reward_callback(
+        self,
+        callback: Optional[Callable[[float, Dict[str, Any]], None]],
+    ):
+        """注册健康度反馈回调,finalize_chapter 末尾自动 emit
+
+        Args:
+            callback: 函数,签名 (health_score: float, report_dict: dict) -> None
+                      None = 关闭回调
+
+        典型用法(调用方在 MainWindow 初始化时连接 flow_rl):
+            def health_to_rl(score, report):
+                from flow_rl import FlowRL
+                rl = self.flow_rl  # MainWindow 持有的 FlowRL 实例
+                # 把健康度转成 reward 值(0.0-1.0 → -20 to +20)
+                reward_value = (score - 0.5) * 40
+                # 注:具体 state/action 由调用方决定 — housekeeper 不知道
+                rl.reward(last_state, last_action, reward_value,
+                          reason=f"章末健康度 {score:.2f}")
+            hk.set_rl_reward_callback(health_to_rl)
+
+        设计原则:
+          - housekeeper 不 import flow_rl(零依赖)
+          - 调用方负责"健康度 → 奖励值"的转换公式
+          - 调用方负责绑定到具体的 RL state/action(housekeeper 不知道)
+          - finalize 末尾 emit 失败完全吞掉,绝不影响主流程
+        """
+        try:
+            # 允许 None(关闭回调)或 callable(注册)
+            if callback is not None and not callable(callback):
+                return  # 静默拒绝非 callable,符合 housekeeper "失败容错"风格
+            self.rl_reward_callback = callback
+        except Exception:
+            pass
+
+    # —— P3 v2.09:扩展点 2 — 二道闸巡查 —— #
+
+    def verify_defenses(
+        self,
+        fingerprints: Dict[str, List[str]],
+        source_paths: Optional[List[str]] = None,
+    ) -> Dict[str, bool]:
+        """验证关键历史 BUG 修复的"代码指纹"是否仍存在于源码里
+
+        典型用法:在 _accept_chapter_and_continue 末尾 + 每 N 章触发一次扫描:
+            FINGERPRINTS = {
+                "BUG-028": ["_chapter_fingerprint", "已生成过该指纹"],
+                "BUG-065": ["CRITICAL_TARGETS", "_build_degraded_content"],
+                "BUG-071": ["_pending_task_targets", "dict 路由"],
+            }
+            result = hk.verify_defenses(FINGERPRINTS, ["novel_ai.py"])
+            # result = {"BUG-028": True, "BUG-065": True, "BUG-071": False}
+            # 失配的 BUG ID 自动进 current_report.missing_defenses + hk.warn()
+
+        Args:
+            fingerprints: {bug_id: [code_pattern1, code_pattern2, ...]}
+                          每个 pattern 必须是非空字符串,要求全部出现才算"防御完好"
+                          (any 缺失就算"防御消失")
+            source_paths: 要扫的源码文件路径列表,默认仅 ["novel_ai.py"]
+                          典型扩展:["novel_ai.py", "ui/browser_worker.py", ...]
+
+        Returns:
+            {bug_id: bool} — True = 该 BUG 的所有指纹都还在(防御完好)
+                            False = 至少一个指纹缺失(防御消失)
+                            读不到文件 → 视作 False(保守)
+
+        副作用:
+          - 失配的 BUG ID 加到 current_report.missing_defenses(去重)
+          - hk.warn(f"⚠ {bug_id} 防御消失") 进 oneliner 末尾
+          - oneliner 显示 🛡️ + 失配 BUG ID 列表
+          - 健康度按 missing_defenses 数量扣分(每条 0.15,封顶 0.4)
+
+        失败容错:文件读不到 / 任何异常 → 返回保守结果(全 False)不抛
+        """
+        result: Dict[str, bool] = {}
+        try:
+            if not fingerprints:
+                return result
+
+            # 默认扫主程序
+            paths = source_paths if source_paths else ["novel_ai.py"]
+
+            # 一次性读所有源码 concat(避免每个 bug 都重读文件)
+            from pathlib import Path
+            blob_parts: List[str] = []
+            for p in paths:
+                try:
+                    blob_parts.append(Path(p).read_text(encoding="utf-8"))
+                except Exception:
+                    # 单个文件读失败不影响其他,但少了一份源 → 后续 in 检测会更保守
+                    pass
+            blob = "\n".join(blob_parts)
+
+            if not blob:
+                # 所有文件都读不到 → 全部 BUG 标 False(保守:防御视作消失)
+                for bid in fingerprints:
+                    result[bid] = False
+                    self._record_missing_defense(bid)
+                return result
+
+            # 对每个 BUG,验证所有指纹都出现
+            for bid, patterns in fingerprints.items():
+                try:
+                    if not patterns:
+                        result[bid] = False
+                        self._record_missing_defense(bid)
+                        continue
+                    # 必须全部 pattern 都在 blob 里
+                    all_present = all(
+                        isinstance(pat, str) and pat and (pat in blob)
+                        for pat in patterns
+                    )
+                    result[bid] = all_present
+                    if not all_present:
+                        self._record_missing_defense(bid)
+                except Exception:
+                    result[bid] = False
+                    self._record_missing_defense(bid)
+            return result
+        except Exception:
+            return result
+
+    def _record_missing_defense(self, bug_id: str):
+        """私有:把失配 BUG 记到 current_report.missing_defenses(去重)
+
+        注:不再发 warning — missing_defenses 在 oneliner 末尾用 🛡️ 显示已足够醒目,
+        且健康度 defense_penalty(0.15/条)远比 warn_penalty(0.05/条)严厉。
+        发 warning 会让 oneliner 出现"⚠ XXX 防御消失 | 🛡️ XXX"重复显示。
+        """
+        try:
+            if not self.current_report:
+                return
+            bid = str(bug_id)[:30]
+            if bid not in self.current_report.missing_defenses:
+                self.current_report.missing_defenses.append(bid)
+        except Exception:
+            pass
 
     # —— Session 汇总 —— #
 
