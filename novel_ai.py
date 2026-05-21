@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.91"
+APP_VERSION = "v1.92"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -11652,6 +11652,9 @@ class MainWindow(QMainWindow):
         ll.addWidget(self.lbl_chapter_count)
         self.chapter_list = QListWidget()
         self.chapter_list.itemClicked.connect(self._on_chapter_clicked)
+        # v1.92 BUG-066:章节列表右键菜单(锁定/解锁章节)
+        self.chapter_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.chapter_list.customContextMenuRequested.connect(self._on_chapter_list_context_menu)
         ll.addWidget(self.chapter_list, 1)
 
         bg = QGridLayout(); bg.setSpacing(4)
@@ -12012,7 +12015,14 @@ class MainWindow(QMainWindow):
     def _refresh_chapter_list(self):
         self.chapter_list.clear()
         for ch in self.chapters:
-            self.chapter_list.addItem(QListWidgetItem(ch["title"]))
+            # v1.92 BUG-066:已锁定章节加 🔒 前缀,直观区分
+            _title = ch.get("title", "")
+            if ch.get("locked"):
+                _title = f"🔒 {_title}"
+            _item = QListWidgetItem(_title)
+            if ch.get("locked"):
+                _item.setToolTip("已锁定 — save/重命名/删除/写回均跳过。右键解锁")
+            self.chapter_list.addItem(_item)
         if 0 <= self.current_chapter_index < len(self.chapters):
             self.chapter_list.setCurrentRow(self.current_chapter_index)
         # v1.61: 同步更新章节计数 label(导入/删除后立刻反馈)
@@ -12034,19 +12044,83 @@ class MainWindow(QMainWindow):
         if not (0 <= idx < len(self.chapters)): return
         # 自动保存当前章
         if 0 <= self.current_chapter_index < len(self.chapters):
-            self.chapters[self.current_chapter_index]["title"] = self.tab_editor.title_input.text()
-            self.chapters[self.current_chapter_index]["content"] = self.tab_editor.content_edit.toPlainText()
+            _cur = self.chapters[self.current_chapter_index]
+            # v1.92 BUG-066:已锁定章节切走时跳过写回,保护"已确认内容"
+            if _cur.get("locked"):
+                _ch_no = self.current_chapter_index + 1
+                try:
+                    self.tab_generation.log(
+                        f"⚠ 第{_ch_no}章已锁定,切走时跳过编辑器写回(改动未保存)。"
+                        f"如需修改请先右键解锁本章。", "warn")
+                except Exception:
+                    pass
+            else:
+                _cur["title"] = self.tab_editor.title_input.text()
+                _cur["content"] = self.tab_editor.content_edit.toPlainText()
         self.current_chapter_index = idx
         ch = self.chapters[idx]
         self.tab_editor.show_chapter(ch, idx)  # 记录索引,供风格检测/备选版本使用
         self.tabs.setCurrentWidget(self.tab_editor)
 
     # ---- 章节管理 ----
+    def _on_chapter_list_context_menu(self, pos):
+        """v1.92 BUG-066:章节列表右键菜单 — 锁定/解锁本章"""
+        from PyQt5.QtWidgets import QMenu
+        item = self.chapter_list.itemAt(pos)
+        if not item:
+            return
+        idx = self.chapter_list.row(item)
+        if not (0 <= idx < len(self.chapters)):
+            return
+        ch = self.chapters[idx]
+        menu = QMenu(self.chapter_list)
+        if ch.get("locked"):
+            act = menu.addAction("🔓 解锁本章")
+            act.triggered.connect(lambda: self._toggle_chapter_lock(idx, False))
+        else:
+            act = menu.addAction("🔒 锁定本章(中稿/终稿,防止后续修改)")
+            act.triggered.connect(lambda: self._toggle_chapter_lock(idx, True))
+        menu.exec_(self.chapter_list.viewport().mapToGlobal(pos))
+
+    def _toggle_chapter_lock(self, idx, locked):
+        """v1.92 BUG-066:切换章节锁定状态。
+        locked=True 后:save/delete/rename/切走写回全部跳过,
+        UI 章节标题前显示 🔒 标记。
+        """
+        if not (0 <= idx < len(self.chapters)):
+            return
+        ch = self.chapters[idx]
+        # 锁定前如果有未保存的编辑器改动且当前正是这一章 → 先 flush 到 dict
+        if locked and idx == self.current_chapter_index:
+            try:
+                ch["title"] = self.tab_editor.title_input.text() or ch.get("title", "")
+                ch["content"] = self.tab_editor.content_edit.toPlainText()
+            except Exception:
+                pass
+        ch["locked"] = bool(locked)
+        self._refresh_chapter_list()
+        # 锁定后重新选中,保持高亮
+        try:
+            self.chapter_list.setCurrentRow(idx)
+        except Exception:
+            pass
+        _ch_no = idx + 1
+        _ch_title = ch.get("title", "")
+        if locked:
+            msg = f"🔒 第{_ch_no}章『{_ch_title}』已锁定 — save/重命名/删除/写回均拦截"
+        else:
+            msg = f"🔓 第{_ch_no}章『{_ch_title}』已解锁"
+        try:
+            self.tab_generation.log(msg, "info")
+            self.statusBar().showMessage(msg, 4000)
+        except Exception:
+            pass
+
     def add_chapter(self):
         n = len(self.chapters) + 1
         title, ok = QInputDialog.getText(self, "新增章节", "章节标题:", text=f"第{n}章 ")
         if ok and title:
-            self.chapters.append({"title": title, "content": ""})
+            self.chapters.append({"title": title, "content": "", "locked": False})
             self.current_chapter_index = len(self.chapters) - 1
             self._refresh_chapter_list()
             self.tab_editor.load_chapter(title, "")
@@ -12055,6 +12129,13 @@ class MainWindow(QMainWindow):
     def delete_chapter(self):
         idx = self.chapter_list.currentRow()
         if idx < 0: return
+        # v1.92 BUG-066:已锁定章节拒绝删除
+        if self.chapters[idx].get("locked"):
+            QMessageBox.warning(
+                self, "已锁定",
+                f"『{self.chapters[idx]['title']}』已锁定,无法删除。\n\n"
+                f"请先右键解锁本章后再操作。")
+            return
         if QMessageBox.question(
             self, "确认", f"删除『{self.chapters[idx]['title']}』?"
         ) == QMessageBox.Yes:
@@ -12066,6 +12147,13 @@ class MainWindow(QMainWindow):
     def rename_chapter(self):
         idx = self.chapter_list.currentRow()
         if idx < 0: return
+        # v1.92 BUG-066:已锁定章节拒绝重命名
+        if self.chapters[idx].get("locked"):
+            QMessageBox.warning(
+                self, "已锁定",
+                f"『{self.chapters[idx]['title']}』已锁定,无法重命名。\n\n"
+                f"请先右键解锁本章后再操作。")
+            return
         title, ok = QInputDialog.getText(
             self, "重命名", "新标题:", text=self.chapters[idx]["title"])
         if ok and title:
@@ -12088,6 +12176,14 @@ class MainWindow(QMainWindow):
             pass
         if self.current_chapter_index < 0:
             QMessageBox.warning(self, "提示", "请先新增或选择章节")
+            return
+        # v1.92 BUG-066:已锁定章节拒绝写回
+        if self.chapters[self.current_chapter_index].get("locked"):
+            _ch_no = self.current_chapter_index + 1
+            QMessageBox.warning(
+                self, "已锁定",
+                f"第{_ch_no}章『{self.chapters[self.current_chapter_index]['title']}』已锁定,无法保存修改。\n\n"
+                f"如需修改请先右键解锁本章。")
             return
         self.chapters[self.current_chapter_index]["title"] = title
         self.chapters[self.current_chapter_index]["content"] = content
@@ -16289,7 +16385,8 @@ class MainWindow(QMainWindow):
 
             ch_title = self._extract_chapter_title(body_clean) or f"第{ch_num}章"
             ch_body = self._strip_chapter_title(body_clean)
-            chapter = {"title": ch_title, "content": ch_body, "summary": ""}
+            # v1.92 BUG-066:章节默认 locked=False(章节级中稿/终稿锁定字段)
+            chapter = {"title": ch_title, "content": ch_body, "summary": "", "locked": False}
 
             # ── 元信息存进 chapter dict,供 UI/工作流后续用
             if pangu_meta:
@@ -19397,6 +19494,10 @@ class MainWindow(QMainWindow):
             return
         try:
             self.chapters = d.get("chapters", [])
+            # v1.92 BUG-066:旧存档无 locked 字段 → 兜底 False(向后兼容)
+            for _ch in self.chapters:
+                if isinstance(_ch, dict):
+                    _ch.setdefault("locked", False)
             self.tab_settings.title_input.setText(d.get("title", ""))
             self.tab_settings.inspiration_edit.setPlainText(d.get("inspiration", ""))
             self.tab_outline.seed_edit.setPlainText(d.get("seed", ""))
@@ -19687,6 +19788,10 @@ class MainWindow(QMainWindow):
         """
         self._reset_ui_state()
         self.chapters = d.get("chapters", [])
+        # v1.92 BUG-066:旧存档无 locked 字段 → 兜底 False(向后兼容)
+        for _ch in self.chapters:
+            if isinstance(_ch, dict):
+                _ch.setdefault("locked", False)
         self.tab_settings.title_input.setText(d.get("title", ""))
         self.tab_settings.inspiration_edit.setPlainText(d.get("inspiration", ""))
         self.tab_outline.seed_edit.setPlainText(d.get("seed", ""))

@@ -155,12 +155,20 @@ class TestBuildDegradedContent(unittest.TestCase):
 
 
 class TestVersionBumped(unittest.TestCase):
-    """v1.90 → v1.91,常识健康检查"""
-    def test_app_version_is_v191(self):
+    """常识健康检查:APP_VERSION 必须 ≥ v1.91(BUG-065 引入版本)。
+    后续 v1.92/v1.93... 都视为合规,避免每次升版都改这个测试。"""
+    def test_app_version_at_least_v191(self):
+        import re
         with open(NOVEL_AI_PATH, encoding="utf-8") as f:
             for line in f:
                 if line.startswith("APP_VERSION"):
-                    self.assertIn("v1.91", line)
+                    m = re.search(r'v(\d+)\.(\d+)', line)
+                    self.assertIsNotNone(
+                        m, f"APP_VERSION line 必须有 v<major>.<minor>:{line!r}")
+                    major, minor = int(m.group(1)), int(m.group(2))
+                    self.assertGreaterEqual(
+                        (major, minor), (1, 91),
+                        f"APP_VERSION 必须 ≥ v1.91(BUG-065 引入版本),实际 v{major}.{minor}")
                     return
         self.fail("APP_VERSION not found in novel_ai.py")
 
