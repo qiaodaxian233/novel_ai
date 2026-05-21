@@ -2,10 +2,11 @@
 """v1.38 BookSplitterTab UI 集成防回归测试(吸取 BUG-046 教训)"""
 import ast
 from pathlib import Path
+from tests_helpers import read_all_sources
 
 
 def _find_class_methods(cls_name):
-    src = Path("novel_ai.py").read_text(encoding="utf-8")
+    src = read_all_sources()  # v2.07
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == cls_name:
@@ -39,13 +40,13 @@ def test_book_handlers_not_in_chapter_editor():
 
 def test_dispatch_routes_book_target():
     """dispatch 路由必须含 'book_chapter_analysis' target"""
-    src = Path("novel_ai.py").read_text(encoding="utf-8")
+    src = read_all_sources()  # v2.07
     assert 'target == "book_chapter_analysis"' in src
     assert "_on_book_chapter_analysis_received" in src
 
 
 def test_tab_registered():
     """📚 拆书学习 必须在 tab_list 注册"""
-    src = Path("novel_ai.py").read_text(encoding="utf-8")
+    src = read_all_sources()  # v2.07
     assert "self.tab_book_splitter = BookSplitterTab()" in src
     assert "📚 拆书学习" in src

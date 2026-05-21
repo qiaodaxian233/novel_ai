@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 
 import pytest
+from tests_helpers import read_all_sources
 
 
 ROOT = Path(__file__).resolve().parent
@@ -153,7 +154,8 @@ def test_skip_incomplete_relations():
 
 # ── 3. novel_ai.py 集成验证 ──────────────────────────────
 def _read_src():
-    return NOVEL_AI_PY.read_text(encoding="utf-8")
+    # v2.07:读全源 — P5 后 RELATION_GRAPH_AVAILABLE 迁到 ui/tabs/character_library.py
+    return read_all_sources()
 
 
 def test_import_in_novel_ai():

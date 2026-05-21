@@ -43,9 +43,10 @@ def section(t):
 # T1: 项目改名
 # ============================================================
 section("T1 — 项目改名")
+# v1.94 项目改名:AI 写作工作台 → 盘古超级写作助手
 mw = novel_ai.MainWindow()
-expect("窗口标题 = AI 写作工作台",
-       mw.windowTitle() == "AI 写作工作台",
+expect("窗口标题以「盘古超级写作助手」开头",
+       mw.windowTitle().startswith("盘古超级写作助手"),
        f"实际: {mw.windowTitle()!r}")
 
 
@@ -62,13 +63,16 @@ expect("章节列表 widget 也是空", mw.chapter_list.count() == 0)
 # T3: 11 个 Tab 全部装上
 # ============================================================
 section("T3 — Tab 列表完整")
+# v1.41 加 🏠 项目主页 / v1.38 加 📚 拆书学习 / v7 时代删 小说封面生成
 expected = [
+    "🏠 项目主页",          # v1.41 新增,放在最前面
     "创作设置", "故事大纲", "对话记忆", "Canon 设定",
     "🎭 角色与世界",        # 角色库 + 关系 + 时间线 + 物品 + 伏笔
     "寿元/伏笔",         # 来自 lifespan_loops 集成
     "技能库",
     "工作流",            # 来自 workflow_panel 集成
-    "生成控制", "章节编辑器", "小说封面生成",
+    "生成控制", "章节编辑器",
+    "📚 拆书学习",         # v1.38 新增
 ]
 actual = [mw.tabs.tabText(i) for i in range(mw.tabs.count())]
 expect(f"Tab 数 = {len(expected)}",

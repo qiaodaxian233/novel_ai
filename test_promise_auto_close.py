@@ -11,12 +11,14 @@ X. 守(防御性)
 import re
 import ast
 import pytest
+from tests_helpers import read_all_sources
 
 
 @pytest.fixture(scope="module")
 def src():
-    with open("novel_ai.py", encoding="utf-8") as f:
-        return f.read()
+    # v2.07:读全源(模块化拆分后)
+
+    return read_all_sources()
 
 
 @pytest.fixture(scope="module")

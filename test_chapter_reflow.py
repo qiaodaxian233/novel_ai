@@ -22,12 +22,13 @@ import ast
 import os
 import sys
 import pytest
+from tests_helpers import read_all_sources
 
 
 @pytest.fixture(scope="module")
 def src():
-    with open("novel_ai.py", encoding="utf-8") as f:
-        return f.read()
+    # v2.07:读全源(主程序 + ui/core 子模块)。v2.00~v2.05 P2 后 PROMPTS 已迁到 core/prompts.py
+    return read_all_sources()
 
 
 @pytest.fixture(scope="module")

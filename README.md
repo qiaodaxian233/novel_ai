@@ -1,63 +1,142 @@
-# 智能创作系统
+# 盘古超级写作助手
 
-按照参考截图复刻的本地小说创作辅助软件。基于 **PyQt5 (UI) + Selenium (浏览器自动化)** 实现,挂载真实 Chrome/Edge 浏览器,自动发送提示词、自动等待 AI 回复完成、自动抓取并回填到对应输入框。
+> 一款本地小说自动化创作工具,挂载真实 Chrome/Edge 浏览器,自动驱动 ChatGPT / DeepSeek / 豆包 / Gemini / 元宝等 AI 网页完成长篇网文创作。
+> **不调用任何 API**,用浏览器自动化方式访问 AI 对话界面,适合长期写一本书时把上下文连贯性、人设一致性、伏笔回收等问题自动管起来。
+
+**当前版本:v2.06** · Python 3.10+ · PyQt5 + Selenium 4.6+
 
 ---
 
-## 一、运行方式
+## 1. 这是什么
+
+一个 PyQt5 桌面 GUI,加上 Selenium 浏览器自动化层,让你把网文创作的"重复劳动"全部交给程序处理:
+
+- 章节按目标字数自动生成,达不到自动死磕重写
+- 每章生成完自动维护**对话记忆**(角色档案 / 章节摘要 / 长期伏笔)
+- 自动注入到下一章 prompt,**让 AI 第 200 章时也不忘第 1 章人设**
+- 内置**盘古超级系统**:123 项 AI 写作禁用词检测、30 项质量自检、感官铁律、压爆震、黄金三章模板
+- 全章节结束后自动跑伏笔回收检查、承诺兑现检查、知识穿帮检查
+- 自动维护**剧情树**、**关系图谱**、**时间线**、**物品/法器库**、**战力体系**、**信息隔离表**
+
+---
+
+## 2. 快速开始
 
 ```bash
-# 1. 安装依赖
+# 安装依赖
 pip install -r requirements.txt
-# 或手动:pip install PyQt5 selenium
 
-# 2. 启动
+# 启动
 python novel_ai.py
 ```
 
-> Selenium 4.6+ 会自动管理 chromedriver,无需单独下载。
-> 系统已装 Chrome/Edge 的话,在「生成控制」里选对应内核,Selenium 会直接挂载。
-> Windows / macOS / Linux 通用。
+**首次使用:**
+1. 启动后在「生成控制」Tab 点 🚀 启动浏览器(独立 Chrome/Edge 窗口弹出)
+2. 在弹出的浏览器里**手动登录一次** AI 网站(Cookie 持久化到 `~/NovelAI_Browser_Data`,后续不用再登)
+3. 回主程序,在「创作设置」填写灵感 → 「故事大纲」生成大纲 → 「生成控制」点 ▶ 开始生成
+
+依赖要求详见 `requirements.txt`,其中 `webdriver-manager` / `edge-tts` / `pygame` 都是可选项,缺了对应功能停用但主程序仍能跑。
 
 ---
 
-## 二、自动化工作流(★ 核心)
+## 3. 项目结构(v2.06)
 
-整个流程**全自动**,你只需要点一次按钮:
-
-```
-点「🚀 启动浏览器」(独立 Chrome 窗口弹出)
-       ↓
-首次手动登录 AI 网站(Cookie 持久化保存)
-       ↓
-回主程序 → 点「✨ 一键补齐大纲」or「▶ 开始连续生成」
-       ↓
-程序自动:
-  ① 跳转到所选 AI 网站
-  ② 找到输入框,逐字打字粘贴提示词(★ 含对话记忆块)
-  ③ 按回车 / 点发送按钮
-  ④ 实时检测 AI 是否还在打字(用"内容稳定 4 秒"判断完成)
-  ⑤ 抓取最后一条 assistant 消息文本
-  ⑥ 回填到对应输入框(灵感/大纲/章节正文)
-  ⑦ 字数不达标自动死磕重写
-  ⑧ ★ 自动给本章生成 80 字摘要,存入对话记忆
-  ⑨ 一章接一章自动循环,直到 N 章完成
-```
-
-## ★ 对话记忆系统(关键加成)
-
-写到第 100 章时,普通 AI 早就忘了第 1 章发生了什么——**人设会崩、伏笔会断**。本程序内置一套对话记忆,在 `对话记忆` 选项卡里:
-
-**自动维护**(批量生成时全自动):
-- **角色档案**:外貌/性格/当前状态/与主角关系
-- **章节摘要**:每章一行 80 字精炼概括,自动追加
-- **长期记忆**:伏笔、关键物品、未揭晓秘密
-
-**自动注入**(发下一章前):
+经过 P1~P6 模块化拆分,代码组织清晰:
 
 ```
-【对话记忆 - AI 必读 ↓】
+novel_ai/
+├── novel_ai.py             # 主程序(9653 行,MainWindow 装配中心 + main())
+│
+├── core/                   # 数据 + 配置层(9 个文件)
+│   ├── constants.py        # AI_URLS / GENRES / PLATFORMS / 等 8 个常量
+│   ├── prompts.py          # PROMPTS 字典(29 keys / 583 行)
+│   ├── site_profiles.py    # SITE_PROFILES(各 AI 网页 DOM 选择器)
+│   ├── default_skills.py   # DEFAULT_SKILLS(出厂技能库)
+│   └── stylesheet.py       # STYLESHEET(全局 QSS)
+│
+├── ui/                     # UI 组件层(7 个文件)
+│   ├── browser_worker.py   # Selenium 浏览器自动化 worker(2475 行)
+│   ├── theme.py            # 主题管理(白/黑切换)
+│   ├── highlighters.py     # 盘古禁用词实时高亮
+│   ├── threads.py          # TTS 合成后台线程
+│   ├── conversation_switcher.py  # 对话槽切换器
+│   ├── story_outline.py    # 故事大纲 Tab(独立 widget)
+│   └── tabs/               # 主要 Tab 实现(9 个文件)
+│       ├── project_home.py        # 🏠 项目主页(项目仪表盘 / 最近文件)
+│       ├── creation_settings.py   # 创作设置(题材/平台/金手指/人设/...)
+│       ├── dialog_memory.py       # 对话记忆 Tab
+│       ├── canon_guard.py         # Canon 设定守护
+│       ├── character_library.py   # 🎭 角色与世界(13 子页:角色/关系/时间线/...)
+│       ├── skill_library.py       # 技能库 Tab
+│       ├── generation_control.py  # 生成控制(浏览器 + 批量生成)
+│       ├── chapter_editor.py      # 章节编辑器(含盘古面板)
+│       └── book_splitter.py       # 📚 拆书学习
+│
+├── pangu_system.py         # 盘古超级系统引擎(123 禁用词 / 30 项质检 / 风格库)
+├── pangu_patch.py          # 盘古零侵入接入(就地包裹 PROMPTS)
+├── lifespan_loops_steps.py # 寿元台账 + 长期伏笔
+├── lifespan_loops_panel.py # 寿元/伏笔 Tab
+├── workflow_pipeline.py    # 生成流水线(可视化 + 强化学习)
+├── workflow_panel.py       # 工作流可视化 Tab
+├── research_report_skills.py  # 研究报告技能(5 条出厂技能)
+├── dialogue_critic.py      # 13 法对话铁律评分
+├── flow_rl.py              # 流程强化学习(自学习最优等待/重试策略)
+├── housekeeper.py          # 章末管家日报
+├── book_splitter.py        # 拆书核心引擎
+├── import_continuation.py  # 导入外部小说续写
+├── project_io.py           # 项目文件夹格式读写
+├── relation_graph.py       # 关系图谱(vis-network 力导向图)
+├── license_guard.py        # 授权验证
+├── tts_backend.py          # TTS 后端(EdgeTTS / Index-TTS)
+├── patch_novel_ai.py       # 历史代码补丁注入器(慎动)
+│
+├── requirements.txt
+├── README.md
+└── 项目对接记忆.md         # AI 接班手册(给下一代 Claude)
+```
 
+**累计模块化进展:** 主程序从 20740 行(1.0 MB)→ 9653 行(470 KB),瘦 53.5%。详见 `项目对接记忆.md` 里 v2.00~v2.05 的 P1~P6 段。
+
+---
+
+## 4. 核心功能
+
+### 4.1 全自动批量生成(★ 核心工作流)
+
+```
+点 🚀 启动浏览器(独立 Chrome 窗口弹出)
+       ↓
+首次手动登录 AI 网站(Cookie 持久化)
+       ↓
+回主程序 → 点 ▶ 开始连续生成(50 章批量)
+       ↓
+程序自动循环:
+  ① 注入对话记忆 + 角色库 + Canon + 上一章末尾 + 盘古铁律到 prompt
+  ② 跳转 AI 网页,逐字打字粘贴,按回车 / 点发送
+  ③ 实时检测 AI 是否还在打字(稳定 4 秒视为完成)
+  ④ 抓取最后一条 assistant 消息
+  ⑤ 多维质检:字数 / 钩子 / 禁用词 / 盘古综合评分 / Canon / 节奏 / 人设
+  ⑥ 不达标自动死磕重写(最多 3 次)
+  ⑦ 通过 → 入章节库 + 自动剥离元信息(钩子/爽点/下章选项)
+  ⑧ 章末流水线:Canon 抽取 → 6 库抽取 → 伏笔回收检查 →
+       承诺兑现检查 → 弧线推进检查 → 信息披露检查 → 写作回流 → 摘要 → 下一章
+  ⑨ 持续循环直到 N 章完成
+```
+
+### 4.2 对话记忆系统(关键加成)
+
+写到第 100 章时,普通 AI 早就忘了第 1 章发生了什么——**人设会崩、伏笔会断**。本程序内置一套对话记忆,在「对话记忆」Tab 里自动维护:
+
+| 类别 | 内容 | 维护方式 |
+|---|---|---|
+| **角色档案** | 外貌/性格/当前状态/与主角关系 | 章末 AI 自动抽取,合并到角色与世界库 |
+| **章节摘要** | 每章 80 字精炼概括 | 章末自动生成,追加到记忆 |
+| **长期记忆** | 伏笔、关键物品、未揭晓秘密 | 章末 AI 抽取 + 用户编辑 |
+
+发下一章前自动注入(可配置开关):
+
+```
+【对话记忆 - AI 必读】
 【角色档案(必须保持人设一致)】
 林晚晚:外柔内刚,刚结婚...
 顾砚深:高冷禁欲,A 集团总裁...
@@ -72,176 +151,142 @@ python novel_ai.py
 [本章核心] xxx
 [本章末尾片段] ...原文最后 400 字...
 
-——第N-1章 ——
-...
-
-【长期记忆 - 重要伏笔/物品/关系(不要遗忘、不要矛盾)】
+【长期记忆 - 重要伏笔/物品/关系】
 - 玉佩:祖母传给男主(第3章)
 - 女主双重身份未被识破(全文核心)
 ```
 
-这样即使 AI 单次会话上下文有限,写第 50 章时也能精确知道"前 47 章发生了啥、人物关系如何、有哪些没填的坑"。
-
 可调参数:最近 N 章详细回顾(默认 3)、单条摘要长度(默认 80 字)、是否自动总结、是否自动注入。
 
----
+### 4.3 盘古超级系统
 
-**关键技术点**:
-- **挂载真 Chrome,不是嵌入 WebView**:Selenium 启动的是独立浏览器窗口,带完整 Chrome 内核,过反爬能力比 QtWebEngine 强很多
-- **Cookie 持久化**:用 `user-data-dir=~/NovelAI_Browser_Data` 启动 Chrome,第一次登录之后永远不用再登
-- **回复完成检测**:轮询最后一条消息文本,稳定 4 秒视为完成(避免点到一半就抓)
-- **字数死磕**:抓到的字数 < 目标 85% 时自动用「上次只写了 X 字,必须写到 Y 字以上」的强化 prompt 重发,默认死磕 3 次
+零侵入接入(`pangu_patch.install_pangu(globals())`),就地把 PROMPTS 字典套上 9 条铁律:
 
----
+- **123 项 AI 写作禁用词清单**(顿时/连忙/显然/嘴角勾起 等),实时高亮编辑器
+- **感官铁律**:每段必须命中 ≥2 种感官(视/听/触/嗅/味/温/动觉)
+- **压爆震法则**:压抑—爆发—震慑 三段节奏
+- **黄金三章模板**:首章钩子 / 次章信息密度 / 三章付费点
+- **30 项 + 8 大坑质检**:章末 AI 综合评分,< 阈值自动死磕重写
+- **风格库**(可视化编辑器):关键词 → 主/辅/点缀风格 + 女基调 + 平台映射
+- **章节差异化**(防套路):每章用不同 RNG 种子,锁定不同开篇/节奏/感官组合
 
-## 二、界面对照(对应原版 8 张截图)
+### 4.4 自动结构化抽取(章末流水线)
 
-| 原版页签/模块 | 本程序对应 | 主要功能 |
+每章生成完毕后自动跑(均为可关开关):
+
+| 步骤 | 作用 | 库 |
 |---|---|---|
-| 创作设置 - AI配置 | `CreationSettings` 顶部 | AI 模型选择(豆包/Gemini/DeepSeek/元宝/小米AI/自定义)、内核 |
-| 创作设置 - 标题/题材 | `CreationSettings` 中部 | 22 个题材多选、AI 生成长书名、灵感导入 |
-| 创作设置 - 商业参数 | `CreationSettings` | 平台定位 |
-| 创作设置 - 目标读者/爽点/成长/冲突/时代 | `CreationSettings` | 5 组单选 + 时代下拉/自定义 |
-| 创作设置 - 生成规模 | `CreationSettings` | 总章节(60/120/300/500+自定义)、每章字数、大纲详细度 |
-| 创作设置 - 风格权重 | `CreationSettings` | 5 条滑块:爽文/文学/黑暗/轻松/搞笑(默认爽文50% 搞笑50%) |
-| 创作设置 - 节奏/结局倾向/创作模式 | `CreationSettings` | 节奏单选、20 种结局多选、稳定/创造模式 |
-| 创作设置 - 提示词字数偏移 | `CreationSettings` | -2000 ~ +2000 调节生成长度 |
-| 创作设置 - **金手指**(85 项) | `CreationSettings` | 4 列网格多选,带「全选/清空」工具按钮 |
-| 创作设置 - **主角人设**(94 项) | `CreationSettings` | 4 列网格多选,带「全选/清空」工具按钮 |
-| 故事大纲 | `StoryOutline` | 特殊需求、整套大纲、种子、世界观、LO层、结构、章节大纲、简介 |
-| 生成控制 | `GenerationControl` | **左:日志区 / 右:内置 AI 网页** + 黄金三章、连续生成、字数死磕 |
-| 章节编辑器 | `ChapterEditor` | 标题、正文编辑、字数实时统计、AI 优化、保存 |
-| 小说封面生成 | `CoverGeneration` | 封面 prompt 编辑、调用画图网页 |
+| Canon 抽取 | 单值条目(年龄/身份/物品)入 Canon Tab | tab_canon |
+| 6 库抽取 | 角色/关系/时间线/物品/战力/伏笔/承诺/弧线/关系值/目标/信息/知情人/剧情树 入对应表 | tab_charlib |
+| 伏笔回收检查 | AI 扫本章哪些伏笔被收(BUG-056) | tbl_fore |
+| 承诺兑现检查 | AI 扫本章哪些承诺/威胁兑现(BUG-057) | tbl_promises |
+| 弧线推进检查 | AI 评估本章对哪几条弧线推进了多少 progress(BUG-058) | tbl_arcs |
+| 关系值变化检查 | AI 评估本章哪些关系值变化(BUG-058) | tbl_rel_values |
+| 信息披露追踪 | AI 扫本章新披露事件,自动入库 known_by(BUG-059) | tbl_known_by |
+| 知识穿帮检查 | AI 扫某角色用了不该知道的信息,标红警告(BUG-059) | — |
+| 写作模式回流 | AI 反查本章对应剧情树哪些节点,挂章号(BUG-062) | tree_plot |
+| 摘要生成 | 80 字精炼章节摘要 | tab_memory |
 
-左侧侧栏复刻了:章节列表 + 新增/删除/重命名/新建空白/新建目录/导入存档/返回上级/解锁编辑 八个按钮。
-
----
-
-## 三、内置提示词(已写死在代码里)
-
-代码顶部 `PROMPTS` 字典就是提示词中心,可以直接改:
-
-- `creative_inspiration` — **就是你给的那一段**(题材、20 字内、禁止反光/影子/另一个自己…)
-- `outline_full` — **就是你给的整套大纲那一段**(包含「【特别指示】总章节数为 {chapter_count} 章」)
-- `outline_part` — 单独生成种子/世界观/LO层/结构/章节大纲
-- `chapter` — 单章生成(支持目标字数、连贯性约束)
-- `golden_three` — 黄金三章
-- `title` — AI 生成书名
-- `intro` — 提取大纲生成简介
-- `ai_optimize` — 章节润色
-
-题材、章节数、灵感等会自动用 `.format()` 注入到模板里。
-
-### 完整设定块自动注入
-所有「生成大纲」「生成章节」「黄金三章」按钮在发送提示词前,会自动把创作设置中的高级选项打包成 `【完整设定】` 文本块附加到提示词末尾,样例:
-
-```
-【完整设定】
-题材:都市/言情
-小说标题:闪婚总裁:今天撸串吗?
-平台定位:番茄小说
-目标读者:成人
-爽点密度:极致爽
-成长曲线:爆发型
-冲突强度:极端
-时代背景:古代王朝
-风格权重:爽文50%、搞笑50%
-故事节奏:适中
-结局倾向:圆满结局
-创作模式:创造版 (鼓励创新突破)
-金手指:系统流、签到打卡
-主角人设:傲娇毒舌、富二代
-每章字数:3000 字(偏移 -200)
-大纲详细度:详细
-```
-
-这样 AI 写出来的内容会严格符合所有勾选的偏好。生成方法在 `MainWindow.gen_outline_all` / `gen_golden_three` / `start_generation` 里,字数偏移会直接加到目标字数上(即 3000 字 - 200 = 2800 字目标,最低 85% = 2380 字)。
-
----
-
-## 四、内置网页(挂载逻辑)
-
-`GenerationControl` 里有一个 `QWebEngineView`,默认加载 DeepSeek;切换 AI 模型时会自动跳转到对应网址:
+### 4.5 支持的 AI 网站
 
 ```python
 AI_URLS = {
-    "豆包":     "https://www.doubao.com/chat/",
-    "Gemini":   "https://gemini.google.com/",
-    "DeepSeek": "https://chat.deepseek.com/",
-    "元宝":     "https://yuanbao.tencent.com/",
-    "小米AI":   "https://www.xiaomi.com/",
+    "ChatGPT镜像": "https://gpt.aimonkey.plus/",
+    "ChatGPT":     "https://chatgpt.com/",
+    "豆包":        "https://www.doubao.com/chat/",
+    "Gemini":      "https://gemini.google.com/",
+    "DeepSeek":    "https://chat.deepseek.com/",
+    "元宝":        "https://yuanbao.tencent.com/",
+    "小米AI":      "https://www.xiaomi.com/",
 }
 ```
 
-**首次使用**:在内置浏览器里手动登录一次,Cookie 会存到本地用户配置(同 Chrome)。后续直接用。
+`SITE_PROFILES`(`core/site_profiles.py`)定义每家网站的 DOM 选择器(输入框/发送按钮/回复区/停止按钮)。每个站点支持多选择器逗号分隔,前一个失效后一个兜底。可通过菜单 → 工具 → 🎯 现场拾取选择器 在浏览器里 hover 元素自动生成新选择器。
 
 ---
 
-## 五、网页选择器适配(关键!)
+## 5. 数据存档
 
-各家 AI 网页的 DOM 各不相同,且经常变动。代码里的 `SITE_PROFILES` 字典是关键 —— 里面定义了每家网站的:
+### 项目文件夹格式(v1.30+ 推荐)
 
-```python
-SITE_PROFILES = {
-    "chat.deepseek.com": {
-        "name": "DeepSeek",
-        "input":    'textarea',                                    # 输入框
-        "send_btn": 'div[role="button"]:has(svg)',                # 发送按钮(原生 :has)
-        "response": 'div.ds-markdown, [class*="markdown-body"]',   # AI 回复元素(多兜底)
-        "stop_btn": 'div[role="button"][aria-label*="停止"]',       # 停止按钮(aria-label)
-    },
-    "doubao.com": {
-        "name": "豆包",
-        "input":    'textarea, div[contenteditable="true"]',
-        "send_btn": 'button[data-testid*="send"], button[aria-label*="发送"]',
-        "response": '[data-testid*="message_text"], [class*="message-content"]',
-        "stop_btn": 'button[aria-label*="停止"]',
-    },
-    # ... 还有 ChatGPT / Gemini / 元宝 / 小米AI 等
-    "_default": { ... }  # 兜底通用选择器
-}
-```
-
-每个网站支持**多个选择器逗号分隔**(Selenium 会从前往后试,第一个命中的用),这样某个 DOM 改动后,后面的兜底还能用。
-
-**如果某家 AI 抓不到内容**,打开浏览器 F12,定位它的 DOM,改对应的 CSS / XPath 选择器即可。匹配不到具体网站时会回退到 `_default` 通用兜底。
-
-由于 Selenium 用的是 CSS / XPath 选择器(比 QtWebEngine 的纯 JS 更稳),适配起来也方便。修改后保存文件、重启即可生效。
-
----
-
-## 六、数据存档
-
-- **项目文件**:`Ctrl+S` 保存为 JSON,默认在 `~/NovelAI_Projects/<标题>.json`
-- **章节 TXT**:点「保存章节」/「一键保存所有」,会输出到 `~/NovelAI_Projects/<标题>/第N章 xxx.txt`
-- **导入存档**:左下「导入存档」按钮,选择之前保存的 JSON
-
----
-
-## 七、目录结构建议
+`Ctrl+S` 保存为文件夹结构:
 
 ```
-your_folder/
-├── novel_ai.py           # 主程序(单文件)
-├── requirements.txt
-└── README.md
-
-运行后会在用户目录自动建:
-~/NovelAI_Projects/      # 所有项目存档
+~/NovelAI_Projects/<书名>/
+├── project.json         # 项目元数据(设置/大纲/记忆/库)
+├── chapters/
+│   ├── ch001.txt
+│   ├── ch002.txt
+│   └── ...
+└── .backups/            # 自动版本备份(最近 10 次保存)
+    └── ...
 ```
 
----
-
-## 八、二次开发提示
-
-- **想接入 API 而不是网页**:把 `_send_to_ai` 改成 `requests.post` 直接调 OpenAI/DeepSeek API,然后把返回填回对应输入框即可,不再需要 `QWebEngineView`
-- **想做全自动循环**:在 `start_generation` 里用 `QTimer` 轮询 `grab_last_response`,检测到 AI 回复完整后自动保存当前章并发下一章的提示词
-- **添加新 AI**:`AI_URLS` 加一行;如果该网页 DOM 特殊,可在 `send_prompt_to_browser` 里写 if 判断 `self.web_view.url().host()` 走专属注入逻辑
+- 兼容老的单 `.json` 格式(打开时自动升级,原 `.json` 备份为 `.legacy-original.json`)
+- 60 秒定时 autosave(防崩溃),关闭时也强制保存
+- 章节锁定字段(v1.92):锁定后 save/重命名/删除/写回全部拦截,适合中稿/终稿冻结
 
 ---
 
-## 九、合规说明
+## 6. 二次开发
 
-- 程序内置的安全约束(禁止血腥、暴力、色情、侮辱女性、镜面/影子/另一个自己题材)已写进所有提示词,**会被一并发到 AI 那边**
+### 找代码的位置
+
+| 想改什么 | 在哪里 |
+|---|---|
+| 提示词模板 | `core/prompts.py`(29 keys) |
+| AI 网址 / 题材 / 金手指清单 | `core/constants.py` |
+| DOM 选择器 | `core/site_profiles.py` |
+| 浏览器自动化(Selenium) | `ui/browser_worker.py` |
+| 某个 Tab 的 UI 和事件 | `ui/tabs/<tab_name>.py` |
+| 章节生成主流水线 | `novel_ai.py`(`MainWindow._send_next_chapter` / `_accept_chapter_and_continue` / `_post_chapter_chain`) |
+| 盘古铁律 / 风格库 / 词扫 | `pangu_system.py` |
+| 寿元/伏笔台账 | `lifespan_loops_steps.py` |
+| 13 法对话评分 | `dialogue_critic.py` |
+
+### 测试
+
+```bash
+# 全套测试(822 个)
+QT_QPA_PLATFORM=offscreen python3 -m pytest test_bug*.py test_site_preferences.py -q
+QT_QPA_PLATFORM=offscreen python3 test_full_integration.py    # 48 集成测试
+QT_QPA_PLATFORM=offscreen python3 test_lifespan_loops.py       # 68
+QT_QPA_PLATFORM=offscreen python3 test_research_report_skills.py  # 123
+QT_QPA_PLATFORM=offscreen python3 test_workflow_panel.py       # 31
+```
+
+49 个测试文件覆盖:全部 BUG-065~074 回归 + 各模块单元测试 + 完整 UI 集成测试。
+
+### 接入新 AI 站点
+
+1. `core/constants.py` 的 `AI_URLS` 加一行
+2. `core/site_profiles.py` 的 `SITE_PROFILES` 加 DOM 选择器(用 F12 抠 input / send_btn / response 选择器)
+3. 重启程序 → 「创作设置」选新 AI → 「生成控制」启动浏览器
+
+### 改成走 API 而不是浏览器
+
+`ui/browser_worker.py` 的 `_send_prompt` / `_grab_response` 改成 `requests.post` 调对应 API,信号机制保持不变,UI 层无需改。
+
+---
+
+## 7. 文档导航
+
+| 文档 | 用途 |
+|---|---|
+| `README.md`(本文件)| 项目介绍 + 快速上手 |
+| `项目对接记忆.md` | **给下一代 AI 接班用的完整开发记忆**(7000+ 行):BUG 修复历史 / 设计决策 / 用户偏好 / 给下个 Claude 的警告 |
+| `pangu_full_spec.md` | 盘古超级系统完整规范(在程序内 ❓ 盘古手册 也能查) |
+| `HANDOFF_AI_WRITER_V7.md` | v7 时代历史交接文档(已过期,留作考古) |
+| `INTEGRATION_GUIDE_V2.md` | v2 时代集成指南(已过期) |
+| `PANGU_INTEGRATION.md` | 盘古接入历史文档 |
+| `WORKFLOW_PANEL_INTEGRATION.md` | 工作流面板集成历史 |
+| `README_PANGU_ADDENDUM.md` | 盘古使用补充说明 |
+
+---
+
+## 8. 合规说明
+
+- 程序内置安全约束(禁止血腥、暴力、色情、镜面/影子/另一个自己题材等)已写进所有提示词,**会一并发到 AI 那边**
 - 程序不存储/上传任何用户数据,所有文件都在本地
-- 仅作技术学习与 UI 复刻示例,请勿用于侵权目的
+- 仅作技术学习与小说创作辅助,请勿用于侵权目的
+- AI 网页 DOM 经常变动,选择器适配难免有滞后,欢迎提 issue 反馈

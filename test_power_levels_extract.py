@@ -12,13 +12,14 @@ import os
 import sys
 import re
 import ast
+from tests_helpers import read_all_sources
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 HERE = os.path.dirname(__file__)
-SRC = open(os.path.join(HERE, "novel_ai.py"), encoding="utf-8").read()
+SRC = read_all_sources()  # v2.07:读全源
 
 
 # ── prompt 层 ──────────────────────────────────────────

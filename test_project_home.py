@@ -2,10 +2,11 @@
 """v1.41 ProjectHomeTab UI 集成防回归(吸取 BUG-046 教训)"""
 import ast
 from pathlib import Path
+from tests_helpers import read_all_sources
 
 
 def _methods(cls_name):
-    src = Path("novel_ai.py").read_text(encoding="utf-8")
+    src = read_all_sources()  # v2.07
     tree = ast.parse(src)
     for n in ast.walk(tree):
         if isinstance(n, ast.ClassDef) and n.name == cls_name:
@@ -42,14 +43,14 @@ def test_recent_methods_not_in_other_classes():
 
 def test_tab_home_registered():
     """🏠 项目主页 必须在 tab_list 中第一个"""
-    src = Path("novel_ai.py").read_text(encoding="utf-8")
+    src = read_all_sources()  # v2.07
     assert "self.tab_home = ProjectHomeTab()" in src
     assert '"🏠 项目主页"' in src
 
 
 def test_signals_connected():
     """ProjectHomeTab 4 个信号必须接到 MainWindow handlers"""
-    src = Path("novel_ai.py").read_text(encoding="utf-8")
+    src = read_all_sources()  # v2.07
     assert "self.tab_home.request_open_project.connect" in src
     assert "self.tab_home.request_new_project.connect" in src
     assert "self.tab_home.request_open_recent.connect" in src
@@ -58,7 +59,7 @@ def test_signals_connected():
 
 def test_recent_menu_in_file_menu():
     """文件菜单必须有 __RECENT__ 占位 + 动态构造"""
-    src = Path("novel_ai.py").read_text(encoding="utf-8")
+    src = read_all_sources()  # v2.07
     assert '"__RECENT__"' in src
     assert "self.recent_menu" in src
     assert 'if slot == "__RECENT__":' in src
@@ -66,7 +67,7 @@ def test_recent_menu_in_file_menu():
 
 def test_push_to_recent_called_after_load():
     """open_project / save_project / _autoload 成功后必须 push 到 recent"""
-    src = Path("novel_ai.py").read_text(encoding="utf-8")
+    src = read_all_sources()  # v2.07
     # 至少 3 处调用 _push_to_recent
     count = src.count("self._push_to_recent(")
     assert count >= 3, f"_push_to_recent 调用次数 {count} < 3"
