@@ -140,7 +140,11 @@ class TestNoCollisionWithPreviousMilestones(unittest.TestCase):
         self.assertIn("BUG-069", hk_src)
 
     def test_v194_button_color_intact(self):
-        self.assertIn('color:#3a2a10', self.src)
+        # v2.03 P4: ChapterEditor 已外迁到 ui/tabs/chapter_editor.py
+        chapter_editor_path = os.path.join(HERE, "ui", "tabs", "chapter_editor.py")
+        with open(chapter_editor_path, encoding="utf-8") as f:
+            ce_src = f.read()
+        self.assertIn('color:#3a2a10', ce_src)
 
     def test_v193_char_fields_intact(self):
         self.assertIn('"last_ch"', self.src)

@@ -156,7 +156,9 @@ class TestNoRegressionToEarlierVersions(unittest.TestCase):
         self.assertIn("_find_duplicate_names", NOVEL_SRC)
 
     def test_v194_button_color_intact(self):
-        self.assertIn("#3a2a10", NOVEL_SRC)
+        # v2.03 P4: ChapterEditor 已外迁到 ui/tabs/chapter_editor.py
+        ce_src = (ROOT / "ui" / "tabs" / "chapter_editor.py").read_text(encoding="utf-8")
+        self.assertIn("#3a2a10", ce_src)
 
     def test_v195_word_count_long_intact(self):
         self.assertNotIn("# v1.98: 删除 word_count_long", NOVEL_SRC)

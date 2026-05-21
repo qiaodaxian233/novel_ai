@@ -137,3 +137,11 @@ SITE_PROFILES = {
         "stop_btn": 'button[aria-label*="stop" i], button[aria-label*="停止"]',
     },
 }
+
+
+def _profile_for_url(url):
+    """根据 URL 返回选择器档案"""
+    for host, prof in SITE_PROFILES.items():
+        if host != "_default" and host in (url or ""):
+            return prof
+    return SITE_PROFILES["_default"]

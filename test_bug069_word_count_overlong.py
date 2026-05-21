@@ -187,10 +187,11 @@ class TestNoCollisionWithPreviousMilestones(unittest.TestCase):
         self.fail("APP_VERSION not found")
 
     def test_v194_button_color_intact(self):
-        novel_ai_path = os.path.join(HERE, "novel_ai.py")
-        with open(novel_ai_path, encoding="utf-8") as f:
+        # v2.03 P4: ChapterEditor 已外迁到 ui/tabs/chapter_editor.py
+        chapter_editor_path = os.path.join(HERE, "ui", "tabs", "chapter_editor.py")
+        with open(chapter_editor_path, encoding="utf-8") as f:
             src = f.read()
-        self.assertIn('color:#3a2a10', src, "v1.94 按钮深棕色仍在")
+        self.assertIn('color:#3a2a10', src, "v1.94 按钮深棕色仍在(P4 后在 ui/tabs/chapter_editor.py)")
 
     def test_v193_char_fields_intact(self):
         novel_ai_path = os.path.join(HERE, "novel_ai.py")

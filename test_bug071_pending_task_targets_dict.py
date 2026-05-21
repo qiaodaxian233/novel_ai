@@ -282,8 +282,9 @@ class TestNoRegressionToEarlierVersions(unittest.TestCase):
         self.assertIn("last_ch", SOURCE)
 
     def test_v194_button_color_intact(self):
-        """v1.94 按钮对比度 #3a2a10 还在"""
-        self.assertIn("#3a2a10", SOURCE)
+        """v1.94 按钮对比度 #3a2a10 还在(P4 后在 ui/tabs/chapter_editor.py)"""
+        ce_src = (ROOT / "ui" / "tabs" / "chapter_editor.py").read_text(encoding="utf-8")
+        self.assertIn("#3a2a10", ce_src)
 
     def test_v195_word_count_long_intact(self):
         """v1.95 字数三档 word_count_long 字段还在"""

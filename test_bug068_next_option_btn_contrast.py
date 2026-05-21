@@ -23,13 +23,27 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 NOVEL_AI_PATH = os.path.join(HERE, "novel_ai.py")
 
 
+def _load_all_sources():
+    """v2.03 P4 后:Tab/UI/常量被外移到 ui/tabs/、ui/、core/ —
+    静态字符串扫描需要把所有外迁文件 concat 起来当成"逻辑上的主程序"。
+    """
+    parts = [open(NOVEL_AI_PATH, encoding="utf-8").read()]
+    for sub in ("ui/tabs", "ui", "core"):
+        d = os.path.join(HERE, sub)
+        if os.path.isdir(d):
+            for fn in sorted(os.listdir(d)):
+                if fn.endswith(".py"):
+                    parts.append(open(os.path.join(d, fn), encoding="utf-8").read())
+    return "\n".join(parts)
+
+
 class TestNextOptionButtonContrast(unittest.TestCase):
     """下一章选项按钮 setStyleSheet 必须显式指定 color"""
 
     @classmethod
     def setUpClass(cls):
-        with open(NOVEL_AI_PATH, encoding="utf-8") as f:
-            cls.src = f.read()
+        # v2.03 P4: 扩源扫描
+        cls.src = _load_all_sources()
 
     def test_next_option_button_setstylesheet_has_explicit_color(self):
         """按钮样式必须显式 color 字段(根因:漏写就是 bug)"""
@@ -92,8 +106,8 @@ class TestNoCollisionWithPreviousMilestones(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        with open(NOVEL_AI_PATH, encoding="utf-8") as f:
-            cls.src = f.read()
+        # v2.03 P4: 扩源扫描
+        cls.src = _load_all_sources()
 
     def test_v192_chapter_lock_intact(self):
         """v1.92 章节锁定方法仍在"""
