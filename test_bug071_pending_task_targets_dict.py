@@ -128,7 +128,14 @@ class TestDictFieldExists(unittest.TestCase):
 
 class TestAppVersion(unittest.TestCase):
     def test_app_version_is_v197(self):
-        self.assertIn('APP_VERSION = "v1.98"', SOURCE)
+        # v2.00 P1 模块化拆分时把硬钉改为解析后 ≥ 比较
+        # (BUG-072 TODO 落地:解决"升一次版本号要改一堆测试"的反模式)
+        import re
+        m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', SOURCE)
+        self.assertIsNotNone(m, "novel_ai.py 必须定义 APP_VERSION")
+        major, minor = int(m.group(1)), int(m.group(2))
+        self.assertGreaterEqual((major, minor), (1, 97),
+                                f'BUG-071 必须在 v1.97 之后修复(当前 v{major}.{minor:02d})')
 
 
 # ───── 字典语义直测(模拟串台场景)──────────────────────────
