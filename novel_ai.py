@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.90"
+APP_VERSION = "v1.91"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -9176,7 +9176,64 @@ class BrowserWorker(QObject):
         time.sleep(0.3)
 
         # 3) 点发送(优先 Enter,失败再点按钮 + 兜底 forced click)
-        if not self._dispatch_send(prof["send_btn"]):
+        # v1.91 BUG-065:关键后处理任务(摘要/Canon抽取等)失败 → 重试 2 次 + 本地降级
+        #   普通任务维持原"放弃"语义
+        CRITICAL_TARGETS = {
+            "chapter_summary", "canon_extract",
+            "character_extract", "world_extract", "long_term_extract",
+        }
+        _task_target = task.get("target", "")
+        _is_critical = _task_target in CRITICAL_TARGETS
+        
+        _send_ok = self._dispatch_send(prof["send_btn"])
+        if not _send_ok and _is_critical:
+            _max_retry = 2
+            for _attempt in range(1, _max_retry + 1):
+                self.log_signal.emit(
+                    f"🔁 关键任务[{_task_target}]发送失败,重试 {_attempt}/{_max_retry} "
+                    f"(按钮态预检={self._get_send_button_state().get('state')})",
+                    "warn")
+                time.sleep(1.5)  # 给页面状态稳定
+                # 重新注入 textarea(_inject_prompt 内部会 selectAll+delete 再 insert)
+                if not self._inject_prompt(prof["input"], prompt):
+                    self.log_signal.emit(f"  ↳ 重试 {_attempt} 注入失败,继续", "warn")
+                    continue
+                time.sleep(0.4)
+                # 发送前预检按钮态 — 灰就再等等
+                _pre_state = self._get_send_button_state().get('state')
+                if _pre_state == 'disabled':
+                    self.log_signal.emit(
+                        f"  ↳ 重试 {_attempt} 注入后按钮仍 disabled,再等 1s",
+                        "warn")
+                    time.sleep(1.0)
+                elif _pre_state == 'stop':
+                    self.log_signal.emit(
+                        f"  ↳ 重试 {_attempt} 检测到 stop 按钮(AI 写未结束),等 3s",
+                        "warn")
+                    time.sleep(3.0)
+                if self._dispatch_send(prof["send_btn"]):
+                    self.log_signal.emit(
+                        f"✓ 关键任务[{_task_target}]重试 {_attempt} 发送成功", "success")
+                    _send_ok = True
+                    break
+            if not _send_ok:
+                # 重试用尽 → 本地降级兜底,不让关键数据丢
+                _degraded = self._build_degraded_content(task)
+                if _degraded:
+                    self.log_signal.emit(
+                        f"⚠ 关键任务[{_task_target}]重试 {_max_retry} 次仍失败,"
+                        f"启用本地降级({len(_degraded)} 字),避免数据丢失",
+                        "warn")
+                    self.response_received.emit(task_id, _degraded)
+                else:
+                    self.log_signal.emit(
+                        f"⚠ 关键任务[{_task_target}]重试 {_max_retry} 次仍失败,"
+                        f"且无降级路径,只能放弃(本次数据丢失)",
+                        "error")
+                    self.response_received.emit(task_id, "")
+                return
+        elif not _send_ok:
+            # 普通任务:维持原放弃语义
             self.log_signal.emit("回车与发送按钮均失败,放弃本次任务", "error")
             self.response_received.emit(task_id, "")
             return
@@ -10131,6 +10188,93 @@ class BrowserWorker(QObject):
             self.log_signal.emit(f"注入异常:{e}", "warn")
             return False
 
+    # ---------- 发送按钮状态机(v1.91 BUG-065)----------
+    def _get_send_button_state(self):
+        """
+        统一查"发送按钮当前态",返回 dict:
+          state ∈ {'enabled', 'disabled', 'stop', 'loading', 'none'}
+          detail: 文字说明,用于日志
+        
+        语义:
+          enabled  — 按钮亮,可点击发送(textarea 有内容)
+          disabled — 按钮灰(textarea 空 / 上传中 / 锁定)
+          stop     — 当前是 stop 按钮(AI 正在写,千万别点)
+          loading  — 发送瞬间 / spinner 状态
+          none     — 按钮不在 DOM(可能正在重渲染)
+        
+        v1.91 新增。原 _dispatch_send 只在失败后看"事后症状"
+        (消息计数 / textarea 清空 / AI 写迹象),漏掉"按钮当前态"
+        这个最直接的信号,导致 BUG-065 中摘要任务发送失败时
+        诊断不清根因(灰?还是焦点丢?)。
+        """
+        try:
+            return self.driver.execute_script(r"""
+                // 1) 通用发送按钮(ChatGPT/Claude/镜像站)
+                let btn = document.querySelector('button.composer-submit-btn')
+                       || document.querySelector('[data-testid="send-button"]')
+                       || document.querySelector('button[aria-label*="发送"]')
+                       || document.querySelector('button[aria-label*="Send" i]');
+                
+                // 2) 没找到通用 → 找 textarea 旁边的 [role=button](DeepSeek)
+                let isDsCandidate = false;
+                if (!btn) {
+                    const ta = document.querySelector('textarea');
+                    if (ta) {
+                        let c = ta.parentElement;
+                        const taRect = ta.getBoundingClientRect();
+                        let best = null;
+                        let bestX = -Infinity;
+                        for (let i = 0; i < 5 && c; i++) {
+                            const cands = c.querySelectorAll('div[role="button"]:has(svg)');
+                            for (const cand of cands) {
+                                if (cand.offsetParent === null) continue;
+                                const r = cand.getBoundingClientRect();
+                                if (r.top >= taRect.top - 10 && r.left >= taRect.left
+                                        && r.right > bestX) {
+                                    best = cand;
+                                    bestX = r.right;
+                                }
+                            }
+                            if (best) break;
+                            c = c.parentElement;
+                        }
+                        btn = best;
+                        isDsCandidate = !!best;
+                    }
+                }
+                
+                if (!btn) return {state: 'none', detail: 'no_btn_in_dom'};
+                
+                // 3) 判 stop(发送按钮在 AI 写期间会变成 stop)
+                const hasRect = btn.querySelector('svg rect') !== null;
+                const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+                const isStop = hasRect || ariaLabel.includes('停止')
+                                       || ariaLabel.includes('stop');
+                if (isStop) return {state: 'stop', detail: 'aria=' + ariaLabel + ',rect=' + hasRect};
+                
+                // 4) 判 loading(spinner / animate-spin)
+                const hasSpinner = btn.querySelector(
+                    'svg[class*="animate-spin" i], svg[class*="spinner" i], [class*="loading" i]'
+                ) !== null;
+                if (hasSpinner) return {state: 'loading', detail: 'spinner_visible'};
+                
+                // 5) 判 disabled
+                const ariaDis = (btn.getAttribute('aria-disabled') || '').toLowerCase();
+                const isDisabled = btn.disabled || ariaDis === 'true';
+                if (isDisabled) {
+                    // 取 textarea 内容长度辅助判断
+                    const ta = document.querySelector('textarea');
+                    const taLen = ta ? (ta.value || '').length : -1;
+                    return {state: 'disabled', detail: 'aria-dis=' + ariaDis 
+                            + ',btn.disabled=' + btn.disabled + ',ta_len=' + taLen};
+                }
+                
+                // 6) 默认 enabled
+                return {state: 'enabled', detail: (isDsCandidate ? 'ds_nearby' : 'common_selector')};
+            """) or {'state': 'none', 'detail': 'js_returned_null'}
+        except Exception as e:
+            return {'state': 'none', 'detail': f'exception:{e}'}
+
     # ---------- 发送派发(Enter / 按钮 / 兜底强点)----------
     def _dispatch_send(self, send_btn_selector):
         """
@@ -10243,9 +10387,23 @@ class BrowserWorker(QObject):
                         return True
                 except Exception:
                     pass
+                # 检测 4(v1.91 BUG-065 新增):按钮态作为旁证
+                #   stop/loading → AI 已开始处理(等于发送成功的强证据)
+                #   none → 按钮 DOM 重渲染中,谨慎处理(不立即判定成功)
+                try:
+                    _btn = self._get_send_button_state()
+                    _bs = _btn.get('state')
+                    if _bs in ('stop', 'loading'):
+                        self.log_signal.emit(
+                            f"✓ Enter 已发送(按钮态={_bs},AI 正在处理)", "info")
+                        return True
+                except Exception:
+                    pass
             # 全部检测都失败 → 真的没发出去,日志告警 + 走策略 B
+            # v1.91 BUG-065:加按钮态诊断,补"事后症状全阴性"时的根因盲区
+            _btn_state_now = self._get_send_button_state()
             self.log_signal.emit(
-                f"Enter 后 5s 仍未确认发送({_before_cnt}→{_after_cnt} / textarea 未清空 / 无 AI 写迹象)，尝试按钮",
+                f"Enter 后 5s 仍未确认发送({_before_cnt}→{_after_cnt} / textarea 未清空 / 无 AI 写迹象 / 按钮态={_btn_state_now.get('state')}:{_btn_state_now.get('detail','')})，尝试按钮",
                 "warn")
         except Exception as e:
             self.log_signal.emit(f"Enter发送异常: {e}", "warn")
@@ -10382,6 +10540,52 @@ class BrowserWorker(QObject):
             self.log_signal.emit("⚡ 兜底:按钮 disabled 但无上传中,已强制点击", "warn")
             return True
         return False
+
+    # ---------- 关键任务降级兜底(v1.91 BUG-065)----------
+    def _build_degraded_content(self, task):
+        """
+        关键任务发送失败 + 重试用尽时,构造"本地降级内容"作为伪 AI 响应,
+        让上层 handler 走正常 success 路径,避免数据丢失/流水线卡住。
+        
+        只对 chapter_summary 做实质降级(章节正文头/尾拼接);
+        其他关键 target 返回带标签的占位字符串,handler 自行决定是否采用。
+        所有降级内容都带 [降级:vN.NN BUG-065] 前缀,便于事后人工识别 + 重生成。
+        """
+        target = task.get("target", "")
+        ch_num = task.get("ch_num", 0)
+        
+        if target == "chapter_summary":
+            # 章节摘要降级:头 300 + 尾 300 + 标签
+            #   _ch_content/_ch_title 由 _submit_summary_task 在 meta 里塞进来
+            ch_content = (task.get("_ch_content") or "").strip()
+            ch_title = task.get("_ch_title") or f"第{ch_num}章"
+            if not ch_content:
+                return (f"[降级:v1.91 BUG-065 摘要任务发送失败且无章节正文兜底,"
+                        f"建议手动重新生成第 {ch_num} 章摘要]")
+            head = ch_content[:300].strip().replace('\n', ' ')
+            tail_zone = ch_content[-300:].strip().replace('\n', ' ') \
+                if len(ch_content) > 700 else ""
+            parts = [f"【{ch_title} - 降级摘要】"]
+            parts.append(f"开头:{head}")
+            if tail_zone and tail_zone != head:
+                parts.append(f"结尾:{tail_zone}")
+            parts.append(
+                f"[降级:v1.91 BUG-065 本次摘要 AI 任务发送失败,"
+                f"本地从章节正文截取头尾拼接,信息密度低于正常摘要,"
+                f"建议有空时手动到对话记忆 Tab 点'本章重生成摘要']")
+            return " | ".join(parts)
+        
+        elif target == "canon_extract":
+            # Canon 抽取降级:返回空 JSON 让 handler 走"无新增"分支
+            #   handler 收到空字符串/空 JSON 时通常会跳过,不破坏现有 KB
+            return ""
+        
+        elif target in ("character_extract", "world_extract", "long_term_extract"):
+            # 这三个用户多为手动触发,降级返回空让 handler 不破坏现有数据
+            #   (handler 通常会判 content.strip() 为空 → log 一句"AI 无返回")
+            return ""
+        
+        return ""
 
     # ---------- 抓取/计数(用 querySelectorAll,跳过 selenium 的 CSS 解析)----------
     def _count_responses(self, prof):
@@ -11976,6 +12180,10 @@ class MainWindow(QMainWindow):
             "label": label,
             "target": target,
             "retry_used": extra.get("retry_used", 0),
+            # v1.91 BUG-065:把 worker 侧降级要用的 meta 字段透传
+            # (只透传 _xxx 前缀的"内部 meta"字段,跨线程安全的标量/字符串)
+            **{k: v for k, v in extra.items()
+               if k.startswith("_") and isinstance(v, (str, int, float, bool, type(None)))},
         })
 
     def _on_response_received(self, task_id, content):
@@ -14728,6 +14936,9 @@ class MainWindow(QMainWindow):
             chain_to_next=chain_to_next,
             chain_full_memory=chain_full_memory,
             _done_cb=_done_cb,          # workflow_pipeline 回调
+            # v1.91 BUG-065:把章节正文/标题塞进 meta,供 worker 降级时使用
+            _ch_content=ch.get("content", ""),
+            _ch_title=ch.get("title", f"第{ch_num}章"),
         )
 
     def _split_and_save_golden_three(self, content):
