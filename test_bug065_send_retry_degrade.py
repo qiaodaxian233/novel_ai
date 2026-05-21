@@ -38,6 +38,18 @@ def extract_method_source(src_path, class_name, method_name):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NOVEL_AI_PATH = os.path.join(HERE, "novel_ai.py")
+# P6 v2.05:BrowserWorker 类外迁到 ui/browser_worker.py
+BROWSER_WORKER_PATH = os.path.join(HERE, "ui", "browser_worker.py")
+
+
+def _load_all_sources():
+    """读取 novel_ai.py + ui/browser_worker.py 拼接,供静态扫描用"""
+    parts = []
+    for p in (NOVEL_AI_PATH, BROWSER_WORKER_PATH):
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                parts.append(f.read())
+    return "\n".join(parts)
 
 
 class TestBuildDegradedContent(unittest.TestCase):
@@ -45,7 +57,7 @@ class TestBuildDegradedContent(unittest.TestCase):
     def setUpClass(cls):
         # 把 _build_degraded_content 抠出来,exec 到一个简单的命名空间
         method_src = extract_method_source(
-            NOVEL_AI_PATH, "BrowserWorker", "_build_degraded_content")
+            BROWSER_WORKER_PATH, "BrowserWorker", "_build_degraded_content")
         # 抠出来的是 4 空格缩进的 method, dedent 一下变成顶层函数
         dedented = textwrap.dedent(method_src)
         # 替换 self 为第一个参数(保持方法签名),然后 exec
@@ -204,7 +216,8 @@ class TestSubmitSummaryPassesChContent(unittest.TestCase):
 class TestCriticalRetryWiredIn(unittest.TestCase):
     """v1.91 BUG-065:_send_prompt 失败路径必须有关键任务重试 + 降级分支"""
     def test_send_prompt_has_critical_retry(self):
-        with open(NOVEL_AI_PATH, encoding="utf-8") as f:
+        # P6 v2.05:_send_prompt 在 BrowserWorker 内,已外迁
+        with open(BROWSER_WORKER_PATH, encoding="utf-8") as f:
             src = f.read()
         # _send_prompt 函数体内必须有:
         #   1. CRITICAL_TARGETS 集合
@@ -227,7 +240,8 @@ class TestCriticalRetryWiredIn(unittest.TestCase):
 class TestSendButtonStateAdded(unittest.TestCase):
     """v1.91 BUG-065:必须新增 _get_send_button_state 方法"""
     def test_method_exists(self):
-        with open(NOVEL_AI_PATH, encoding="utf-8") as f:
+        # P6 v2.05:_get_send_button_state 在 BrowserWorker 内,已外迁
+        with open(BROWSER_WORKER_PATH, encoding="utf-8") as f:
             src = f.read()
         self.assertIn("def _get_send_button_state", src)
         # 必须返回这 5 个状态之一
@@ -237,7 +251,8 @@ class TestSendButtonStateAdded(unittest.TestCase):
 
     def test_dispatch_send_uses_button_state(self):
         """_dispatch_send 失败诊断必须用按钮态(诊断信息含按钮态枚举)"""
-        with open(NOVEL_AI_PATH, encoding="utf-8") as f:
+        # P6 v2.05:_dispatch_send 在 BrowserWorker 内,已外迁
+        with open(BROWSER_WORKER_PATH, encoding="utf-8") as f:
             src = f.read()
         # Enter 后失败 log 必须含 "按钮态="
         self.assertIn("按钮态=", src,
