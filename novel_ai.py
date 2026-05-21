@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.93"
+APP_VERSION = "v1.94"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -2059,10 +2059,13 @@ class ChapterEditor(QWidget):
             # 下一章选项
             for i, opt in enumerate(opts[:5]):
                 btn = QPushButton(f"{i+1}. {opt[:60]}{'…' if len(opt) > 60 else ''}")
+                # v1.94 BUG-068:显式指定 color(原样式漏写,默认前景色在某些主题下
+                # 跟米色背景对比度极低,文字几乎不可见 — 截图反馈"按钮看不清")
                 btn.setStyleSheet(
                     "QPushButton { text-align:left; padding:4px 8px; "
+                    "color:#3a2a10; "                                   # 深棕,配米色背景对比度 >7:1
                     "background:#fff8ea; border:1px solid #e0c896; }"
-                    "QPushButton:hover { background:#ffe9b8; }")
+                    "QPushButton:hover { background:#ffe9b8; color:#000; }")  # hover 更深
                 btn.setToolTip(opt)
                 btn.clicked.connect(lambda _, x=opt: self.next_option_picked.emit(x))
                 self.pangu_next_opt_btns.append(btn)
