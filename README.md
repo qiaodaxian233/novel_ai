@@ -276,11 +276,7 @@ QT_QPA_PLATFORM=offscreen python3 test_workflow_panel.py       # 31
 | `README.md`(本文件)| 项目介绍 + 快速上手 |
 | `项目对接记忆.md` | **给下一代 AI 接班用的完整开发记忆**(7000+ 行):BUG 修复历史 / 设计决策 / 用户偏好 / 给下个 Claude 的警告 |
 | `pangu_full_spec.md` | 盘古超级系统完整规范(在程序内 ❓ 盘古手册 也能查) |
-| `HANDOFF_AI_WRITER_V7.md` | v7 时代历史交接文档(已过期,留作考古) |
-| `INTEGRATION_GUIDE_V2.md` | v2 时代集成指南(已过期) |
-| `PANGU_INTEGRATION.md` | 盘古接入历史文档 |
-| `WORKFLOW_PANEL_INTEGRATION.md` | 工作流面板集成历史 |
-| `README_PANGU_ADDENDUM.md` | 盘古使用补充说明 |
+| `docs/archive/` | v7 时代历史接入文档(5 份,已过期归档,留作考古)。详见 `docs/archive/README.md` |
 
 ---
 
