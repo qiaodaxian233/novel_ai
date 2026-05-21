@@ -16,12 +16,48 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.09"
+APP_VERSION = "v2.10"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
 APP_NAME    = "盘古超级写作助手"
 APP_FULL    = f"{APP_NAME} {APP_VERSION}"
+
+# ──────────────────────────────────────────────────────────────────
+# v2.10:DEFENSE_FINGERPRINTS — 二道闸巡查指纹字典
+# 给 housekeeper.verify_defenses() 用。每个 BUG 配一组代码模式,
+# 任何指纹缺失意味着该 BUG 修复点被回退(工程级回归)。
+#
+# 编码原则:
+#   - 每个 pattern 必须是"很难因为 lint/重构而消失但能因为误删而消失"的字符串
+#   - 优先选**独特的方法名/变量名/常量名**(grep 唯一性高),避免普通词
+#   - 多个 pattern AND 关系:全在 = 防御完好,任一缺失 = 防御消失
+#
+# 添加新条目流程(给下一代 Claude):
+#   1. 修完一个真正棘手的 BUG 后,在这里加 "BUG-XXX": [模式列表]
+#   2. 模式选 1-3 个,用最具特征的标识符 / 注释关键词
+#   3. 不要选常见词(如"chapter""def"),容易在重构后被替换
+#   4. 测试:故意删一个模式跑 hk.verify_defenses(),应该报警
+# ──────────────────────────────────────────────────────────────────
+DEFENSE_FINGERPRINTS = {
+    # BUG-028:章节指纹防串(防止已生成章节因 race 被覆盖)
+    "BUG-028": ["_chapter_fingerprint"],
+    # BUG-065:关键后处理任务失败 → 重试 + 本地降级(摘要丢失止血)
+    "BUG-065": ["CRITICAL_TARGETS", "_build_degraded_content"],
+    # BUG-066:章节锁定机制(locked 字段拦截 delete/rename/save/切走时写回)
+    "BUG-066": ["_toggle_chapter_lock", '"locked"'],
+    # BUG-067:角色 last_ch 字段 + 同名不同姓检查
+    "BUG-067": ["_find_duplicate_names", '"last_ch"'],
+    # BUG-068:下一章选项按钮对比度修复(深棕 WCAG AAA)
+    "BUG-068": ["#3a2a10"],
+    # BUG-069:字数判定三档(超长 ⚠ 但不扣健康度)
+    "BUG-069": ["word_count_long"],
+    # BUG-071:_pending_task_targets 字典治本(race 修复)
+    "BUG-071": ["_pending_task_targets"],
+    # BUG-073:QSettings None 兜底(Linux 无存档时 isinstance 检测)
+    # 注:模式选 `or []` + `isinstance` 联合(更难因重构消失)
+    "BUG-073": ["s.value(", "or []"],
+}
 
 import sys
 import os
@@ -489,6 +525,14 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # ───── v2.10:管家 P3-#10 RL 反馈联动(注册健康度回调) ─────
+        try:
+            if HOUSEKEEPER_AVAILABLE:
+                _housekeeper_mod.get_housekeeper().set_rl_reward_callback(
+                    self._on_hk_health_to_rl)
+        except Exception:
+            pass
+
     def _connect_worker(self):
         self.worker.log_signal.connect(self.tab_generation.log_signal.emit)
         self.worker.status_signal.connect(self.update_browser_status)
@@ -609,6 +653,40 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "📋 管家日报", summary)
         except Exception as e:
             QMessageBox.warning(self, "管家日报查询失败", str(e))
+
+    def _on_hk_health_to_rl(self, health_score: float, report: dict):
+        """v2.10:管家 finalize_chapter 末尾的健康度反馈回调(P3-#10 集成)
+
+        被 housekeeper.set_rl_reward_callback 注册,每次 finalize 自动调用。
+
+        ─── MVP 实现:仅记录,不真喂 flow_rl ───
+        理由(给下一代 Claude 或想接入的用户):
+          - flow_rl 的 state/action 是浏览器决策粒度(send_button 状态 / 重试策略等)
+            跟"章节级整体健康度"不直接对应,强行注入会留孤儿 Q 表条目
+          - 没有 choose_action 配对的 reward 调用,history 也无法回填
+          - 健康度的"赋分公式"(score → reward value)是产品决策,不该由代码默认设
+          - MVP 阶段:打印日志,让用户观察健康度趋势,后续再决定如何接入 RL
+
+        想接入 flow_rl 的话,在此方法体内补:
+            if self.flow_rl:
+                state = ("chapter_meta_health", report.get("chapter_num"))
+                action = {"type": "chapter_complete"}
+                reward_value = (health_score - 0.5) * 40   # -20 ~ +20
+                self.flow_rl.reward(state, action, reward_value,
+                                    reason=f"章末健康度 {health_score:.2f}")
+
+        失败容错:任何异常吞掉,不影响 housekeeper 的 finalize_chapter 返回
+        """
+        try:
+            ch_num = report.get("chapter_num", "?")
+            mark = ("🟢" if health_score >= 0.85 else
+                    "🟡" if health_score >= 0.65 else "🔴")
+            if hasattr(self, "tab_generation"):
+                self.tab_generation.log(
+                    f"  · 第{ch_num}章健康度→RL 反馈通道:{mark}{int(health_score * 100)}%"
+                    f"(MVP 仅记录,实际接入 flow_rl 留待后续)", "info")
+        except Exception:
+            pass
 
     def show_flow_rl_status(self):
         """显示流程 RL 学习状态"""
@@ -5518,9 +5596,60 @@ class MainWindow(QMainWindow):
             if HOUSEKEEPER_AVAILABLE:
                 _hk = _housekeeper_mod.get_housekeeper()
                 _hk.record_step("post_chapter_chain", True)
+
+                # ── v2.10:P2-#6 Canon locked 字段一致性巡检(finalize 前) ──
+                # 高严重度 locked 项的 value 必须在章节正文里出现,
+                # 否则提醒"AI 可能改/删了这个锁定字段"。MVP 仅检测 high。
+                try:
+                    if hasattr(self, "tab_canon") and hasattr(self.tab_canon, "parse"):
+                        _content_str = str(content or "")
+                        for _it in self.tab_canon.parse():
+                            if (_it.get("mode") == "locked"
+                                    and _it.get("severity") == "high"):
+                                _val = str(_it.get("value", "")).strip()
+                                _key = _it.get("key", "?")
+                                if _val and (_val not in _content_str):
+                                    _hk.record_canon_locked_mismatch(
+                                        _key, _val, "(本章正文未提及)")
+                except Exception:
+                    pass
+
+                # ── v2.10:P3-#12 二道闸巡查(每 10 章触发,跨多文件扫描) ──
+                # 检查关键历史 BUG 修复点是否被新代码意外回退。
+                try:
+                    _ch_now = meta.get("ch_num", len(self.chapters))
+                    if _ch_now > 0 and _ch_now % 10 == 0:
+                        # 扫主程序 + ui 子包(P3~P6 模块化拆分后,代码散在多处)
+                        import glob as _glob
+                        _scan_paths = (
+                            ["novel_ai.py"]
+                            + _glob.glob("ui/*.py")
+                            + _glob.glob("ui/tabs/*.py")
+                            + _glob.glob("core/*.py")
+                        )
+                        _hk.verify_defenses(DEFENSE_FINGERPRINTS, _scan_paths)
+                except Exception:
+                    pass
+
+                # ── finalize:生成日报 oneliner ──
                 _final = _hk.finalize_chapter()
                 if _final:
                     self.tab_generation.log(_final.render_oneliner(), "info")
+
+                # ── v2.10:P2-#7 跨章节奏雷达(每 5 章触发,看历史 5 章) ──
+                # 必须 finalize 之后调,因为 check_pacing_window 用 self.history
+                # (finalize 把 current_report 归档到 history)
+                try:
+                    _ch_now = meta.get("ch_num", len(self.chapters))
+                    if _ch_now >= 5 and _ch_now % 5 == 0:
+                        _pacing = _hk.check_pacing_window(n=5)
+                        if _pacing and _pacing.get("msg"):
+                            # 雷达检测到疲软,把消息打到日志(housekeeper 已经 warn 到 history)
+                            self.tab_generation.log(
+                                f"📡 节奏雷达:{_pacing['msg']}",
+                                "warn")
+                except Exception:
+                    pass
         except Exception:
             pass
 
