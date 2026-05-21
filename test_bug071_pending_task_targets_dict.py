@@ -128,7 +128,7 @@ class TestDictFieldExists(unittest.TestCase):
 
 class TestAppVersion(unittest.TestCase):
     def test_app_version_is_v197(self):
-        self.assertIn('APP_VERSION = "v1.97"', SOURCE)
+        self.assertIn('APP_VERSION = "v1.98"', SOURCE)
 
 
 # ───── 字典语义直测(模拟串台场景)──────────────────────────
