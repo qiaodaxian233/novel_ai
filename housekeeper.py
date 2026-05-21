@@ -68,7 +68,10 @@ class HousekeeperReport:
     # 硬性条件
     word_count_target: int = 0
     word_count_actual: int = 0
-    word_count_ok: Optional[bool] = None     # None = 未检
+    word_count_ok: Optional[bool] = None     # None = 未检;True = 下限达标(>= 0.8x target);False = 不够
+    # v1.95 BUG-069:超长但质量没问题(actual > 1.5x target)— 仍算 ok=True 不扣健康度,
+    # oneliner 显示 ⚠ 提醒用户"内容多了"。区分于 ok=False(真不达标)。
+    word_count_long: bool = False
     dialogue_critic_reds: int = 0
     dialogue_critic_say_count: int = 0
     dialogue_critic_say_allowed: int = 0
@@ -107,9 +110,14 @@ class HousekeeperReport:
         self.health_score = self._compute_health()
 
         bits = []
-        # 字数门
+        # 字数门(v1.95 BUG-069:三档显示)
         if self.word_count_actual > 0:
-            wc_mark = "✓" if self.word_count_ok else "✗"
+            if not self.word_count_ok:
+                wc_mark = "✗"        # 不够(< 0.8x target)
+            elif self.word_count_long:
+                wc_mark = "⚠"        # 超长但达标(> 1.5x target,不扣健康度)
+            else:
+                wc_mark = "✓"        # 合理(0.8x - 1.5x)
             bits.append(f"字数{wc_mark}{self.word_count_actual}")
 
         # 元信息
@@ -253,14 +261,27 @@ class Housekeeper:
             pass
 
     def record_word_count(self, target: int, actual: int):
-        """记录字数门校验"""
+        """记录字数门校验。
+        v1.95 BUG-069 后语义:
+          - actual < 0.8 * target → ok=False(真不达标)
+          - 0.8 <= actual / target <= 1.5 → ok=True, long=False(合理)
+          - actual > 1.5 * target → ok=True, long=True(超长警告 ⚠ 但不扣健康度)
+        """
         try:
             if not self.current_report: return
             self.current_report.word_count_target = target
             self.current_report.word_count_actual = actual
-            # 字数下限:target 的 80% 起跳(用户偏好可改)
-            self.current_report.word_count_ok = (
-                actual >= int(target * 0.8) if target > 0 else None)
+            if target > 0:
+                lower = int(target * 0.8)
+                upper = int(target * 1.5)
+                self.current_report.word_count_ok = (actual >= lower)
+                # 超长仅在 ok=True 的基础上叠加 ⚠ 标记(超长且达标才有意义;
+                # 字数 ok=False 时主要矛盾是不够,不再额外标 long)
+                self.current_report.word_count_long = (
+                    self.current_report.word_count_ok and actual > upper)
+            else:
+                self.current_report.word_count_ok = None
+                self.current_report.word_count_long = False
         except Exception:
             pass
 
