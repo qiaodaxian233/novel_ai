@@ -8,15 +8,26 @@ P1 职能:
   3. 防丢双检:content 长度合理性、元信息剥离前后字数、入库前后是否有断裂
   4. 章末一行日志总结 + Session 汇总面板
 
+P2 职能(v2.08 加,Task 3):
+  5. locked 字段一致性巡检 — record_canon_locked_mismatch(field, expected, actual)
+       关键 Canon 字段(主角姓名/性别/伴侣等被用户锁定的字段)在章节正文里被
+       AI 改了/写错了,管家记录到 mismatches[],oneliner 末尾显示 🔒 警告
+  6. 跨章节奏雷达 — check_pacing_window(N=5)
+       扫最近 N 章 hook_set / cool_points_count,如果连续 N 章都是 hook=False
+       或 cool_points_count=0,提示"节奏疲软,可能套路化",写入 session warnings
+  7. 自动备份快照 — snapshot_for_recovery(project_root, ch_num)
+       finalize_chapter 时打 zip 快照,扔到 project_root/.backups/snapshot_chXXX_YYYYMMDD_HHMMSS.zip
+       默认保留最近 10 份,旧的自动清
+
 设计原则:
   - 不替代现有防御代码,只观测和聚合
   - record_xxx 全部 try/except 容错,失败不影响主流程
   - 单测友好:不依赖 PyQt5,纯数据结构
+  - P2 三个扩展点全部"可关"(主程序调用方决定接不接),housekeeper 提供能力不强制
 
-P2/P3 留扩展点:
-  - record_canon_locked_mismatch(字段, 期望值, 实际值)— 一致性巡检
-  - check_pacing_window(最近N章)— 节奏雷达
-  - snapshot_for_recovery() — 全量备份钩子
+P3 留扩展点:
+  - verify_defenses([\"BUG-027\", \"BUG-028\"]) — 二道闸巡查
+  - RL 反馈联动:finalize 时把 health_score 也喂给 flow_rl 当奖励维度
 """
 
 from __future__ import annotations
@@ -79,6 +90,9 @@ class HousekeeperReport:
     # 异常/告警
     warnings: List[str] = field(default_factory=list)
 
+    # P2 v2.08:Canon locked 字段不一致(每元素:{"field": "主角姓名", "expected": "...", "actual": "..."})
+    locked_mismatches: List[Dict[str, str]] = field(default_factory=list)
+
     # 健康度评分(0.0-1.0)
     health_score: float = 0.0
 
@@ -102,7 +116,10 @@ class HousekeeperReport:
 
         warn_penalty = min(0.3, 0.05 * len(self.warnings))
 
-        score = 0.6 * pipeline_ratio + 0.4 * hard_ratio - warn_penalty
+        # P2 v2.08:Canon locked 字段不一致是严重问题(改了用户锁定的设定),每条扣 0.1,封顶 0.3
+        lock_penalty = min(0.3, 0.1 * len(self.locked_mismatches))
+
+        score = 0.6 * pipeline_ratio + 0.4 * hard_ratio - warn_penalty - lock_penalty
         return max(0.0, min(1.0, score))
 
     def render_oneliner(self) -> str:
@@ -155,6 +172,15 @@ class HousekeeperReport:
             if wn > 2:
                 shown += f" (+{wn - 2})"
             bits.append(f"⚠ {shown}")
+
+        # P2 v2.08:Canon locked 字段不一致(只显示前 2 个字段名)
+        if self.locked_mismatches:
+            mn = len(self.locked_mismatches)
+            field_names = [m.get("field", "?") for m in self.locked_mismatches[:2]]
+            shown = "/".join(field_names)
+            if mn > 2:
+                shown += f" (+{mn - 2})"
+            bits.append(f"🔒 锁定字段被改:{shown}")
 
         # 健康度
         health_mark = "🟢" if self.health_score >= 0.85 else \
@@ -304,6 +330,150 @@ class Housekeeper:
             self.current_report.warnings.append(str(msg)[:80])
         except Exception:
             pass
+
+    # —— P2 v2.08:扩展点 1 — Canon locked 字段一致性巡检 —— #
+
+    def record_canon_locked_mismatch(self, field_name: str, expected: str, actual: str):
+        """记录一个 Canon locked 字段被本章正文改了 / 写错了
+
+        典型用法(调用方在 _accept_chapter_and_continue 里):
+            for lk in canon_locked_fields:
+                if expected != actual_in_chapter:
+                    hk.record_canon_locked_mismatch("主角姓名", expected, actual_in_chapter)
+
+        效果:
+          - 计入 current_report.locked_mismatches
+          - 健康度每条扣 0.1(封顶 0.3)
+          - oneliner 末尾显示 🔒
+        """
+        try:
+            if not self.current_report:
+                return
+            # 截断防爆字段
+            self.current_report.locked_mismatches.append({
+                "field": str(field_name)[:30],
+                "expected": str(expected)[:60],
+                "actual": str(actual)[:60],
+            })
+        except Exception:
+            pass
+
+    # —— P2 v2.08:扩展点 2 — 跨章节奏雷达 —— #
+
+    def check_pacing_window(self, n: int = 5) -> Optional[Dict[str, Any]]:
+        """扫最近 N 章 hook_set / cool_points_count,检测节奏疲软
+
+        返回:
+          None — 历史 < N 章,不够判定
+          {} — 节奏正常(hook / cool 至少一个有活力)
+          {"flat_hooks": True/False, "flat_cools": True/False, "msg": "..."} — 检测到疲软
+
+        副作用:
+          如果检测到疲软,自动 hk.warn() 一条提醒,进 oneliner / session_summary
+        """
+        try:
+            all_reports = list(self.history)
+            if len(all_reports) < n:
+                return None  # 不够样本
+            recent = all_reports[-n:]
+            flat_hooks = all(not r.hook_set for r in recent)
+            flat_cools = all(r.cool_points_count == 0 for r in recent)
+            if not (flat_hooks or flat_cools):
+                return {}
+            # 节奏雷达检测到疲软
+            msgs = []
+            if flat_hooks:
+                msgs.append(f"连续 {n} 章无章末钩子")
+            if flat_cools:
+                msgs.append(f"连续 {n} 章无爽点")
+            full_msg = "节奏疲软:" + " + ".join(msgs)
+            # 不直接进 current_report.warnings(可能没有 current)
+            # 改成 session 级:存到 history 末尾 report 的 warnings
+            if self.current_report:
+                self.current_report.warnings.append(full_msg[:80])
+            elif self.history:
+                self.history[-1].warnings.append(full_msg[:80])
+            return {
+                "flat_hooks": flat_hooks,
+                "flat_cools": flat_cools,
+                "msg": full_msg,
+                "window": n,
+            }
+        except Exception:
+            return None
+
+    # —— P2 v2.08:扩展点 3 — 自动备份快照 —— #
+
+    def snapshot_for_recovery(
+        self,
+        project_root: str,
+        ch_num: int,
+        keep_last: int = 10,
+    ) -> Optional[str]:
+        """章节完成时打项目目录的 zip 快照,扔到 project_root/.backups/
+
+        参数:
+          project_root: 项目根目录(包含 project.json 和 chapters/ 的那个)
+          ch_num:      当前章节号(用于命名)
+          keep_last:   保留最近 N 份,旧的自动清(默认 10)
+
+        返回:
+          快照文件绝对路径 — 成功
+          None — 失败(目录不存在 / zip 写失败 / 等)
+
+        命名:.backups/snapshot_ch{NNN}_{YYYYMMDD_HHMMSS}.zip
+
+        失败容错:任何异常不抛,返回 None。调用方可选择 hk.warn() 提示用户。
+        """
+        try:
+            import os
+            import zipfile
+            from datetime import datetime
+            from pathlib import Path
+
+            root = Path(project_root)
+            if not root.is_dir():
+                return None
+            backup_dir = root / ".backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            zip_name = f"snapshot_ch{ch_num:03d}_{ts}.zip"
+            zip_path = backup_dir / zip_name
+
+            # 打包除 .backups/ 本身外的所有内容
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in root.rglob("*"):
+                    if not f.is_file():
+                        continue
+                    # 跳过 .backups/ 子目录本身,避免无限套娃
+                    try:
+                        rel = f.relative_to(root)
+                    except ValueError:
+                        continue
+                    parts = rel.parts
+                    if parts and parts[0] == ".backups":
+                        continue
+                    zf.write(f, arcname=str(rel))
+
+            # 清理旧快照(只保留最近 keep_last 份)
+            try:
+                snaps = sorted(
+                    backup_dir.glob("snapshot_ch*.zip"),
+                    key=lambda p: p.stat().st_mtime,
+                )
+                while len(snaps) > keep_last:
+                    old = snaps.pop(0)
+                    try:
+                        old.unlink()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            return str(zip_path)
+        except Exception:
+            return None
 
     # —— Session 汇总 —— #
 
