@@ -153,7 +153,9 @@ class TestNoRegressionToEarlierVersions(unittest.TestCase):
         self.assertIn("def _toggle_chapter_lock", NOVEL_SRC)
 
     def test_v193_charlib_intact(self):
-        self.assertIn("_find_duplicate_names", NOVEL_SRC)
+        # v2.04 P5: CharacterLibrary 已外迁
+        cl_src = (ROOT / "ui" / "tabs" / "character_library.py").read_text(encoding="utf-8")
+        self.assertIn("_find_duplicate_names", cl_src)
 
     def test_v194_button_color_intact(self):
         # v2.03 P4: ChapterEditor 已外迁到 ui/tabs/chapter_editor.py

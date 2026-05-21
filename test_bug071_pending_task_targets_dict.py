@@ -277,9 +277,10 @@ class TestNoRegressionToEarlierVersions(unittest.TestCase):
         self.assertIn("def _on_chapter_list_context_menu", SOURCE)
 
     def test_v193_charlib_intact(self):
-        """v1.93 同名检查 + last_ch 还在"""
-        self.assertIn("_find_duplicate_names", SOURCE)
-        self.assertIn("last_ch", SOURCE)
+        """v1.93 同名检查 + last_ch 还在(P5 后在 ui/tabs/character_library.py)"""
+        cl_src = (ROOT / "ui" / "tabs" / "character_library.py").read_text(encoding="utf-8")
+        self.assertIn("_find_duplicate_names", cl_src)
+        self.assertIn("last_ch", cl_src)
 
     def test_v194_button_color_intact(self):
         """v1.94 按钮对比度 #3a2a10 还在(P4 后在 ui/tabs/chapter_editor.py)"""

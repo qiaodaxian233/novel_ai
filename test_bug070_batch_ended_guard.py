@@ -147,8 +147,12 @@ class TestNoCollisionWithPreviousMilestones(unittest.TestCase):
         self.assertIn('color:#3a2a10', ce_src)
 
     def test_v193_char_fields_intact(self):
-        self.assertIn('"last_ch"', self.src)
-        self.assertIn('def _find_duplicate_names(rows_data)', self.src)
+        # v2.04 P5: CharacterLibrary 已外迁
+        charlib_path = os.path.join(HERE, "ui", "tabs", "character_library.py")
+        with open(charlib_path, encoding="utf-8") as f:
+            cl_src = f.read()
+        self.assertIn('"last_ch"', cl_src)
+        self.assertIn('def _find_duplicate_names(rows_data)', cl_src)
 
     def test_v192_chapter_lock_intact(self):
         self.assertIn('"locked": False', self.src)

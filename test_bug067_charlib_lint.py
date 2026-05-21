@@ -22,6 +22,8 @@ import textwrap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NOVEL_AI_PATH = os.path.join(HERE, "novel_ai.py")
+# v2.04 P5:CharacterLibrary 已外迁,数据/方法源码改读这个文件
+CHARLIB_PATH = os.path.join(HERE, "ui", "tabs", "character_library.py")
 
 
 def extract_method_source(src_path, class_name, method_name):
@@ -51,7 +53,7 @@ class TestLastChDataModel(unittest.TestCase):
 
     def test_dict_key_maps_main_has_last_ch(self):
         """DICT_KEY_MAPS['characters'] 必须包含 last_ch 且为第 9 个字段(列 8)"""
-        with open(NOVEL_AI_PATH, encoding="utf-8") as f:
+        with open(CHARLIB_PATH, encoding="utf-8") as f:
             src = f.read()
         # 主 DICT_KEY_MAPS(serialize 用)
         idx = src.find('DICT_KEY_MAPS = {')
@@ -66,7 +68,7 @@ class TestLastChDataModel(unittest.TestCase):
 
     def test_dict_key_maps_local_has_last_ch(self):
         """DICT_KEY_MAPS_LOCAL(load 用)也必须有 last_ch"""
-        with open(NOVEL_AI_PATH, encoding="utf-8") as f:
+        with open(CHARLIB_PATH, encoding="utf-8") as f:
             src = f.read()
         idx = src.find('DICT_KEY_MAPS_LOCAL = {')
         self.assertGreater(idx, 0)
@@ -110,7 +112,7 @@ class TestFindDuplicateNames(unittest.TestCase):
         被 Python 解释为 bound method,自动塞 self 当第一个参数 → TypeError。
         """
         method_src = extract_method_source(
-            NOVEL_AI_PATH, "CharacterLibrary", "_find_duplicate_names")
+            CHARLIB_PATH, "CharacterLibrary", "_find_duplicate_names")
         dedented = textwrap.dedent(method_src)
         # @staticmethod 装饰器 + 函数定义 — exec 后会变成普通函数
         # 把 @staticmethod 去掉(它在抠源码时是否包含取决于 ast 实现)
@@ -185,7 +187,7 @@ class TestCharLibrarySourceUI(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        with open(NOVEL_AI_PATH, encoding="utf-8") as f:
+        with open(CHARLIB_PATH, encoding="utf-8") as f:
             cls.src = f.read()
 
     def test_table_widget_column_count_is_9(self):
@@ -207,7 +209,7 @@ class TestCharLibrarySourceUI(unittest.TestCase):
     def test_add_character_defaults_has_9_items(self):
         """_add_character defaults 数组必须是 9 项(默认 9 列空字符串)"""
         method_src = extract_method_source(
-            NOVEL_AI_PATH, "CharacterLibrary", "_add_character")
+            CHARLIB_PATH, "CharacterLibrary", "_add_character")
         # 该方法里 defaults = [...] 应该有 9 个元素
         # 简易计数:统计 "," 数量 + 1(粗略),更稳的是用 ast
         tree = ast.parse(textwrap.dedent(method_src))
