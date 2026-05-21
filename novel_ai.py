@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v1.95"
+APP_VERSION = "v1.96"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -12567,8 +12567,20 @@ class MainWindow(QMainWindow):
             # 链式触发:批量生成中且摘要是为下一章准备的(老路径,无后置流水线时)
             elif meta.get("chain_to_next") and self._batch_remaining > 0 and not self._batch_paused:
                 QTimer.singleShot(1000, self._send_next_chapter)
-            elif meta.get("chain_to_next"):
+            elif meta.get("chain_to_next") and (self._batch_remaining > 0 or self._batch_paused):
+                # v1.96 BUG-070:真批量场景才打"批量已结束"
+                # — 单章模式 _batch_remaining=0 走这里说明 chain_to_next 被错误设置了
+                # (典型成因:_pending_task_target 单变量在多任务并发提交时被覆盖,
+                #  Canon 抽取响应错误地路由到 chapter_summary handler 用了摘要任务的 meta)
                 self.tab_generation.log("批量生成已结束", "info")
+            elif meta.get("chain_to_next"):
+                # v1.96 BUG-070:防御诊断 — chain_to_next=True 但 _batch_remaining=0 + 未暂停
+                # 说明 meta 来源诡异(_pending_task_target 串台?),不打"批量已结束"避免误导
+                # 单章模式没有"批量"概念,这条 log 让下次实战能定位是不是真的串台
+                self.tab_generation.log(
+                    f"⚠ chain_to_next=True 但 _batch_remaining=0,可能是 "
+                    f"_pending_task_target 串台(BUG-070 防御)。task: {meta.get('label', '?')}",
+                    "warn")
             # 链式触发:一键生成对话记忆流水线推进
             if meta.get("chain_full_memory"):
                 QTimer.singleShot(800, self._run_next_full_memory_step)
