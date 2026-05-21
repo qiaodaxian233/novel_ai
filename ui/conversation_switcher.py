@@ -7,9 +7,10 @@ v2.02 P3 拆分:从 novel_ai.py 第 10106-10272 行整体搬运,内容零修改�
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QInputDialog, QMessageBox,
+    QPushButton, QInputDialog, QMessageBox, QCheckBox, QGroupBox,
 )
 
 class ConversationSwitcher(QWidget):

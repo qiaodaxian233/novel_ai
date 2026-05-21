@@ -1120,7 +1120,9 @@ class CreationSettings(QWidget):
         if not s.contains("platform"):
             return  # 首次启动，用默认值
 
-        genres = s.value("genres", [])
+        # BUG-073:Linux PyQt5 无存档时 s.value("key", []) 返回 None 不是 [],下面 n in None 会 TypeError
+        # Windows 因 QSettings 序列化方式差异不触发 — 沙箱 offscreen / Linux 才暴露
+        genres = s.value("genres", []) or []
         if isinstance(genres, str):
             genres = [genres]
         for n, cb in self.genre_checks.items():
@@ -1155,7 +1157,7 @@ class CreationSettings(QWidget):
         _set_radio(self.detail_group, s.value("outline_detail", "标准"))
         _set_radio(self.rhythm_group, s.value("rhythm", "适中"))
 
-        endings = s.value("endings", [])
+        endings = s.value("endings", []) or []
         if isinstance(endings, str):
             endings = [endings]
         for n, cb in self.ending_checks.items():
@@ -1163,13 +1165,13 @@ class CreationSettings(QWidget):
 
         _set_radio(self.mode_group, s.value("creation_mode", "创造版"))
 
-        gfs = s.value("golden_fingers", [])
+        gfs = s.value("golden_fingers", []) or []
         if isinstance(gfs, str):
             gfs = [gfs]
         for n, cb in self.golden_checks.items():
             cb.setChecked(n in gfs)
 
-        ps = s.value("personas", [])
+        ps = s.value("personas", []) or []
         if isinstance(ps, str):
             ps = [ps]
         for n, cb in self.persona_checks.items():

@@ -6,9 +6,10 @@ v2.02 P3 拆分:从 novel_ai.py 第 2760-2875 行整体搬运,内容零修改。
 被 novel_ai.py 顶部 `from ui.story_outline import StoryOutline` 导入。
 """
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox,
-    QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea,
+    QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
 )
 
 class StoryOutline(QWidget):
