@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.13.9"
+APP_VERSION = "v2.14.0"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -7831,13 +7831,31 @@ class MainWindow(QMainWindow):
         self._tts_chunks_done = max(self._tts_chunks_done, idx + 1)
         self.tab_editor.lbl_tts_status.setText(f"合成中 {self._tts_chunks_done}/{total}")
         self._tts_queue.append(audio_path)
-        # 如果播放器空闲,启动播放
+        # 如果播放器空闲,启动播放(必须检查所有后端)
+        if not self._is_tts_playing():
+            self._play_next_chunk()
+
+    def _is_tts_playing(self):
+        """检查当前是否有音频在播放(兼容 pygame / winsound / QMediaPlayer)"""
+        # pygame 优先检查
+        if getattr(self, "_tts_currently_pygame", False):
+            try:
+                import pygame
+                if pygame.mixer.music.get_busy():
+                    return True
+            except Exception:
+                pass
+        # winsound 无法检测,用 flag
+        if getattr(self, "_tts_currently_winsound", False):
+            return True
+        # QMediaPlayer
         try:
             from PyQt5.QtMultimedia import QMediaPlayer
-            if self._tts_player is not None and self._tts_player.state() != QMediaPlayer.PlayingState:
-                self._play_next_chunk()
+            if self._tts_player is not None and self._tts_player.state() == QMediaPlayer.PlayingState:
+                return True
         except Exception:
             pass
+        return False
 
     def _on_tts_chunk_failed(self, idx, total, err):
         self.tab_generation.log(
@@ -7913,6 +7931,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         # 播完了
+        self._tts_currently_pygame = False
         if self._tts_queue:
             self._play_next_chunk()
             return
@@ -7924,6 +7943,12 @@ class MainWindow(QMainWindow):
         self.tab_editor.btn_tts_play.setText("🔊 朗读本章")
         self.tab_editor.btn_tts_stop.setEnabled(False)
         self.tab_editor.lbl_tts_status.setText("✓ 播放完成")
+        # 自动朗读队列:播下一章
+        if self._tts_auto_queue:
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(500, self._tts_auto_play_next)
+        else:
+            self._tts_auto_playing = False
 
     def _get_wav_duration_ms(self, path):
         """读 WAV header 算时长(毫秒)。失败时给个保守默认 5 秒。"""
