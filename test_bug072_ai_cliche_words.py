@@ -139,7 +139,7 @@ class TestAppVersion(unittest.TestCase):
         # v2.00 P1 模块化拆分时把硬钉改为解析后 ≥ 比较
         # (BUG-072 留下的 TODO 落地:升一次版本号不要再改一堆测试)
         import re
-        m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', NOVEL_SRC)
+        m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', NOVEL_SRC)
         self.assertIsNotNone(m, "novel_ai.py 必须定义 APP_VERSION")
         major, minor = int(m.group(1)), int(m.group(2))
         self.assertGreaterEqual((major, minor), (1, 98),

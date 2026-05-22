@@ -35,7 +35,7 @@ class TestAppVersionBumped(unittest.TestCase):
 
     def test_version_at_least_v210(self):
         src = _load_source()
-        m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)["\']', src)
+        m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)(?:\.\d+)?["\']', src)
         self.assertIsNotNone(m)
         major, minor = int(m.group(1)), int(m.group(2))
         self.assertGreaterEqual((major, minor), (2, 10),

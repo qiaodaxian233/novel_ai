@@ -167,7 +167,7 @@ def test_import_in_novel_ai():
 def test_app_version_at_least_v1_70():
     """v1.70 是关系网功能引入的版本,之后版本号必须 ≥ v1.70(后续 bug fix 末位+1 都通过)"""
     src = _read_src()
-    m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)["\']', src)
+    m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)(?:\.\d+)?["\']', src)
     assert m, "找不到 APP_VERSION 声明"
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 70), f"APP_VERSION 应 ≥ v1.70,实际 v{major}.{minor}"

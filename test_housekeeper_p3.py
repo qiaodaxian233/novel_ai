@@ -524,7 +524,7 @@ class TestAppVersionBumped(unittest.TestCase):
             self.skipTest("novel_ai.py not present in test environment")
         src = novel_ai_path.read_text(encoding="utf-8")
         import re
-        m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)["\']', src)
+        m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)(?:\.\d+)?["\']', src)
         self.assertIsNotNone(m, "APP_VERSION not found in novel_ai.py")
         major, minor = int(m.group(1)), int(m.group(2))
         self.assertGreaterEqual(

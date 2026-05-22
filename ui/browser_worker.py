@@ -236,11 +236,12 @@ class BrowserWorker(QObject):
                     "  2. 公司机器禁止下载可执行文件\n"
                     "  3. Chrome 版本太新,driver 还没匹配\n"
                     "✅ 解决方案(任选一):\n"
-                    "  方案 A: pip install webdriver-manager,程序会自动用它兜底下载(推荐)\n"
-                    "  方案 B: 手动下载 chromedriver → "
+                    "  方案 A: pip install webdriver-manager(自动用中国镜像下载,推荐)\n"
+                    "  方案 B: 开一次梯子让程序下载 chromedriver,之后本地缓存会自动复用\n"
+                    "  方案 C: 手动下载 chromedriver → "
                     "https://googlechromelabs.github.io/chrome-for-testing/ "
                     "→ 解压到 PATH 路径(如 C:\\Windows\\)\n"
-                    "  方案 C: 切换内核到「系统 Edge」(Windows 10+ 内置不用下 driver)")
+                    "  方案 D: 切换内核到「系统 Edge」(Windows 10+ 内置不用下 driver)")
         if "session not created" in m and "chrome" in m:
             return ("【诊断】Chrome 启动后立刻退出。常见原因:\n"
                     "  1. 同 profile 已有 Chrome 运行 → 关掉所有 Chrome 重试\n"
@@ -262,42 +263,92 @@ class BrowserWorker(QObject):
 
     @staticmethod
     def _resolve_chrome_driver_service():
-        """三层兜底获取 chromedriver Service:
-        1) None (用 Selenium Manager 自动下载,Selenium 4.6+ 默认)
-        2) webdriver-manager 兜底(pip install webdriver-manager)
-        3) PATH 里的 chromedriver(用户手动放的)
+        """四层兜底获取 chromedriver Service(优先本地缓存,避免翻墙):
+        1) Selenium Manager 缓存目录(~/.cache/selenium/ 或 ~/AppData/Local/selenium/)
+        2) webdriver-manager 缓存目录(~/.wdm/)
+        3) PATH 里的 chromedriver
+        4) webdriver-manager 在线下载(尝试中国镜像)
         返回 Service 对象或 None"""
         try:
             from selenium.webdriver.chrome.service import Service as _CS
-            # 尝试 webdriver-manager 兜底
-            try:
-                from webdriver_manager.chrome import ChromeDriverManager as _CDM
-                return _CS(_CDM().install())
-            except ImportError:
-                pass  # 没装 webdriver-manager 就走 None 路径
-            # 尝试 PATH 里的 chromedriver
             import shutil as _shu
+
+            # ── 层 1:扫 Selenium Manager 本地缓存 ──
+            cache_roots = []
+            if sys.platform == "win32":
+                local_app = os.environ.get("LOCALAPPDATA", "")
+                if local_app:
+                    cache_roots.append(Path(local_app) / "selenium" / "chromedriver")
+            else:
+                cache_roots.append(Path.home() / ".cache" / "selenium" / "chromedriver")
+            for root in cache_roots:
+                if root.exists():
+                    # 找最新版的 chromedriver 可执行文件
+                    exes = sorted(root.rglob("chromedriver*"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    for exe in exes:
+                        if exe.is_file() and exe.stat().st_size > 1_000_000:  # >1MB = 真 binary
+                            return _CS(str(exe))
+
+            # ── 层 2:扫 webdriver-manager 本地缓存 ──
+            wdm_root = Path.home() / ".wdm" / "drivers" / "chromedriver"
+            if wdm_root.exists():
+                exes = sorted(wdm_root.rglob("chromedriver*"), key=lambda p: p.stat().st_mtime, reverse=True)
+                for exe in exes:
+                    if exe.is_file() and exe.stat().st_size > 1_000_000:
+                        return _CS(str(exe))
+
+            # ── 层 3:PATH 里的 chromedriver ──
             cd_path = _shu.which("chromedriver") or _shu.which("chromedriver.exe")
             if cd_path:
                 return _CS(cd_path)
+
+            # ── 层 4:webdriver-manager 在线下载(尝试中国镜像)──
+            try:
+                from webdriver_manager.chrome import ChromeDriverManager as _CDM
+                # 优先用 npmmirror 中国镜像,不需要翻墙
+                os.environ.setdefault(
+                    "WDM_URL", "https://registry.npmmirror.com/-/binary/chromedriver")
+                return _CS(_CDM().install())
+            except (ImportError, Exception):
+                pass
+
         except Exception:
             pass
         return None
 
     @staticmethod
     def _resolve_edge_driver_service():
-        """同上,Edge 版本兜底"""
+        """同 Chrome 版本,Edge 本地缓存优先"""
         try:
             from selenium.webdriver.edge.service import Service as _ES
-            try:
-                from webdriver_manager.microsoft import EdgeChromiumDriverManager as _EDM
-                return _ES(_EDM().install())
-            except ImportError:
-                pass
             import shutil as _shu
+
+            # 层 1:Selenium Manager 本地缓存
+            cache_roots = []
+            if sys.platform == "win32":
+                local_app = os.environ.get("LOCALAPPDATA", "")
+                if local_app:
+                    cache_roots.append(Path(local_app) / "selenium" / "msedgedriver")
+            else:
+                cache_roots.append(Path.home() / ".cache" / "selenium" / "msedgedriver")
+            for root in cache_roots:
+                if root.exists():
+                    exes = sorted(root.rglob("msedgedriver*"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    for exe in exes:
+                        if exe.is_file() and exe.stat().st_size > 1_000_000:
+                            return _ES(str(exe))
+
+            # 层 2:PATH
             ed_path = _shu.which("msedgedriver") or _shu.which("msedgedriver.exe")
             if ed_path:
                 return _ES(ed_path)
+
+            # 层 3:webdriver-manager 在线
+            try:
+                from webdriver_manager.microsoft import EdgeChromiumDriverManager as _EDM
+                return _ES(_EDM().install())
+            except (ImportError, Exception):
+                pass
         except Exception:
             pass
         return None
@@ -346,16 +397,19 @@ class BrowserWorker(QObject):
             opts.add_experimental_option("excludeSwitches", ["enable-automation"])
             opts.add_experimental_option("useAutomationExtension", False)
             self.log_signal.emit("→ Edge standalone 模式", "info")
+            # v2.12.2:优先本地缓存
+            svc = self._resolve_edge_driver_service()
             try:
-                # 第一次:Selenium Manager 默认路径
-                self.driver = webdriver.Edge(options=opts)
-            except Exception as e:
-                # 兜底 1:webdriver-manager / PATH chromedriver
-                svc = self._resolve_edge_driver_service()
                 if svc:
-                    self.log_signal.emit("Selenium Manager 失败,改用 webdriver-manager 兜底", "warn")
+                    self.log_signal.emit("使用本地缓存的 msedgedriver(无需联网)", "info")
+                    self.driver = webdriver.Edge(options=opts, service=svc)
+                else:
+                    self.driver = webdriver.Edge(options=opts)
+            except Exception as e:
+                if svc:
+                    self.log_signal.emit("本地 msedgedriver 版本不匹配,尝试 Selenium Manager", "warn")
                     try:
-                        self.driver = webdriver.Edge(options=opts, service=svc)
+                        self.driver = webdriver.Edge(options=opts)
                     except Exception as e2:
                         raise RuntimeError(f"{e2}\n\n{self._diagnose(str(e2))}")
                 else:
@@ -367,14 +421,20 @@ class BrowserWorker(QObject):
             self._launch_debug_chrome(self.DEBUG_PORT, self.user_data_dir)
             opts = ChromeOptions()
             opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.DEBUG_PORT}")
+            # v2.12.2:优先本地缓存的 chromedriver,避免每次联网(国内 googleapis 被墙)
+            svc = self._resolve_chrome_driver_service()
             try:
-                self.driver = webdriver.Chrome(options=opts)
-            except Exception as e:
-                svc = self._resolve_chrome_driver_service()
                 if svc:
-                    self.log_signal.emit("Selenium Manager 失败,改用 webdriver-manager 兜底", "warn")
+                    self.log_signal.emit("使用本地缓存的 chromedriver(无需联网)", "info")
+                    self.driver = webdriver.Chrome(options=opts, service=svc)
+                else:
+                    self.driver = webdriver.Chrome(options=opts)
+            except Exception as e:
+                # 本地缓存失败(版本不匹配等),回退到 Selenium Manager
+                if svc:
+                    self.log_signal.emit("本地 chromedriver 版本不匹配,尝试 Selenium Manager", "warn")
                     try:
-                        self.driver = webdriver.Chrome(options=opts, service=svc)
+                        self.driver = webdriver.Chrome(options=opts)
                     except Exception as e2:
                         raise RuntimeError(f"{e2}\n\n{self._diagnose(str(e2))}")
                 else:
@@ -398,14 +458,19 @@ class BrowserWorker(QObject):
             opts.add_experimental_option("excludeSwitches", ["enable-automation"])
             opts.add_experimental_option("useAutomationExtension", False)
             self.log_signal.emit("→ Chromium standalone 模式", "info")
+            # v2.12.2:优先本地缓存的 chromedriver
+            svc = self._resolve_chrome_driver_service()
             try:
-                self.driver = webdriver.Chrome(options=opts)
-            except Exception as e:
-                svc = self._resolve_chrome_driver_service()
                 if svc:
-                    self.log_signal.emit("Selenium Manager 失败,改用 webdriver-manager 兜底", "warn")
+                    self.log_signal.emit("使用本地缓存的 chromedriver(无需联网)", "info")
+                    self.driver = webdriver.Chrome(options=opts, service=svc)
+                else:
+                    self.driver = webdriver.Chrome(options=opts)
+            except Exception as e:
+                if svc:
+                    self.log_signal.emit("本地 chromedriver 版本不匹配,尝试 Selenium Manager", "warn")
                     try:
-                        self.driver = webdriver.Chrome(options=opts, service=svc)
+                        self.driver = webdriver.Chrome(options=opts)
                     except Exception as e2:
                         raise RuntimeError(f"{e2}\n\n{self._diagnose(str(e2))}")
                 else:

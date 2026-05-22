@@ -145,7 +145,7 @@ class TestAppVersionBumped(unittest.TestCase):
             self.skipTest("novel_ai.py 不在")
         src = novel_ai_path.read_text(encoding="utf-8")
         import re
-        m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)["\']', src)
+        m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)(?:\.\d+)?["\']', src)
         self.assertIsNotNone(m)
         major, minor = int(m.group(1)), int(m.group(2))
         self.assertGreaterEqual((major, minor), (2, 11),
