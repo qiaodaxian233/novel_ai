@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.12.8"
+APP_VERSION = "v2.12.9"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1446,31 +1446,27 @@ class MainWindow(QMainWindow):
         # v1.97 BUG-071:主 dispatch 也按 task_id 取 meta,跟 pangu/laodao 路由一致
         meta = self._pending_task_targets.get(task_id, {})
         target = meta.get("target")
-        # BUG-077 根治:如果 target 路由丢失但有活跃审计链,按 task_id 名字硬路由
-        # (绕过 _pending_task_targets 的不可靠性 — 根因未知但症状稳定复现)
-        if not target and getattr(self, "_audit_state", None):
+        # BUG-077 根治:有活跃审计链时,按 task_id 名字无条件覆写 target
+        # (三次实战确认:target 要么丢失要么值错误,根因未知)
+        _ast_active = getattr(self, "_audit_state", None)
+        if _ast_active:
             _tid = task_id or ""
             if "节奏稽核" in _tid or "rhythm" in _tid.lower():
+                if target != "critique_rhythm":
+                    print(f"[BUG-077] 覆写 target: {target!r} → critique_rhythm (task={_tid!r})", flush=True)
                 target = "critique_rhythm"
-                print(f"[BUG-077 硬路由] task_id={task_id!r} → critique_rhythm", flush=True)
-                self.tab_generation.log(
-                    f"⚠ BUG-077:节奏稽核路由丢失,已按名字硬路由恢复", "warn")
+                if not meta.get("ch_num"):
+                    meta = {"target": target, "ch_num": _ast_active.get("meta", {}).get("ch_num", 0)}
             elif "人设稽核" in _tid or "character" in _tid.lower():
+                if target != "critique_character":
+                    print(f"[BUG-077] 覆写 target: {target!r} → critique_character (task={_tid!r})", flush=True)
                 target = "critique_character"
-                print(f"[BUG-077 硬路由] task_id={task_id!r} → critique_character", flush=True)
-                self.tab_generation.log(
-                    f"⚠ BUG-077:人设稽核路由丢失,已按名字硬路由恢复", "warn")
-            elif "Canon稽核" in _tid or "canon_audit" in _tid.lower():
+                if not meta.get("ch_num"):
+                    meta = {"target": target, "ch_num": _ast_active.get("meta", {}).get("ch_num", 0)}
+            elif "Canon稽核" in _tid:
+                if target != "canon_audit":
+                    print(f"[BUG-077] 覆写 target: {target!r} → canon_audit (task={_tid!r})", flush=True)
                 target = "canon_audit"
-                print(f"[BUG-077 硬路由] task_id={task_id!r} → canon_audit", flush=True)
-                self.tab_generation.log(
-                    f"⚠ BUG-077:Canon稽核路由丢失,已按名字硬路由恢复", "warn")
-            if target:
-                # 补全 meta 让 handler 能取到 ch_num
-                if not meta:
-                    _ast = self._audit_state or {}
-                    meta = {"target": target,
-                            "ch_num": _ast.get("meta", {}).get("ch_num", 0)}
         # BUG-077 追踪(仅异常时打印)
         if not target:
             print(f"[BUG-077] task_id={task_id!r} target=None "
