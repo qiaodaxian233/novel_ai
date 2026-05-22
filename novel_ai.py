@@ -1337,6 +1337,9 @@ class MainWindow(QMainWindow):
         # 记录这次任务的目标位置(由 _on_response_received 处理回填)
         # v1.97 BUG-071:字典写入 — key=label(== worker 侧 task_id),避免并发任务串台
         self._pending_task_targets[label] = {"target": target, "label": label, **extra}
+        # BUG-077 追踪:写入时打印,方便对比响应时的读取
+        print(f"[pending WRITE] key={label!r} target={target!r} "
+              f"dict_keys={list(self._pending_task_targets.keys())}", flush=True)
         # 应用人类延迟
         type_delay = 30 if self.tab_settings.delay_check.isChecked() else 5
         # 投递任务
@@ -1446,6 +1449,10 @@ class MainWindow(QMainWindow):
         # v1.97 BUG-071:主 dispatch 也按 task_id 取 meta,跟 pangu/laodao 路由一致
         meta = self._pending_task_targets.get(task_id, {})
         target = meta.get("target")
+        # BUG-077 追踪:读取时打印,对比写入时的记录
+        print(f"[pending READ] task_id={task_id!r} target={target!r} "
+              f"meta_keys={list(meta.keys()) if meta else '(empty)'} "
+              f"dict_keys={list(self._pending_task_targets.keys())}", flush=True)
         # BUG-077 诊断:如果 target 为空但有活跃审计链,说明路由可能丢失
         if not target and getattr(self, "_audit_state", None):
             print(f"[BUG-077 诊断] task_id={task_id!r} target=None "
