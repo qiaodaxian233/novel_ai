@@ -73,6 +73,7 @@ expected = [
     "工作流",            # 来自 workflow_panel 集成
     "生成控制", "章节编辑器",
     "📚 拆书学习",         # v1.38 新增
+    "🔧 DEBUG",           # v2.13.4 新增
 ]
 actual = [mw.tabs.tabText(i) for i in range(mw.tabs.count())]
 expect(f"Tab 数 = {len(expected)}",

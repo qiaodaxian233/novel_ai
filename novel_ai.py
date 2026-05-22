@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.13.3"
+APP_VERSION = "v2.13.4"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -130,6 +130,7 @@ from ui.threads import _TTSSynthThread
 from ui.theme import ThemeManager
 from ui.conversation_switcher import ConversationSwitcher
 from ui.story_outline import StoryOutline
+from ui.debug_panel import DebugPanel
 
 # v2.03 P4:DEFAULT_SKILLS 数据 + 8 个 Tab 类(共 3325 行)
 from core.default_skills import DEFAULT_SKILLS
@@ -808,6 +809,9 @@ class MainWindow(QMainWindow):
             (self.tab_editor, "章节编辑器"),
             (self.tab_book_splitter, "📚 拆书学习"),
         ]
+        # DEBUG 面板(最后一个 Tab)
+        self.tab_debug = DebugPanel()
+        tab_list.append((self.tab_debug, "🔧 DEBUG"))
         for w, n in tab_list:
             self.tabs.addTab(w, n)
         ml.addWidget(self.tabs, 1)
@@ -1457,6 +1461,9 @@ class MainWindow(QMainWindow):
         # v1.97 BUG-071:主 dispatch 也按 task_id 取 meta,跟 pangu/laodao 路由一致
         meta = self._pending_task_targets.get(task_id, {})
         target = meta.get("target")
+        # DEBUG: 响应路由追踪(自动出现在 DEBUG 面板)
+        print(f"[dispatch] task={task_id!r} target={target!r} "
+              f"keys={list(self._pending_task_targets.keys())}", flush=True)
         # BUG-077 根治:有活跃审计链时,按 task_id 名字无条件覆写 target
         # (三次实战确认:target 要么丢失要么值错误,根因未知)
         _ast_active = getattr(self, "_audit_state", None)
@@ -1526,13 +1533,15 @@ class MainWindow(QMainWindow):
         elif target in ("chapter", "golden_three"):
             if self.workflow and meta.get("_workflow_ctx") and target == "chapter":
                 # ★ 新路径:由 workflow.start() 发起的章节(含 _workflow_ctx)
+                print(f"[dispatch] → workflow.on_ai_content (workflow 路径)", flush=True)
                 self.workflow.on_ai_content(content, meta)
             else:
-                # 旧路径:外部直接设置 _pending_task_target 或 golden_three
+                print(f"[dispatch] → _handle_chapter_response (旧路径)", flush=True)
                 self._handle_chapter_response(content, meta)
         elif target and target.startswith("_cb_"):
             # workflow_pipeline 一次性 callback(AI 稽核步骤回调)
             cb = getattr(self, "_one_shot_callbacks", {}).pop(target, None)
+            print(f"[dispatch] _cb_ 回调: target={target!r} found={cb is not None}", flush=True)
             if cb:
                 cb(content)
         elif target == "optimize":
@@ -5607,6 +5616,8 @@ class MainWindow(QMainWindow):
             last_ch_num = ch_num
 
         self._batch_remaining -= 1
+        print(f"[batch] 章节入库完成 batch_remaining={self._batch_remaining} "
+              f"paused={self._batch_paused}", flush=True)
 
         # v1.32:✨ 自动 13 法静态扫描(如果开了开关)
         try:
