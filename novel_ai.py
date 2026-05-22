@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.14.0"
+APP_VERSION = "v2.14.1"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -132,6 +132,7 @@ from ui.conversation_switcher import ConversationSwitcher
 from ui.story_outline import StoryOutline
 from ui.debug_panel import DebugPanel
 from ui.emotion_curve import EmotionCurvePanel
+from ui.plot_timeline import show_plot_timeline
 
 # v2.03 P4:DEFAULT_SKILLS 数据 + 8 个 Tab 类(共 3325 行)
 from core.default_skills import DEFAULT_SKILLS
@@ -623,6 +624,13 @@ class MainWindow(QMainWindow):
         a_emotion = QAction("📊 查看情绪曲线", self)
         a_emotion.triggered.connect(self._show_emotion_curve)
         tm.addAction(a_emotion)
+        a_plotmap = QAction("🗺️ 剧情线地图", self)
+        a_plotmap.triggered.connect(self._show_plot_timeline)
+        tm.addAction(a_plotmap)
+        a_readers = QAction("👥 模拟读者评审", self)
+        a_readers.triggered.connect(self._run_reader_panel)
+        a_readers.setToolTip("让AI模拟3种读者(追爽/追感情/挑BUG)对当前章节评论")
+        tm.addAction(a_readers)
         tm.addAction(a_override)
         tm.addSeparator()
         a_clean_meta = QAction("🧹 扫描清理所有章节尾部元信息(本章完/钩子/选项)", self)
@@ -1502,6 +1510,8 @@ class MainWindow(QMainWindow):
         if target == "inspiration":
             self.tab_settings.inspiration_edit.setPlainText(content)
             self.tabs.setCurrentWidget(self.tab_settings)
+        elif target == "reader_panel":
+            self._on_reader_panel_response(content)
         elif target == "conv_restore":
             # 记忆恢复确认回复 — 只记日志
             self.tab_generation.log(
@@ -9532,6 +9542,60 @@ class MainWindow(QMainWindow):
                 f"请关闭程序后重新打开生效。")
 
     # ==================== DOM 诊断 / 拾取工具(BUG-018 配套) ====================
+    def _show_plot_timeline(self):
+        """🗺️ 剧情线地图"""
+        canon_items = []
+        try:
+            import json as _json
+            raw = self.tab_canon.canon_edit.toPlainText().strip()
+            if raw:
+                items = _json.loads(raw)
+                if isinstance(items, list):
+                    canon_items = items
+        except Exception:
+            pass
+        show_plot_timeline(self, self.chapters, canon_items)
+
+    def _run_reader_panel(self):
+        """👥 模拟读者评审 — 3种读者对当前章节评论"""
+        text = ""
+        try:
+            text = self.tab_editor.content_edit.toPlainText().strip()
+        except Exception:
+            pass
+        if not text:
+            QMessageBox.information(self, "读者评审", "当前章节为空")
+            return
+        prompt = PROMPTS["reader_panel"].format(content=text[:6000])
+        self._send_to_ai(prompt, "读者评审", target="reader_panel")
+
+    def _on_reader_panel_response(self, content):
+        """处理读者评审结果"""
+        import json as _json
+        raw = (content or "").strip()
+        import re as _re
+        raw = _re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=_re.I | _re.M).strip()
+        jm = _re.search(r"\{[\s\S]*\}", raw)
+        if not jm:
+            QMessageBox.information(self, "读者评审", f"AI 返回:\n{content[:500]}")
+            return
+        try:
+            data = _json.loads(jm.group(0))
+        except Exception:
+            QMessageBox.information(self, "读者评审", f"解析失败:\n{content[:500]}")
+            return
+        lines = ["👥 模拟读者评审团\n"]
+        for key, label, emoji in [
+            ("reader_a", "追爽文的读者", "⚡"),
+            ("reader_b", "追感情线的读者", "💕"),
+            ("reader_c", "挑BUG的读者", "🔍"),
+        ]:
+            r = data.get(key, {})
+            stay = "✅ 继续追" if r.get("stay", True) else "❌ 弃书"
+            comment = r.get("comment", "无评论")
+            lines.append(f"{emoji} {label}: {stay}\n   「{comment}」\n")
+        QMessageBox.information(self, "👥 读者评审团", "\n".join(lines))
+
     def _show_emotion_curve(self):
         """📊 查看全书情绪曲线"""
         from PyQt5.QtWidgets import QDialog, QVBoxLayout
