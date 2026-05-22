@@ -37,7 +37,7 @@ class BookSplitterTab(QWidget):
         self.btn_load_file = QPushButton("📂 选择 .txt 文件...")
         self.btn_load_file.setStyleSheet(
             "QPushButton { background:#3498db; color:white; padding:8px 16px; "
-            "border-radius:3px; font-weight:bold; }"
+            "border-radius:3px; font-weight:bold; }} "
             "QPushButton:hover { background:#2980b9; }")
         self.btn_load_file.clicked.connect(self._on_load_file)
         ld_row.addWidget(self.btn_load_file)
@@ -83,8 +83,8 @@ class BookSplitterTab(QWidget):
         self.btn_analyze = QPushButton("🔬 AI 分析本章")
         self.btn_analyze.setStyleSheet(
             "QPushButton { background:#8e44ad; color:white; padding:6px 14px; "
-            "border-radius:3px; font-weight:bold; }"
-            "QPushButton:hover { background:#6c3483; }"
+            "border-radius:3px; font-weight:bold; }} "
+            "QPushButton:hover { background:#6c3483; }} "
             "QPushButton:disabled { background:#ccc; }")
         self.btn_analyze.setEnabled(False)
         self.btn_analyze.setToolTip(

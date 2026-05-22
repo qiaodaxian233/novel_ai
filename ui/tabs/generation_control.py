@@ -159,7 +159,7 @@ class GenerationControl(QWidget):
         self.btn_start = QPushButton("  ▶▶ 开始连续生成  ")
         self.btn_start.setStyleSheet(
             "QPushButton { background:#e65100; color:white; padding:8px 20px;"
-            "font-weight:bold; font-size:13px; border-radius:4px; }"
+            "font-weight:bold; font-size:13px; border-radius:4px; } "
             "QPushButton:hover { background:#bf360c; }")
         self.btn_start.setToolTip("按设定章数自动连续写,写完一章自动写下一章")
         self.btn_pause = QPushButton("⏸ 暂停")

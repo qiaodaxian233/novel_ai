@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.12.9"
+APP_VERSION = "v2.13.0"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -2264,7 +2264,7 @@ class MainWindow(QMainWindow):
         btn_autofix = QPushButton("🔧 按 13 法建议重写本章")
         btn_autofix.setStyleSheet(
             "QPushButton { background:#8e44ad; color:white; padding:8px 16px; "
-            "border-radius:3px; font-weight:bold; font-size:14px; }"
+            "border-radius:3px; font-weight:bold; font-size:14px; } "
             "QPushButton:hover { background:#6c3483; }")
         btn_autofix.setToolTip(
             "把章节正文 + 13 法各项弱点 + 改写建议发给 AI,让它按 13 法重写本章。\n"
@@ -2849,7 +2849,7 @@ class MainWindow(QMainWindow):
         btn_autofix = QPushButton("🔧 让 AI 自动修复这些问题")
         btn_autofix.setStyleSheet(
             "QPushButton { background:#e67e22; color:white; padding:8px 16px; "
-            "border-radius:3px; font-weight:bold; font-size:14px; }"
+            "border-radius:3px; font-weight:bold; font-size:14px; } "
             "QPushButton:hover { background:#d35400; }")
         btn_autofix.setToolTip(
             "把章节正文 + 失败项 + 建议发给 AI,让它直接重写有问题的部分。\n"

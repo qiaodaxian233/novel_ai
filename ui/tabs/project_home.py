@@ -119,7 +119,7 @@ class ProjectHomeTab(QWidget):
         self.prog_writing.setFormat("%v / %m 章 (%p%)")
         self.prog_writing.setStyleSheet(
             "QProgressBar { border:1px solid #888; border-radius:3px; "
-            "text-align:center; height:24px; }"
+            "text-align:center; height:24px; }} "
             "QProgressBar::chunk { background-color:#27ae60; }")
         prog_row.addWidget(self.prog_writing, 1)
         stats_lay.addLayout(prog_row)

@@ -50,7 +50,7 @@ class DialogMemory(QWidget):
         # ---- 一键生成对话记忆(主入口) ----
         full_box = QGroupBox("一键生成对话记忆 (推荐)")
         full_box.setStyleSheet(
-            "QGroupBox { border: 2px solid #cc3333; }"
+            "QGroupBox { border: 2px solid #cc3333; }} "
             "QGroupBox::title { color: #cc3333; }")
         full_lay = QVBoxLayout(full_box)
         full_tip = QLabel(
@@ -65,7 +65,7 @@ class DialogMemory(QWidget):
         self.btn_gen_full_memory = QPushButton("✨ 一键生成完整对话记忆")
         self.btn_gen_full_memory.setStyleSheet(
             "QPushButton { background-color: #cc3333; color: white; "
-            "padding: 12px 20px; font-size: 14px; font-weight: bold; }"
+            "padding: 12px 20px; font-size: 14px; font-weight: bold; }} "
             "QPushButton:hover { background-color: #e04444; }")
         self.btn_stop_full_memory = QPushButton("⏹ 中止")
         self.btn_stop_full_memory.setMaximumWidth(80)

@@ -382,7 +382,7 @@ class CharacterLibrary(QWidget):
             "(纯本地正则,不调 AI 不烧 token)")
         self.btn_sync_hero.setStyleSheet(
             "QPushButton { background:#3498db; color:white; padding:5px 10px; "
-            "border-radius:3px; font-weight:bold; }"
+            "border-radius:3px; font-weight:bold; }} "
             "QPushButton:hover { background:#2980b9; }")
         sync_row.addWidget(self.btn_sync_hero)
         
