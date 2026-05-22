@@ -750,7 +750,9 @@ class GenerationWorkflow:
             "type_delay_ms": 5,
         })
         # pending 里保留 _workflow_ctx,on_response_received 下次会再调 on_ai_content
-        mw._pending_task_target = {
+        # BUG-077 根因修复:必须写 _pending_task_targets[task_id](复数 dict)
+        _retry_label = f"第{ctx.ch_num}章(retry剩余{ctx.retry_left})"
+        mw._pending_task_targets[_retry_label] = {
             "target": "chapter",
             "ch_num": ctx.ch_num,
             "target_words": ctx.target_words,
@@ -1009,7 +1011,9 @@ def _patch_main_window(main_window_cls):
             self._one_shot_callbacks = {}
         self._one_shot_callbacks[cb_key] = on_response
 
-        self._pending_task_target = {
+        # BUG-077 根因修复:必须写 _pending_task_targets(复数 dict),
+        # 不能写 _pending_task_target(单数,已废弃)
+        self._pending_task_targets[label] = {
             "target": cb_key,
             "label": label,
         }
