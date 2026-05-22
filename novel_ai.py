@@ -631,6 +631,10 @@ class MainWindow(QMainWindow):
         a_readers.triggered.connect(self._run_reader_panel)
         a_readers.setToolTip("让AI模拟3种读者(追爽/追感情/挑BUG)对当前章节评论")
         tm.addAction(a_readers)
+        a_script = QAction("🎬 转短剧剧本", self)
+        a_script.triggered.connect(self._convert_to_script)
+        a_script.setToolTip("把当前章节改编成竖屏短剧剧本格式")
+        tm.addAction(a_script)
         tm.addAction(a_override)
         tm.addSeparator()
         a_clean_meta = QAction("🧹 扫描清理所有章节尾部元信息(本章完/钩子/选项)", self)
@@ -1512,6 +1516,8 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentWidget(self.tab_settings)
         elif target == "reader_panel":
             self._on_reader_panel_response(content)
+        elif target == "novel_to_script":
+            self._on_script_response(content)
         elif target == "conv_restore":
             # 记忆恢复确认回复 — 只记日志
             self.tab_generation.log(
@@ -9595,6 +9601,49 @@ class MainWindow(QMainWindow):
             comment = r.get("comment", "无评论")
             lines.append(f"{emoji} {label}: {stay}\n   「{comment}」\n")
         QMessageBox.information(self, "👥 读者评审团", "\n".join(lines))
+
+    def _convert_to_script(self):
+        """🎬 把当前章节转为短剧剧本"""
+        text = ""
+        try:
+            text = self.tab_editor.content_edit.toPlainText().strip()
+        except Exception:
+            pass
+        if not text:
+            QMessageBox.information(self, "转剧本", "当前章节为空")
+            return
+        ch_idx = getattr(self.tab_editor, "current_index", 0)
+        ch_title = self.chapters[ch_idx]["title"] if ch_idx < len(self.chapters) else "未知"
+        self.tab_generation.log(f"🎬 正在把「{ch_title}」转为短剧剧本...", "info")
+        prompt = PROMPTS["novel_to_script"].format(content=text[:8000])
+        self._send_to_ai(prompt, f"转剧本-{ch_title}", target="novel_to_script")
+
+    def _on_script_response(self, content):
+        """处理剧本转换结果"""
+        if not content or not content.strip():
+            QMessageBox.warning(self, "转剧本", "AI 未返回剧本内容")
+            return
+        # 弹窗显示 + 复制到剪贴板
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QPushButton, QHBoxLayout
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🎬 短剧剧本")
+        dlg.resize(700, 600)
+        lay = QVBoxLayout(dlg)
+        edit = QPlainTextEdit()
+        edit.setPlainText(content.strip())
+        edit.setReadOnly(False)
+        edit.setStyleSheet("font-family: Consolas, 'Microsoft YaHei'; font-size: 13px;")
+        lay.addWidget(edit)
+        btn_row = QHBoxLayout()
+        btn_copy = QPushButton("📋 复制到剪贴板")
+        btn_copy.clicked.connect(lambda: (
+            QApplication.clipboard().setText(edit.toPlainText()),
+            self.tab_generation.log("📋 剧本已复制到剪贴板", "info")))
+        btn_row.addWidget(btn_copy)
+        btn_row.addStretch()
+        lay.addLayout(btn_row)
+        self.tab_generation.log(f"🎬 剧本生成完成({len(content)}字符)", "success")
+        dlg.exec_()
 
     def _show_emotion_curve(self):
         """📊 查看全书情绪曲线"""
