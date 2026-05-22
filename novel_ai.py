@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.12.7"
+APP_VERSION = "v2.12.8"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -5688,10 +5688,35 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
-                # ── finalize:生成日报 oneliner ──
+                # ── finalize:生成日报 ──
                 _final = _hk.finalize_chapter()
                 if _final:
-                    self.tab_generation.log(_final.render_oneliner(), "info")
+                    _score = _final.health_score
+                    _oneliner = _final.render_oneliner()
+                    # 醒目分级输出
+                    if _score >= 0.8:
+                        _emoji, _level = "🟢", "success"
+                    elif _score >= 0.5:
+                        _emoji, _level = "🟡", "warn"
+                    else:
+                        _emoji, _level = "🔴", "error"
+                    _pct = int(_score * 100)
+                    self.tab_generation.log(
+                        f"{'─' * 50}", "info")
+                    self.tab_generation.log(
+                        f"📋 管家日报 {_emoji} 健康度 {_pct}% │ {_oneliner}",
+                        _level)
+                    # 如果有告警,逐条显示
+                    if _final.warnings:
+                        for _w in _final.warnings[:3]:
+                            self.tab_generation.log(f"  ⚠ {_w}", "warn")
+                    # 如果有防御消失,醒目警告
+                    if _final.missing_defenses:
+                        self.tab_generation.log(
+                            f"  🛡️ 防御消失:{', '.join(_final.missing_defenses)}",
+                            "error")
+                    self.tab_generation.log(
+                        f"{'─' * 50}", "info")
 
                 # ── v2.10:P2-#7 跨章节奏雷达(每 5 章触发,看历史 5 章) ──
                 # 必须 finalize 之后调,因为 check_pacing_window 用 self.history
