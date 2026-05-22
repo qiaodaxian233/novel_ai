@@ -307,6 +307,22 @@ def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
         navigationButtons: false,
       }},
     }};
+    // vis-network 把 string title 当纯文本显示,需转 DOM Element 才渲染 HTML
+    data.nodes.forEach(function(n) {{
+      if (typeof n.title === 'string') {{
+        var el = document.createElement('div');
+        el.innerHTML = n.title;
+        el.style.lineHeight = '1.6';
+        n.title = el;
+      }}
+    }});
+    data.edges.forEach(function(e) {{
+      if (typeof e.title === 'string') {{
+        var el = document.createElement('div');
+        el.innerHTML = e.title;
+        e.title = el;
+      }}
+    }});
     var network = new vis.Network(container, data, options);
     // 稳定后:关物理 + 显式 fit 一次,保证节点居中铺满
     network.once('stabilizationIterationsDone', function () {{
