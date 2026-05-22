@@ -364,19 +364,15 @@ PROMPTS = {
         '{{"tension":7,"satisfaction":8,"emotion":3,"warmth":2,"summary":"主角绝境反杀,节奏紧张爽感拉满"}}'
     ),
 
-    "reader_panel": (
-        "你要模拟3种不同类型的读者,分别对这章小说写一句话评论。\n\n"
-        "读者A【追爽文的】: 只关心爽不爽、打脸够不够狠、节奏快不快。不爽就弃书。\n"
-        "读者B【追感情线的】: 只关心CP互动、感情推进、虐不虐心。没糖就弃书。\n"
-        "读者C【挑BUG的】: 逻辑控,专挑设定矛盾、人设崩塌、时间线错误。有硬伤就弃书。\n\n"
+        "reader_panel": (
+        "你要模拟以下几种读者,分别对这章小说写一句话评论。\n\n"
+        "{reader_descriptions}\n\n"
         "章节正文:\n{content}\n\n"
-        "请直接输出严格 JSON,不要任何前后缀,格式:\n"
-        '{{"reader_a":{{"stay":true,"comment":"反转够狠,看爽了"}},'
-        '"reader_b":{{"stay":true,"comment":"CP终于有进展,但糖太少"}},'
-        '"reader_c":{{"stay":true,"comment":"第3段时间线和前面对不上"}}}}'
+        "请直接输出严格 JSON,不要任何前后缀。每个读者一个对象,格式:\n"
+        '{{{reader_json_example}}}'
     ),
 
-        "ab_rewrite": (
+"ab_rewrite": (
         "你是小说创作大师。下面是一章小说的正文。"
         "请用完全不同的写法重写这一章,保留核心剧情和人物,但改变:\n"
         "- 开头方式(换一种切入角度)\n"

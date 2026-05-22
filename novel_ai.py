@@ -9570,7 +9570,7 @@ class MainWindow(QMainWindow):
         show_plot_timeline(self, self.chapters, canon_items)
 
     def _run_reader_panel(self):
-        """👥 模拟读者评审 — 3种读者对当前章节评论"""
+        """👥 模拟读者评审 — 选择读者类型,动态构建提示词"""
         text = ""
         try:
             text = self.tab_editor.content_edit.toPlainText().strip()
@@ -9579,35 +9579,22 @@ class MainWindow(QMainWindow):
         if not text:
             QMessageBox.information(self, "读者评审", "当前章节为空")
             return
-        prompt = PROMPTS["reader_panel"].format(content=text[:6000])
+        from ui.reader_panel import ReaderSelectDialog, build_reader_prompt
+        dlg = ReaderSelectDialog(self)
+        if dlg.exec_() != dlg.Accepted:
+            return
+        self._reader_panel_keys = dlg.selected
+        prompt = build_reader_prompt(dlg.selected, text)
+        count = len(dlg.selected)
+        self.tab_generation.log(f"👥 正在模拟 {count} 种读者评审...", "info")
         self._send_to_ai(prompt, "读者评审", target="reader_panel")
 
     def _on_reader_panel_response(self, content):
         """处理读者评审结果"""
-        import json as _json
-        raw = (content or "").strip()
-        import re as _re
-        raw = _re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=_re.I | _re.M).strip()
-        jm = _re.search(r"\{[\s\S]*\}", raw)
-        if not jm:
-            QMessageBox.information(self, "读者评审", f"AI 返回:\n{content[:500]}")
-            return
-        try:
-            data = _json.loads(jm.group(0))
-        except Exception:
-            QMessageBox.information(self, "读者评审", f"解析失败:\n{content[:500]}")
-            return
-        lines = ["👥 模拟读者评审团\n"]
-        for key, label, emoji in [
-            ("reader_a", "追爽文的读者", "⚡"),
-            ("reader_b", "追感情线的读者", "💕"),
-            ("reader_c", "挑BUG的读者", "🔍"),
-        ]:
-            r = data.get(key, {})
-            stay = "✅ 继续追" if r.get("stay", True) else "❌ 弃书"
-            comment = r.get("comment", "无评论")
-            lines.append(f"{emoji} {label}: {stay}\n   「{comment}」\n")
-        QMessageBox.information(self, "👥 读者评审团", "\n".join(lines))
+        from ui.reader_panel import parse_reader_response
+        keys = getattr(self, "_reader_panel_keys", ["shuang", "love", "logic"])
+        result = parse_reader_response(content, keys)
+        QMessageBox.information(self, "👥 读者评审团", result)
 
     def _convert_to_script(self):
         """🎬 把当前章节转为短剧剧本"""
