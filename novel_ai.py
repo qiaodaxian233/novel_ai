@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.11"
+APP_VERSION = "v2.12"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -852,7 +852,7 @@ class MainWindow(QMainWindow):
         self.tab_settings.ai_group.buttonClicked.connect(self._on_ai_changed)
         # v1.63:上下文设置变化 → 重算字数预估
         try:
-            self.tab_settings.ctx_settings_changed.connect(
+            self.tab_generation.ctx_settings_changed.connect(
                 self._update_ctx_estimate)
         except Exception:
             pass
@@ -2217,7 +2217,7 @@ class MainWindow(QMainWindow):
             "把章节正文 + 13 法各项弱点 + 改写建议发给 AI,让它按 13 法重写本章。\n"
             "完成后修复版本会自动覆盖当前章节(原版本通过项目备份找回)。")
         btn_close = QPushButton("先关掉(我手动改)")
-        btn_close.setStyleSheet("QPushButton { background:#888; padding:8px 16px; }")
+        btn_close.setStyleSheet("QPushButton { background:#888; color:white; padding:8px 16px; }")
 
         # 整体分数不太差(>=85)或没拿到 AI 数据 → 不强推
         overall = (ai_data or {}).get("overall_score", 0)
@@ -2802,7 +2802,7 @@ class MainWindow(QMainWindow):
             "把章节正文 + 失败项 + 建议发给 AI,让它直接重写有问题的部分。\n"
             "完成后修复版本会自动覆盖当前章节内容(原版本通过项目备份找回:菜单 → 🕓 恢复历史版本)。")
         btn_close = QPushButton("先关掉(我手动改)")
-        btn_close.setStyleSheet("QPushButton { background:#888; padding:8px 16px; }")
+        btn_close.setStyleSheet("QPushButton { background:#888; color:white; padding:8px 16px; }")
 
         # 失败项太少时不必修复
         if not failed:
@@ -4265,7 +4265,7 @@ class MainWindow(QMainWindow):
         
         # 读取配置(找 CreationSettings,失败用默认值)
         try:
-            cfg = self.tab_settings.get_ctx_config()
+            cfg = self.tab_generation.get_ctx_config()
         except Exception:
             from PyQt5.QtCore import QSettings
             qs = QSettings("NovelAI", "CreationSettings")
@@ -4381,11 +4381,11 @@ class MainWindow(QMainWindow):
           · 章节列表变更(可在 update_chapter_list 末尾调一次)
         """
         try:
-            cfg = self.tab_settings.get_ctx_config()
+            cfg = self.tab_generation.get_ctx_config()
         except Exception:
             return
         
-        lbl = getattr(self.tab_settings, "prev_ctx_estimate", None)
+        lbl = getattr(self.tab_generation, "prev_ctx_estimate", None)
         if lbl is None:
             return
         

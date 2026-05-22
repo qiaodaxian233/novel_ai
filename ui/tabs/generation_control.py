@@ -27,6 +27,7 @@ except ImportError:
 class GenerationControl(QWidget):
     """生成控制页(Selenium 模式 - 挂载真实浏览器)"""
     log_signal = pyqtSignal(str, str)
+    ctx_settings_changed = pyqtSignal()  # v2.12: 从 CreationSettings 迁入
 
     def __init__(self):
         super().__init__()
@@ -197,6 +198,98 @@ class GenerationControl(QWidget):
         glay.addWidget(crit_box)
         layout.addWidget(gbox)
 
+        # ── v2.12:📖 一致性上下文(从 CreationSettings 迁入,更贴合"生成控制"语义)──
+        from PyQt5.QtCore import QSettings as _QS_ctx
+        _qs_ctx = _QS_ctx("NovelAI", "CreationSettings")
+
+        ctx_box = QGroupBox("📖 一致性上下文(注入到下章 prompt)")
+        ctx_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        ctx_lay = QVBoxLayout(ctx_box)
+
+        # 行 1:完整正文注入章数
+        ctx_r0 = QHBoxLayout()
+        ctx_r0.addWidget(QLabel("完整正文注入【最近几章】:"))
+        self.prev_chapters_n = QSpinBox()
+        self.prev_chapters_n.setRange(1, 10)
+        self.prev_chapters_n.setSingleStep(1)
+        self.prev_chapters_n.setValue(
+            max(1, min(10, _qs_ctx.value("prev_chapters_n", 1, type=int))))
+        self.prev_chapters_n.setToolTip(
+            "生成下一章时,把倒数最近【N 章】的正文塞进 prompt。\n"
+            "默认 1 章(只塞上一章)。\n\n"
+            "推荐值:\n"
+            "  · 短篇 / 内存小:1 章\n"
+            "  · 一般网文:1~2 章\n"
+            "  · 多线索 / 复杂剧情:3~5 章\n"
+            "  · 注意:章数 × 每章字数太大会爆 AI 上下文")
+        ctx_r0.addWidget(self.prev_chapters_n)
+        ctx_r0.addWidget(QLabel("章"))
+        ctx_r0.addStretch()
+        ctx_lay.addLayout(ctx_r0)
+
+        # 行 2:单章末尾字数
+        ctx_r1 = QHBoxLayout()
+        ctx_r1.addWidget(QLabel("每章最多保留末尾:"))
+        self.prev_tail_chars = QSpinBox()
+        self.prev_tail_chars.setRange(500, 8000)
+        self.prev_tail_chars.setSingleStep(500)
+        _saved = _qs_ctx.value("prev_chapter_tail_chars", 2500, type=int)
+        self.prev_tail_chars.setValue(max(500, min(8000, _saved)))
+        self.prev_tail_chars.setToolTip(
+            "每章注入时,若超过这么多字则只保留末尾 N 字(节省 token)。\n"
+            "让 AI 看到人物语气 / 动作惯性 / 情节细节,保持一致性。\n\n"
+            "推荐值:2500 字(主流大模型 context 够用,内容也够)\n"
+            "字数越大 → 一致性越好 / token 消耗越多")
+        self.prev_tail_chars.valueChanged.connect(
+            lambda v: _QS_ctx("NovelAI", "CreationSettings").setValue(
+                "prev_chapter_tail_chars", v))
+        ctx_r1.addWidget(self.prev_tail_chars)
+        ctx_r1.addWidget(QLabel("字 / 章"))
+        ctx_r1.addStretch()
+        ctx_lay.addLayout(ctx_r1)
+
+        # 行 3:再往前用摘要开关
+        ctx_r2 = QHBoxLayout()
+        self.prev_use_summaries = QCheckBox(
+            "再往前的章节用【摘要】注入(每章 ≤200 字,有摘要才注入)")
+        self.prev_use_summaries.setChecked(
+            _qs_ctx.value("prev_use_summaries", True, type=bool))
+        self.prev_use_summaries.setToolTip(
+            "✓ 勾选:N 章之前的所有章节,各取 summary 字段前 200 字注入,串起主线脉络\n"
+            "✗ 取消:N 章之前完全不注入(节省 token,但容易忘早期设定)\n\n"
+            "提示:章节没有 summary 字段也不会注入,可在编辑器里手动加 / AI 生成。")
+        self.prev_use_summaries.stateChanged.connect(
+            lambda s: _QS_ctx("NovelAI", "CreationSettings").setValue(
+                "prev_use_summaries", bool(s)))
+        ctx_r2.addWidget(self.prev_use_summaries)
+        ctx_r2.addStretch()
+        ctx_lay.addLayout(ctx_r2)
+
+        # 字数预估 label(实时随 spin 变化)
+        self.prev_ctx_estimate = QLabel("📊 预估注入字数:—(写完第 1 章后实时显示)")
+        self.prev_ctx_estimate.setStyleSheet(
+            "color: #1a4480; font-weight: bold; "
+            "padding: 4px 8px; background: #eef4fb; border-radius: 3px;")
+        self.prev_ctx_estimate.setWordWrap(True)
+        ctx_lay.addWidget(self.prev_ctx_estimate)
+
+        # 联动:控件变化 → 持久化 + 触发预估更新(信号上抛 MainWindow)
+        self.prev_chapters_n.valueChanged.connect(
+            lambda v: _QS_ctx("NovelAI", "CreationSettings").setValue(
+                "prev_chapters_n", v))
+        self.prev_chapters_n.valueChanged.connect(self._emit_ctx_changed)
+        self.prev_tail_chars.valueChanged.connect(self._emit_ctx_changed)
+        self.prev_use_summaries.stateChanged.connect(self._emit_ctx_changed)
+
+        _hint = QLabel(
+            "ℹ 默认配置:最近 1 章完整 + 每章 2500 字上限 + 早期摘要。\n"
+            "  · 衔接不上 / 语气漂移 → 加大『最近几章』或『字数上限』\n"
+            "  · AI 报错 token 溢出 / 章节质量下降 → 减小这两项")
+        _hint.setStyleSheet("color: #888; font-size: 11px;")
+        _hint.setWordWrap(True)
+        ctx_lay.addWidget(_hint)
+        layout.addWidget(ctx_box)
+
         # ---- E 模块:对话槽管理 ----
         self.conv_switcher = ConversationSwitcher()
         # 保存当前按钮 & 切换按钮由 MainWindow 接管(需要访问 url_input / worker)
@@ -348,6 +441,25 @@ class GenerationControl(QWidget):
             "canon":      self.chk_crit_canon.isChecked(),
             "rhythm":     self.chk_crit_rhythm.isChecked(),
             "character":  self.chk_crit_char.isChecked(),
+        }
+
+    # ── v2.12:一致性上下文方法(从 CreationSettings 迁入)──
+    def _emit_ctx_changed(self, *args):
+        """3 个上下文相关控件变化时,上抛信号给 MainWindow 重算预估字数。"""
+        try:
+            self.ctx_settings_changed.emit()
+        except Exception:
+            pass
+
+    def get_ctx_config(self):
+        """返回当前上下文注入配置 dict,供 _build_prev_context 使用。"""
+        return {
+            "chapters_n": int(self.prev_chapters_n.value())
+                if hasattr(self, "prev_chapters_n") else 1,
+            "tail_chars": int(self.prev_tail_chars.value())
+                if hasattr(self, "prev_tail_chars") else 2500,
+            "use_summaries": bool(self.prev_use_summaries.isChecked())
+                if hasattr(self, "prev_use_summaries") else True,
         }
 
     def _append_log(self, msg, level="info"):

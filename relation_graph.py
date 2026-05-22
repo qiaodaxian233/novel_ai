@@ -37,13 +37,13 @@ except ImportError:
 # 节点颜色:按 tbl_chars 的"角色定位"列
 ROLE_COLORS: dict[str, dict[str, str]] = {
     "主角":   {"bg": "#FFD700", "border": "#B8860B", "font": "#000000"},  # 金
-    "女主":   {"bg": "#FF80AB", "border": "#C2185B", "font": "#FFFFFF"},  # 粉
-    "反派":   {"bg": "#8B0000", "border": "#5C0000", "font": "#FFFFFF"},  # 深红
-    "导师":   {"bg": "#1E88E5", "border": "#0D47A1", "font": "#FFFFFF"},  # 蓝
-    "配角":   {"bg": "#9E9E9E", "border": "#616161", "font": "#FFFFFF"},  # 灰
+    "女主":   {"bg": "#FF80AB", "border": "#C2185B", "font": "#4A0028"},  # 粉 — 深玫红字(dot 标签在浅背景上)
+    "反派":   {"bg": "#8B0000", "border": "#5C0000", "font": "#4A0000"},  # 深红 — 暗红字
+    "导师":   {"bg": "#1E88E5", "border": "#0D47A1", "font": "#0D2B5E"},  # 蓝 — 深蓝字
+    "配角":   {"bg": "#9E9E9E", "border": "#616161", "font": "#333333"},  # 灰 — 深灰字
     "路人":   {"bg": "#CFD8DC", "border": "#90A4AE", "font": "#000000"},  # 浅灰
 }
-DEFAULT_ROLE_COLOR = {"bg": "#B0BEC5", "border": "#78909C", "font": "#000000"}
+DEFAULT_ROLE_COLOR = {"bg": "#B0BEC5", "border": "#78909C", "font": "#263238"}
 
 # 边颜色:按 tbl_relations 的"关系类型"列 (支持别名)
 RELATION_COLORS: dict[str, str] = {
@@ -213,7 +213,7 @@ def build_graph_data(
 # ── HTML 模板 ─────────────────────────────────────────────
 def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
     """生成内嵌 HTML。vendor_url 是 vis-network.min.js 的相对 url"""
-    data_json = json.dumps({"nodes": nodes, "edges": edges}, ensure_ascii=False)
+    data_json = json.dumps({"nodes": nodes, "edges": edges}, ensure_ascii=True)
     return f"""<!DOCTYPE html>
 <html>
 <head>
