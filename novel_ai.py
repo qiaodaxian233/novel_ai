@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.12.4"
+APP_VERSION = "v2.12.5"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1446,6 +1446,11 @@ class MainWindow(QMainWindow):
         # v1.97 BUG-071:主 dispatch 也按 task_id 取 meta,跟 pangu/laodao 路由一致
         meta = self._pending_task_targets.get(task_id, {})
         target = meta.get("target")
+        # BUG-077 诊断:如果 target 为空但有活跃审计链,说明路由可能丢失
+        if not target and getattr(self, "_audit_state", None):
+            print(f"[BUG-077 诊断] task_id={task_id!r} target=None "
+                  f"但 _audit_state 活跃! pending_keys={list(self._pending_task_targets.keys())}",
+                  flush=True)
         # ★ 关键:先 pop pending,handler 才能在内部重新设置(链式任务依赖此)
         self._pending_task_targets.pop(task_id, None)
 
@@ -1713,8 +1718,33 @@ class MainWindow(QMainWindow):
             self._on_skill_response(content, meta)
 
         else:
-            # 没指定目标,弹窗让用户选
-            self._popup_choose_target(content)
+            # ── BUG-077 安全网:如果当前有活跃的审计链(_audit_state),
+            #    说明响应路由丢失了,把响应喂回审计链而不是丢到剪贴板 ──
+            _ast = getattr(self, "_audit_state", None)
+            if _ast and _ast.get("remaining") is not None:
+                self.tab_generation.log(
+                    f"⚠ BUG-077 安全网触发:task={task_id!r} target={target!r} "
+                    f"落到兜底,但有活跃审计链 → 尝试喂回 _continue_ai_audit_chain",
+                    "warn")
+                # 尝试解析为评分响应(节奏/人设),喂回审计链
+                try:
+                    self._on_critique_score_response(
+                        content,
+                        "rhythm" if "节奏" in (task_id or "") else "character",
+                        _ast["meta"].get("ch_num", 0))
+                except Exception as _e77:
+                    self.tab_generation.log(
+                        f"  BUG-077 喂回失败:{_e77},强制推进审计链", "warn")
+                    self._continue_ai_audit_chain()
+            # ── 也检查后置流水线是否卡住 ──
+            elif getattr(self, "_post_chapter_pipeline", None):
+                self.tab_generation.log(
+                    f"⚠ BUG-077 安全网:task={task_id!r} 落到兜底,"
+                    f"但有活跃后置流水线 → 推进下一步", "warn")
+                QTimer.singleShot(500, self._run_next_post_chapter_step)
+            else:
+                # 真的没指定目标,复制到剪贴板
+                self._popup_choose_target(content)
 
     def _handle_chapter_response(self, content, meta):
         """处理章节生成回复 → 多维校验 → 死磕重写 / 入库 + 后置链"""
