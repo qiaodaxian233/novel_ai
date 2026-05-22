@@ -133,6 +133,7 @@ from ui.story_outline import StoryOutline
 from ui.debug_panel import DebugPanel
 from ui.emotion_curve import EmotionCurvePanel
 from ui.plot_timeline import show_plot_timeline
+from ui.ab_compare import ABCompareDialog
 
 # v2.03 P4:DEFAULT_SKILLS 数据 + 8 个 Tab 类(共 3325 行)
 from core.default_skills import DEFAULT_SKILLS
@@ -635,6 +636,10 @@ class MainWindow(QMainWindow):
         a_script.triggered.connect(self._convert_to_script)
         a_script.setToolTip("把当前章节改编成竖屏短剧剧本格式")
         tm.addAction(a_script)
+        a_ab = QAction("🤖 A/B 对比(重新生成)", self)
+        a_ab.triggered.connect(self._start_ab_compare)
+        a_ab.setToolTip("对当前章节重新生成一个版本,左右对比选更好的")
+        tm.addAction(a_ab)
         tm.addAction(a_override)
         tm.addSeparator()
         a_clean_meta = QAction("🧹 扫描清理所有章节尾部元信息(本章完/钩子/选项)", self)
@@ -1518,6 +1523,8 @@ class MainWindow(QMainWindow):
             self._on_reader_panel_response(content)
         elif target == "novel_to_script":
             self._on_script_response(content)
+        elif target == "ab_compare":
+            self._on_ab_compare_response(content)
         elif target == "conv_restore":
             # 记忆恢复确认回复 — 只记日志
             self.tab_generation.log(
@@ -9623,7 +9630,6 @@ class MainWindow(QMainWindow):
         if not content or not content.strip():
             QMessageBox.warning(self, "转剧本", "AI 未返回剧本内容")
             return
-        # 弹窗显示 + 复制到剪贴板
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QPushButton, QHBoxLayout
         dlg = QDialog(self)
         dlg.setWindowTitle("🎬 短剧剧本")
@@ -9644,6 +9650,73 @@ class MainWindow(QMainWindow):
         lay.addLayout(btn_row)
         self.tab_generation.log(f"🎬 剧本生成完成({len(content)}字符)", "success")
         dlg.exec_()
+
+    # ── A/B 对比 ──
+
+    def _start_ab_compare(self):
+        """🤖 对当前章节重新生成一版，与现有版本对比"""
+        ch_idx = getattr(self.tab_editor, "current_index", -1)
+        if ch_idx < 0 or ch_idx >= len(self.chapters):
+            QMessageBox.information(self, "A/B 对比", "请先选择一个章节")
+            return
+        current_text = self.chapters[ch_idx].get("content", "")
+        if not current_text.strip():
+            QMessageBox.information(self, "A/B 对比", "当前章节为空")
+            return
+
+        # 保存当前版本
+        self._ab_compare_data = {
+            "ch_idx": ch_idx,
+            "version_a": current_text,
+            "ch_num": ch_idx + 1,
+        }
+
+        ch_num = ch_idx + 1
+        self.tab_generation.log(f"🤖 A/B 对比:正在为第{ch_num}章生成 B 版本...", "info")
+
+        # 用"重写"提示词生成另一版本
+        prompt = PROMPTS["ab_rewrite"].format(content=current_text[:8000])
+        self._send_to_ai(prompt, f"A/B对比-第{ch_num}章", target="ab_compare")
+
+    def _on_ab_compare_response(self, content):
+        """B 版本生成完毕,弹出对比窗口"""
+        data = getattr(self, "_ab_compare_data", None)
+        if not data:
+            return
+        ch_num = data["ch_num"]
+        ch_idx = data["ch_idx"]
+        version_a = data["version_a"]
+        version_b = (content or "").strip()
+
+        if not version_b:
+            QMessageBox.warning(self, "A/B 对比", "B 版本生成失败")
+            return
+
+        self.tab_generation.log(
+            f"🤖 A/B 对比:B 版本生成完成({len(version_b)}字符)", "success")
+
+        dlg = ABCompareDialog(
+            f"A 版(当前) — 第{ch_num}章",
+            version_a,
+            f"B 版(新生成) — 第{ch_num}章",
+            version_b,
+            parent=self,
+        )
+        dlg.exec_()
+
+        if dlg.picked == ABCompareDialog.PICK_B:
+            # 用 B 版替换
+            self.chapters[ch_idx]["content"] = version_b
+            self.tab_editor.content_edit.setPlainText(version_b)
+            self.tab_generation.log(
+                f"✅ 已用 B 版替换第{ch_num}章", "success")
+        elif dlg.picked == ABCompareDialog.PICK_A:
+            self.tab_generation.log(
+                f"✅ 保留 A 版(第{ch_num}章不变)", "info")
+        else:
+            self.tab_generation.log("取消对比", "info")
+
+        self._ab_compare_data = None
 
     def _show_emotion_curve(self):
         """📊 查看全书情绪曲线"""
