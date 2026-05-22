@@ -214,8 +214,12 @@ class GenerationControl(QWidget):
         self.chk_crit_rhythm.setChecked(False)
         self.chk_crit_char = QCheckBox("人设分")
         self.chk_crit_char.setChecked(False)
+        self.chk_crit_ai_style = QCheckBox("AI文风")
+        self.chk_crit_ai_style.setChecked(True)
+        self.chk_crit_ai_style.setToolTip("写完后AI自检文风:句子节奏/段落均匀/细节/角色区分/情绪/留白")
         for w in (self.chk_crit_words, self.chk_crit_hook,
-                  self.chk_crit_canon, self.chk_crit_rhythm, self.chk_crit_char):
+                  self.chk_crit_canon, self.chk_crit_rhythm, self.chk_crit_char,
+                  self.chk_crit_ai_style):
             orow2.addWidget(w)
         orow2.addStretch()
         opt_lay.addLayout(orow2)
@@ -323,6 +327,7 @@ class GenerationControl(QWidget):
             ("crit.canon", self.chk_crit_canon, "isChecked", "setChecked", "stateChanged", True),
             ("crit.rhythm", self.chk_crit_rhythm, "isChecked", "setChecked", "stateChanged", False),
             ("crit.char", self.chk_crit_char, "isChecked", "setChecked", "stateChanged", False),
+            ("crit.ai_style", self.chk_crit_ai_style, "isChecked", "setChecked", "stateChanged", True),
         ]
         for attr in ("chk_autosave_proj", "chk_autosave_txt", "chk_auto_grab"):
             if hasattr(self, attr):
@@ -379,6 +384,7 @@ class GenerationControl(QWidget):
             "canon":      self.chk_crit_canon.isChecked(),
             "rhythm":     self.chk_crit_rhythm.isChecked(),
             "character":  self.chk_crit_char.isChecked(),
+            "ai_style":   self.chk_crit_ai_style.isChecked(),
         }
 
     def _emit_ctx_changed(self, *args):

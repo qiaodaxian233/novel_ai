@@ -399,7 +399,6 @@ class CharacterScoreStep(PipelineStep):
 
     def run(self, ctx: PipelineContext, done):
         from novel_ai import PROMPTS
-        # v1.23 BUG-041:用统一接口,合并 6 库 + memory prose
         chars = self._mw.get_unified_chars_summary() or "(暂无)"
         prompt = PROMPTS["critique_character"].format(
             characters=chars, content=ctx.content[:6000])
@@ -414,6 +413,36 @@ class CharacterScoreStep(PipelineStep):
 
         self._mw._send_to_ai_with_callback(
             prompt, f"人设稽核-第{ctx.ch_num}章", on_response)
+
+
+class AIStyleScoreStep(PipelineStep):
+    """AI 文风巡检(< 阈值 → 加入 issues,触发死磕重写)"""
+    name = "ai_style_score"
+    threshold = 7
+
+    def __init__(self, main_window):
+        self._mw = main_window
+
+    @property
+    def enabled(self) -> bool:
+        return self._mw.tab_generation.critique_config().get("ai_style", False)
+
+    def run(self, ctx: PipelineContext, done):
+        from novel_ai import PROMPTS
+        prompt = PROMPTS["critique_ai_style"].format(content=ctx.content[:6000])
+
+        def on_response(content_resp):
+            score, reason = RhythmScoreStep._parse_score(content_resp)
+            ctx.extras["ai_style_score"] = score
+            self._mw.tab_generation.log(
+                f"🔍 AI文风巡检: {score}/10 — {reason[:100]}", "info")
+            if score < self.threshold:
+                ctx.add_issue(
+                    f"AI文风评分 {score}/10 低于阈值 {self.threshold}:{reason[:80]}")
+            done()
+
+        self._mw._send_to_ai_with_callback(
+            prompt, f"AI文风巡检-第{ctx.ch_num}章", on_response)
 
 
 # ======================================================================
@@ -587,6 +616,7 @@ class GenerationWorkflow:
         self._registry.register("post_write", CanonAuditStep(mw),      priority=30)
         self._registry.register("post_write", RhythmScoreStep(mw),     priority=40)
         self._registry.register("post_write", CharacterScoreStep(mw),  priority=50)
+        self._registry.register("post_write", AIStyleScoreStep(mw),    priority=55)
 
         # POST_CHAIN 每章动态构建(因为 skill 列表可变),由 _build_post_chain() 处理
 
