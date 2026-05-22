@@ -109,20 +109,17 @@ class TestDictFieldExists(unittest.TestCase):
             "grab_response 没用字典写入(key='手动抓取')")
 
     def test_dict_used_in_audit_dead_code(self):
-        """_audit_resume dead code 也改成字典(保持代码一致)"""
-        # rhythm 路径
+        """BUG-077 终极修复:rhythm/character 用直接回调,不再写 _pending_task_targets"""
+        # rhythm 路径:用 _critique_audit_callback
         self.assertIn(
             "_label_rhythm = f\"节奏稽核-第{ch_num}章\"",
             SOURCE)
         self.assertIn(
-            "self._pending_task_targets[_label_rhythm]",
+            "_critique_audit_callback",
             SOURCE)
-        # character 路径
+        # character 路径:同上
         self.assertIn(
             "_label_char = f\"人设稽核-第{ch_num}章\"",
-            SOURCE)
-        self.assertIn(
-            "self._pending_task_targets[_label_char]",
             SOURCE)
 
 
