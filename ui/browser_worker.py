@@ -52,6 +52,12 @@ except ImportError:
     Keys = None
     WebDriverException = Exception
 
+# v2.11 BUG-076 修复:P6 拆分时 AST 抽取漏了这个 module-level 函数。
+# BrowserWorker 在 _dispatch_send / _send_prompt / _build_send_xpath 等 4 处用到,
+# 静态测试没触发(只在真实派发 prompt 时进入这些路径),实战立刻 NameError。
+# 跟 BUG-074 同根因(P3~P6 拆分留下的隐藏地雷)。
+from core.site_profiles import _profile_for_url
+
 
 class BrowserWorker(QObject):
     """
