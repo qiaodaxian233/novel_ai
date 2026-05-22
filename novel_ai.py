@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.12.6"
+APP_VERSION = "v2.12.7"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1337,9 +1337,6 @@ class MainWindow(QMainWindow):
         # 记录这次任务的目标位置(由 _on_response_received 处理回填)
         # v1.97 BUG-071:字典写入 — key=label(== worker 侧 task_id),避免并发任务串台
         self._pending_task_targets[label] = {"target": target, "label": label, **extra}
-        # BUG-077 追踪:写入时打印,方便对比响应时的读取
-        print(f"[pending WRITE] key={label!r} target={target!r} "
-              f"dict_keys={list(self._pending_task_targets.keys())}", flush=True)
         # 应用人类延迟
         type_delay = 30 if self.tab_settings.delay_check.isChecked() else 5
         # 投递任务
@@ -1474,10 +1471,10 @@ class MainWindow(QMainWindow):
                     _ast = self._audit_state or {}
                     meta = {"target": target,
                             "ch_num": _ast.get("meta", {}).get("ch_num", 0)}
-        # BUG-077 追踪日志(保留,帮助后续定位根因)
-        print(f"[pending READ] task_id={task_id!r} target={target!r} "
-              f"meta_keys={list(meta.keys()) if meta else '(empty)'} "
-              f"dict_keys={list(self._pending_task_targets.keys())}", flush=True)
+        # BUG-077 追踪(仅异常时打印)
+        if not target:
+            print(f"[BUG-077] task_id={task_id!r} target=None "
+                  f"dict_keys={list(self._pending_task_targets.keys())}", flush=True)
         # ★ 关键:先 pop pending,handler 才能在内部重新设置(链式任务依赖此)
         self._pending_task_targets.pop(task_id, None)
 
@@ -1991,6 +1988,9 @@ class MainWindow(QMainWindow):
 
         # 链式推进
         if meta.get("chain_post"):
+            QTimer.singleShot(500, self._run_next_post_chapter_step)
+        elif getattr(self, "_post_chapter_pipeline", None):
+            # BUG-077 加固:meta 丢失时通过 pipeline 直接推进
             QTimer.singleShot(500, self._run_next_post_chapter_step)
         # workflow_pipeline 回调
         done_cb = meta.get("_done_cb")
