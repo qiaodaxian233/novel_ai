@@ -209,10 +209,10 @@ class CharacterLibrary(QWidget):
         # 表格
         from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
         # v1.93 BUG-067:加"退场章节"列(放 first_ch 之后,列 8)
-        self.tbl_chars = QTableWidget(0, 9)
+        self.tbl_chars = QTableWidget(0, 10)
         self.tbl_chars.setHorizontalHeaderLabels([
             "姓名", "角色定位", "外貌", "性格", "口头禅/标志",
-            "能力/职业", "当前状态", "首次出场", "退场章节"
+            "能力/职业", "说话风格", "当前状态", "首次出场", "退场章节"
         ])
         self.tbl_chars.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.tbl_chars.horizontalHeader().setStretchLastSection(True)
@@ -2900,9 +2900,10 @@ class CharacterLibrary(QWidget):
         
         # 2. 角色档案(只取主角+前5个配角,避免提示词过长)
         chars = []
+        _ncols = self.tbl_chars.columnCount()
         for r in range(self.tbl_chars.rowCount()):
             row = [self.tbl_chars.item(r, c).text() if self.tbl_chars.item(r, c) else "" 
-                   for c in range(8)]
+                   for c in range(_ncols)]
             if not row[0].strip():
                 continue
             chars.append(row)
@@ -2912,13 +2913,22 @@ class CharacterLibrary(QWidget):
             # 主角和女主优先
             chars.sort(key=lambda x: 0 if "主角" in x[1] or "女主" in x[1] else 1)
             for row in chars[:8]:
-                name, role, look, pers, mark, ability, state, _ = row
+                # 兼容旧数据(9列)和新数据(10列)
+                name = row[0] if len(row) > 0 else ""
+                role = row[1] if len(row) > 1 else ""
+                look = row[2] if len(row) > 2 else ""
+                pers = row[3] if len(row) > 3 else ""
+                mark = row[4] if len(row) > 4 else ""
+                ability = row[5] if len(row) > 5 else ""
+                speech = row[6] if len(row) > 6 else ""
+                state = row[7] if len(row) > 7 else ""
                 line = f"  • {name}({role}): "
                 bits = []
                 if look:    bits.append(f"外貌-{look}")
                 if pers:    bits.append(f"性格-{pers}")
                 if mark:    bits.append(f"标志-{mark}")
                 if ability: bits.append(f"能力-{ability}")
+                if speech:  bits.append(f"说话风格-{speech}")
                 if state:   bits.append(f"状态-{state}")
                 line += "; ".join(bits)
                 char_lines.append(line)

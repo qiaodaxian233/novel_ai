@@ -195,7 +195,7 @@ class TestCharLibrarySourceUI(unittest.TestCase):
         # 找 _build_characters_tab 段
         idx = self.src.find("def _build_characters_tab")
         chunk = self.src[idx:idx + 3000]
-        self.assertIn('QTableWidget(0, 9)', chunk, "列数必须 9(原 8 + last_ch)")
+        self.assertIn('QTableWidget(0, 10)', chunk, "列数必须 10(原 9 + 说话风格)")
         self.assertNotIn('QTableWidget(0, 8)', chunk, "不应残留 8 列定义")
 
     def test_table_header_includes_last_ch_label(self):

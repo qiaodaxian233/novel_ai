@@ -121,7 +121,7 @@ class TestNoCollisionWithPreviousMilestones(unittest.TestCase):
         self.assertIn("def _on_check_duplicate_names", self.src)
         self.assertIn('"last_ch"', self.src)
         # tbl_chars 列数仍是 9
-        self.assertIn('QTableWidget(0, 9)', self.src)
+        self.assertIn('QTableWidget(0, 10)', self.src)
 
 
 class TestAppVersionBumped(unittest.TestCase):

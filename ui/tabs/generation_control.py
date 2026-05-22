@@ -192,8 +192,11 @@ class GenerationControl(QWidget):
         self.use_attachment = QCheckBox("📎 走附件(绕审核)")
         self.use_attachment.setChecked(True)
         self.use_attachment.setToolTip("推荐:通过附件发送,绕过镜像站审核")
+        self.chk_auto_tts = QCheckBox("🔊 自动朗读")
+        self.chk_auto_tts.setChecked(False)
+        self.chk_auto_tts.setToolTip("每章入库后自动朗读,按顺序排队播放")
         for w in (self.auto_save_project, self.auto_save,
-                  self.auto_grab, self.use_attachment):
+                  self.auto_grab, self.use_attachment, self.chk_auto_tts):
             orow1.addWidget(w)
         orow1.addStretch()
         self.btn_clear = QPushButton("🗑 清除日志")

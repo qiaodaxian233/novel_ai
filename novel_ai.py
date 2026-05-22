@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.13.8"
+APP_VERSION = "v2.13.9"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -5575,6 +5575,10 @@ class MainWindow(QMainWindow):
 
             self.chapters.append(chapter)
 
+            # 自动朗读(如果开启)
+            if self.tab_generation.chk_auto_tts.isChecked():
+                self._tts_auto_enqueue(ch_num, content)
+
             # ── 把【伏笔状态】同步到 lifespan_loops 伏笔库
             if pangu_meta:
                 self._sync_pangu_seeds_to_lifespan(pangu_meta, ch_num)
@@ -7739,6 +7743,8 @@ class MainWindow(QMainWindow):
         self._tts_worker = None
         self._tts_speed = 1.0
         self._tts_temp_dir = None
+        self._tts_auto_queue = []    # 自动朗读队列: [(ch_num, text), ...]
+        self._tts_auto_playing = False
 
     def _tts_backend_config(self):
         """读取当前 TTS 配置 → (backend_name, kwargs, voice_or_ref)"""
@@ -7957,10 +7963,16 @@ class MainWindow(QMainWindow):
                 if self._tts_queue:
                     self._play_next_chunk()
                 elif (self._tts_worker is None or not self._tts_worker.isRunning()):
-                    # 全部播完
+                    # 本章全部播完
                     self.tab_editor.btn_tts_play.setText("🔊 朗读本章")
                     self.tab_editor.btn_tts_stop.setEnabled(False)
                     self.tab_editor.lbl_tts_status.setText("✓ 播放完成")
+                    # 自动朗读队列:播下一章
+                    if self._tts_auto_queue:
+                        from PyQt5.QtCore import QTimer
+                        QTimer.singleShot(500, self._tts_auto_play_next)
+                    else:
+                        self._tts_auto_playing = False
         except Exception:
             pass
 
@@ -8028,7 +8040,75 @@ class MainWindow(QMainWindow):
         self.tab_editor.btn_tts_play.setText("🔊 朗读本章")
         self.tab_editor.btn_tts_stop.setEnabled(False)
         self.tab_editor.lbl_tts_status.setText("已停止")
+        self._tts_auto_queue.clear()
+        self._tts_auto_playing = False
         self.tab_generation.log("🔊 TTS 已停止", "info")
+
+    # ── 自动朗读队列(批量生成时按顺序读) ──
+
+    def _tts_auto_enqueue(self, ch_num, text):
+        """将章节加入自动朗读队列"""
+        if not text or not text.strip():
+            return
+        self._tts_auto_queue.append((ch_num, text.strip()))
+        self.tab_generation.log(
+            f"🔊 第{ch_num}章已加入朗读队列(队列{len(self._tts_auto_queue)}章)",
+            "info")
+        if not self._tts_auto_playing:
+            self._tts_auto_play_next()
+
+    def _tts_auto_play_next(self):
+        """从自动队列取下一章开始朗读"""
+        if not self._tts_auto_queue:
+            self._tts_auto_playing = False
+            self.tab_generation.log("🔊 自动朗读队列播放完毕", "info")
+            return
+        ch_num, text = self._tts_auto_queue.pop(0)
+        self._tts_auto_playing = True
+        self.tab_generation.log(
+            f"🔊 自动朗读第{ch_num}章({len(text)}字)", "info")
+        self._tts_play_text(text)
+
+    def _tts_play_text(self, text):
+        """直接朗读指定文本(不依赖编辑器当前内容)"""
+        backend_name, kwargs, voice = self._tts_backend_config()
+        if backend_name == "disabled":
+            self._tts_auto_queue.clear()
+            self._tts_auto_playing = False
+            return
+        try:
+            import tts_backend as _tb
+        except ImportError:
+            self._tts_auto_playing = False
+            return
+        backend = _tb.get_backend(backend_name, **kwargs)
+        if not backend.is_available():
+            self._tts_auto_playing = False
+            return
+        chunks = _tb.split_text_for_tts(text, max_chars=300)
+        if not chunks:
+            # 空文本,跳到下一章
+            if self._tts_auto_queue:
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(100, self._tts_auto_play_next)
+            else:
+                self._tts_auto_playing = False
+            return
+        import tempfile
+        if self._tts_temp_dir is None or not Path(self._tts_temp_dir).exists():
+            self._tts_temp_dir = tempfile.mkdtemp(prefix="novelai_tts_")
+        self._tts_queue.clear()
+        self._tts_chunks_total = len(chunks)
+        self._tts_chunks_done = 0
+        self.tab_editor.btn_tts_play.setText("⏸ 暂停")
+        self.tab_editor.btn_tts_stop.setEnabled(True)
+        from ui.threads import _TTSSynthThread
+        self._tts_worker = _TTSSynthThread(
+            backend, chunks, self._tts_temp_dir, self._tts_speed, voice)
+        self._tts_worker.chunk_ready.connect(self._on_tts_chunk_ready)
+        self._tts_worker.all_done.connect(self._on_tts_all_done)
+        self._tts_worker.error.connect(self._on_tts_error)
+        self._tts_worker.start()
 
     def _on_tts_speed_changed(self, speed):
         """速度滑块调整 — 只影响下一次合成,当前已合成的段保持原速"""
