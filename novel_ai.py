@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.13.1"
+APP_VERSION = "v2.13.2"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1363,16 +1363,17 @@ class MainWindow(QMainWindow):
     def _on_response_received(self, task_id, content):
         """worker 回调:某次提示词的 AI 回复已抓取完毕"""
         # ── BUG-077 终极修复:直接回调,完全绕过 dispatch ──
-        # 节奏/人设稽核用回调机制(跟 _canon_audit_callback 同模式),
-        # 不经过 _pending_task_targets 路由(该路由有不明原因的 target 丢失)
         _crit_cb = getattr(self, "_critique_audit_callback", None)
+        # 诊断:每次响应都打印回调状态(临时,定位后删)
+        self.tab_generation.log(
+            f"[诊断] 响应到达 task={task_id!r} callback={_crit_cb}", "info")
         if _crit_cb and ("稽核" in (task_id or "") or "critique" in (task_id or "").lower()):
             kind, ch_num = _crit_cb
             self._critique_audit_callback = None
             self._pending_task_targets.pop(task_id, None)
             if content and content.strip():
                 self.tab_generation.log(
-                    f"任务『{task_id}』抓取成功,{len(content)} 字符", "success")
+                    f"任务『{task_id}』抓取成功,{len(content)} 字符(回调路径)", "success")
             self._on_critique_score_response(content, kind, ch_num)
             return
         # v1.97 BUG-071:从字典按 task_id 取本任务的 meta,避免并发任务串台
@@ -1811,6 +1812,9 @@ class MainWindow(QMainWindow):
         cfg = self.tab_generation.critique_config()
 
         # ---- 是否需要 AI 稽核(Canon / 节奏 / 人设)----
+        self.tab_generation.log(
+            f"[诊断] need_ai_audit={need_ai_audit} cfg={cfg} issues={len(instant_issues)}",
+            "info")
         if need_ai_audit and meta.get("target") != "golden_three":
             # 启动 AI 稽核串联流水线
             self._start_ai_audit_chain(content, meta, instant_issues)
@@ -1878,6 +1882,8 @@ class MainWindow(QMainWindow):
             _label_rhythm = f"节奏稽核-第{ch_num}章"
             # BUG-077 终极修复:注册直接回调,完全绕过 dispatch 路由
             self._critique_audit_callback = ("rhythm", ch_num)
+            self.tab_generation.log(
+                f"[诊断] 注册回调 callback=('rhythm', {ch_num})", "info")
             prompt = PROMPTS["critique_rhythm"].format(content=content[:6000])
             self._send_to_ai(prompt, _label_rhythm,
                              target="critique_rhythm", ch_num=ch_num)
