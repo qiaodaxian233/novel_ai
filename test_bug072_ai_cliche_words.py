@@ -98,8 +98,8 @@ class TestPanguEngineForbiddenWords(unittest.TestCase):
     def test_total_count_123(self):
         from pangu_system import PanguEngine
         self.assertEqual(
-            len(PanguEngine._FORBIDDEN_WORDS), 123,
-            f"_FORBIDDEN_WORDS 总数应 123,实际 {len(PanguEngine._FORBIDDEN_WORDS)}")
+            len(PanguEngine._FORBIDDEN_WORDS), 125,
+            f"_FORBIDDEN_WORDS 总数应 125,实际 {len(PanguEngine._FORBIDDEN_WORDS)}")
 
     def test_six_new_words_in_list(self):
         from pangu_system import PanguEngine
