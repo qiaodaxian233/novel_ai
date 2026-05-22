@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.13.7"
+APP_VERSION = "v2.13.8"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -131,6 +131,7 @@ from ui.theme import ThemeManager
 from ui.conversation_switcher import ConversationSwitcher
 from ui.story_outline import StoryOutline
 from ui.debug_panel import DebugPanel
+from ui.emotion_curve import EmotionCurvePanel
 
 # v2.03 P4:DEFAULT_SKILLS 数据 + 8 个 Tab 类(共 3325 行)
 from core.default_skills import DEFAULT_SKILLS
@@ -617,6 +618,11 @@ class MainWindow(QMainWindow):
         tm.addSeparator()
         a_override = QAction("📝 手动编辑当前站点选择器...", self)
         a_override.triggered.connect(self.edit_site_profile_override)
+        tm.addAction(a_override)
+        tm.addSeparator()
+        a_emotion = QAction("📊 查看情绪曲线", self)
+        a_emotion.triggered.connect(self._show_emotion_curve)
+        tm.addAction(a_emotion)
         tm.addAction(a_override)
         tm.addSeparator()
         a_clean_meta = QAction("🧹 扫描清理所有章节尾部元信息(本章完/钩子/选项)", self)
@@ -9421,6 +9427,29 @@ class MainWindow(QMainWindow):
                 f"请关闭程序后重新打开生效。")
 
     # ==================== DOM 诊断 / 拾取工具(BUG-018 配套) ====================
+    def _show_emotion_curve(self):
+        """📊 查看全书情绪曲线"""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout
+        dlg = QDialog(self)
+        dlg.setWindowTitle("📊 情绪曲线")
+        dlg.resize(900, 400)
+        lay = QVBoxLayout(dlg)
+        panel = EmotionCurvePanel()
+        panel.load_from_chapters(self.chapters)
+        warning = panel.load_from_chapters(self.chapters)
+        lay.addWidget(panel)
+        if warning:
+            self.tab_generation.log(warning, "warn")
+        # 统计
+        scored = sum(1 for ch in self.chapters if ch.get("emotion_scores"))
+        total = len(self.chapters)
+        if scored == 0:
+            from PyQt5.QtWidgets import QLabel
+            hint = QLabel(f"暂无情绪数据(0/{total}章)。连续生成新章节后自动评分。")
+            hint.setStyleSheet("color:#999; padding:20px;")
+            lay.addWidget(hint)
+        dlg.exec_()
+
     def show_dom_diagnostics(self):
         """🔬 诊断当前 AI 网页 DOM:看每个选择器在当前页命中了多少元素"""
         if not self.worker.is_ready():

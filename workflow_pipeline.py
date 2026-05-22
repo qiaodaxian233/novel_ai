@@ -466,6 +466,52 @@ class CanonExtractStep(PipelineStep):
         done()
 
 
+class EmotionScoreStep(PipelineStep):
+    """情绪维度评分(紧张/爽感/虐心/温馨),写入章节数据供可视化"""
+    name = "emotion_score"
+
+    def __init__(self, main_window):
+        self._mw = main_window
+
+    @property
+    def enabled(self) -> bool:
+        return True  # 始终执行,不占用质检配额
+
+    def run(self, ctx: PipelineContext, done):
+        from novel_ai import PROMPTS
+        prompt = PROMPTS["emotion_score"].format(content=ctx.content[:6000])
+
+        def on_response(content_resp):
+            import json as _json
+            raw = (content_resp or "").strip()
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I | re.M).strip()
+            jm = re.search(r"\{[\s\S]*?\}", raw)
+            if jm:
+                try:
+                    data = _json.loads(jm.group(0))
+                    scores = {
+                        "tension": int(data.get("tension", 5)),
+                        "satisfaction": int(data.get("satisfaction", 5)),
+                        "emotion": int(data.get("emotion", 5)),
+                        "warmth": int(data.get("warmth", 5)),
+                        "summary": str(data.get("summary", ""))[:100],
+                    }
+                    # 写入章节数据
+                    ch_idx = ctx.ch_num - 1
+                    if 0 <= ch_idx < len(self._mw.chapters):
+                        self._mw.chapters[ch_idx]["emotion_scores"] = scores
+                    self._mw.tab_generation.log(
+                        f"📊 情绪评分: 紧张{scores['tension']} 爽感{scores['satisfaction']} "
+                        f"虐心{scores['emotion']} 温馨{scores['warmth']} — {scores['summary']}",
+                        "info")
+                except Exception:
+                    pass
+            done()
+
+        self._mw._send_to_ai_with_callback(
+            prompt, f"情绪评分-第{ctx.ch_num}章", on_response)
+
+
 class SkillAfterStep(PipelineStep):
     """运行单个 after_chapter_generation 技能"""
     name = "skill_after"
@@ -952,6 +998,9 @@ class GenerationWorkflow:
         s = CanonExtractStep(mw)
         if s.enabled:
             steps.append(s)
+
+        # 1.5 情绪评分(供可视化)
+        steps.append(EmotionScoreStep(mw))
 
         # 2a. after_chapter_generation 技能(固定自动触发)
         for skill in mw.tab_skills.get_after_chapter_skills():
