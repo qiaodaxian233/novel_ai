@@ -213,9 +213,14 @@ class GenerationControl(QWidget):
         self.chk_new_chat.setToolTip(
             "每章写完后在AI网站开启新对话,避免上下文污染\n"
             "(推荐开启:防止前面章节的错误名字/内容影响后面)")
+        self.chk_shutdown = QCheckBox("🔌 完成后关机")
+        self.chk_shutdown.setChecked(False)
+        self.chk_shutdown.setToolTip(
+            "批量生成全部完成后,自动保存并关机\n"
+            "适合晚上挂机跑,第二天来看结果")
         for w in (self.auto_save_project, self.auto_save,
                   self.auto_grab, self.use_attachment,
-                  self.chk_auto_tts, self.chk_new_chat):
+                  self.chk_auto_tts, self.chk_new_chat, self.chk_shutdown):
             orow1.addWidget(w)
         orow1.addStretch()
         self.btn_clear = QPushButton("🗑 清除日志")

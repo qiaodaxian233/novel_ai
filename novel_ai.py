@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.20.5"
+APP_VERSION = "v2.20.6"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1176,6 +1176,39 @@ class MainWindow(QMainWindow):
         self.worker.submit({"action": "new_chat", "url": url})
         self.tab_generation.log("🔄 手动新建对话 — AI上下文已清空", "success")
 
+    def _check_auto_shutdown(self):
+        """批量生成完毕后检查是否需要自动关机"""
+        if not hasattr(self.tab_generation, 'chk_shutdown'):
+            return
+        if not self.tab_generation.chk_shutdown.isChecked():
+            return
+        self.tab_generation.log("🔌 批量生成完毕,准备自动关机...", "success")
+        # 先保存项目
+        try:
+            self.save_project()
+            self.tab_generation.log("✅ 项目已保存", "success")
+        except Exception as e:
+            self.tab_generation.log(f"⚠ 保存失败: {e}", "warn")
+        # 60秒倒计时(给用户取消机会)
+        ret = QMessageBox.question(
+            self, "🔌 自动关机",
+            "批量生成已完成,项目已保存。\n\n"
+            "60秒后将自动关机!\n\n"
+            "点「Yes」立即关机\n"
+            "点「No」取消关机",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No)
+        if ret == QMessageBox.Yes:
+            self.tab_generation.log("🔌 正在关机...", "warn")
+            import subprocess, sys
+            if sys.platform == "win32":
+                subprocess.Popen("shutdown /s /t 30", shell=True)
+            else:
+                subprocess.Popen("shutdown -h +1", shell=True)
+        else:
+            self.tab_generation.log("取消关机", "info")
+            self.tab_generation.chk_shutdown.setChecked(False)
+
     def _goto_url(self):
         if not self.worker.is_ready():
             QMessageBox.warning(self, "提示", "请先点『启动浏览器』")
@@ -1998,6 +2031,7 @@ class MainWindow(QMainWindow):
                 # (典型成因:_pending_task_target 单变量在多任务并发提交时被覆盖,
                 #  Canon 抽取响应错误地路由到 chapter_summary handler 用了摘要任务的 meta)
                 self.tab_generation.log("批量生成已结束", "info")
+                self._check_auto_shutdown()
             elif meta.get("chain_to_next"):
                 # v1.96 BUG-070:防御诊断 — chain_to_next=True 但 _batch_remaining=0 + 未暂停
                 # 说明 meta 来源诡异(_pending_task_target 串台?),不打"批量已结束"避免误导
@@ -7483,6 +7517,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(800, self._send_next_chapter)
         elif step[0] == "end_batch":
             self.tab_generation.log("批量生成已结束", "info")
+            self._check_auto_shutdown()
 
     def gen_current_summary(self):
         """生成当前选中章节的摘要"""
