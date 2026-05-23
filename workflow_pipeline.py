@@ -812,8 +812,33 @@ class GenerationWorkflow:
 
         ctx.retry_left -= 1
         reason_block = "\n".join(f"  · {r}" for r in ctx.issues)
+
+        # ── 名字强化:如果issues里有姓名错误,提取正确名字加到prompt最前面 ──
+        name_fix = ""
+        has_name_issue = any("姓名" in r or "名为" in r or "写成" in r for r in ctx.issues)
+        if has_name_issue:
+            try:
+                # 从角色库提取正确名字
+                tbl = mw.tab_charlib.tbl_chars
+                names = []
+                for row in range(tbl.rowCount()):
+                    n = tbl.item(row, 0)
+                    role = tbl.item(row, 1)
+                    if n and n.text().strip():
+                        r = role.text().strip() if role else ""
+                        names.append(f"{n.text().strip()}({r})" if r else n.text().strip())
+                if names:
+                    name_fix = (
+                        "\n\n⚠⚠⚠【角色名纠错-最高优先级】⚠⚠⚠\n"
+                        f"正确角色名: {', '.join(names[:10])}\n"
+                        "上次生成中角色名写错了!本次必须使用以上正确名字,一个字都不能改!\n"
+                    )
+            except Exception:
+                pass
+
         stronger = (
             ctx.original_prompt
+            + name_fix
             + "\n\n【上次问题清单(必须修正)】\n" + reason_block
             + "\n\n请重写本章,严格规避以上所有问题。"
         )
