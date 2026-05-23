@@ -1918,66 +1918,56 @@ class CharacterLibrary(QWidget):
 
         return nodes, edges
 
-    def _force_directed_layout(self, nodes, edges, iters=80,
-                                width=1200, height=900):
-        """v1.87:简化版 Fruchterman-Reingold 力导向布局。
-        节点初始随机位置,每轮迭代:
-          - 所有节点对之间施加斥力(防重叠)
-          - 边连接的节点对之间施加引力(往中心拉)
-          - 节点位置受温度限制,逐轮降温(模拟退火)
-        返回 {node_id: (x, y)}"""
-        import random
-        import math
+    def _force_directed_layout(self, nodes, edges, iters=120,
+                                width=1600, height=1200):
+        """力导向布局 v2 — 大间距,不重叠"""
+        import random, math
         if not nodes:
             return {}
         n = len(nodes)
-        # 理想边长 k(增大间距,节点多时更稀疏)
-        area = width * height
-        k = math.sqrt(area / max(n, 1)) * 1.2
-        # 初始位置(中心附近随机散开,范围更大)
+        # 理想间距:节点越多,画布越大
+        k = max(80, math.sqrt(width * height / max(n, 1)) * 1.5)
+        # 初始:均匀散布在整个画布(不只中心)
         random.seed(42)
-        pos = {
-            node["id"]: [
-                width / 2 + random.uniform(-width / 4, width / 4),
-                height / 2 + random.uniform(-height / 4, height / 4),
-            ] for node in nodes
-        }
-        # 温度(逐轮降)
-        t = width / 10.0
-
-        node_ids = [n["id"] for n in nodes]
-        edge_set = [(a, b) for (a, b, _label) in edges
-                    if a in pos and b in pos]
+        pos = {}
+        cols = max(1, int(math.sqrt(n) + 1))
+        for idx, node in enumerate(nodes):
+            row, col = divmod(idx, cols)
+            pos[node["id"]] = [
+                80 + col * (width - 160) / max(cols, 1) + random.uniform(-30, 30),
+                80 + row * (height - 160) / max(cols, 1) + random.uniform(-30, 30),
+            ]
+        t = max(width, height) / 5.0  # 初始温度
+        node_ids = [nd["id"] for nd in nodes]
+        edge_set = [(a, b) for (a, b, _) in edges if a in pos and b in pos]
+        MIN_DIST = 60  # 最小间距(像素)
 
         for _it in range(iters):
-            # 1. 计算每个节点位移
             disp = {nid: [0.0, 0.0] for nid in node_ids}
             # 斥力(所有节点对)
             for i in range(n):
                 for j in range(i + 1, n):
-                    nid_a = node_ids[i]
-                    nid_b = node_ids[j]
-                    dx = pos[nid_a][0] - pos[nid_b][0]
-                    dy = pos[nid_a][1] - pos[nid_b][1]
+                    a, b = node_ids[i], node_ids[j]
+                    dx = pos[a][0] - pos[b][0]
+                    dy = pos[a][1] - pos[b][1]
                     dist = math.sqrt(dx * dx + dy * dy) + 0.01
-                    # 斥力 = k² / dist
+                    # 强斥力:距离太近时额外加大
                     force = (k * k) / dist
-                    disp[nid_a][0] += (dx / dist) * force
-                    disp[nid_a][1] += (dy / dist) * force
-                    disp[nid_b][0] -= (dx / dist) * force
-                    disp[nid_b][1] -= (dy / dist) * force
-            # 引力(只对相连节点)
+                    if dist < MIN_DIST:
+                        force *= 3.0  # 太近了,强推开
+                    fx, fy = (dx / dist) * force, (dy / dist) * force
+                    disp[a][0] += fx; disp[a][1] += fy
+                    disp[b][0] -= fx; disp[b][1] -= fy
+            # 引力(相连节点,力度较弱)
             for a, b in edge_set:
                 dx = pos[a][0] - pos[b][0]
                 dy = pos[a][1] - pos[b][1]
                 dist = math.sqrt(dx * dx + dy * dy) + 0.01
-                # 引力 = dist² / k
-                force = (dist * dist) / k
-                disp[a][0] -= (dx / dist) * force
-                disp[a][1] -= (dy / dist) * force
-                disp[b][0] += (dx / dist) * force
-                disp[b][1] += (dy / dist) * force
-            # 2. 应用位移(受温度限制)
+                force = (dist * dist) / k * 0.3  # 引力减弱
+                fx, fy = (dx / dist) * force, (dy / dist) * force
+                disp[a][0] -= fx; disp[a][1] -= fy
+                disp[b][0] += fx; disp[b][1] += fy
+            # 应用位移(温度限制)
             for nid in node_ids:
                 dx, dy = disp[nid]
                 dlen = math.sqrt(dx * dx + dy * dy) + 0.01
