@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.14.7"
+APP_VERSION = "v2.14.8"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -761,20 +761,20 @@ class MainWindow(QMainWindow):
         self.chapter_list.customContextMenuRequested.connect(self._on_chapter_list_context_menu)
         ll.addWidget(self.chapter_list, 1)
 
-        bg = QGridLayout(); bg.setSpacing(4)
-        for txt, slot, r, c in [
-            ("新增章节", self.add_chapter, 0, 0),
-            ("删除章节", self.delete_chapter, 0, 1),
-            ("章节重命名", self.rename_chapter, 1, 0),
-            ("新建空白创作", self.new_project, 1, 1),
-            ("新建目录", self.new_directory, 2, 0),
-            ("导入存档", self.open_project, 2, 1),
-            ("返回上级目录", self.back_directory, 3, 0),
-            ("解锁编辑", self.toggle_lock, 3, 1),
-        ]:
-            b = QPushButton(txt); b.clicked.connect(slot)
-            bg.addWidget(b, r, c)
-        ll.addLayout(bg)
+        # 按钮区精简为一行(其他操作在右键菜单里)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(4)
+        btn_add = QPushButton("＋ 新增")
+        btn_add.clicked.connect(self.add_chapter)
+        btn_del = QPushButton("－ 删除")
+        btn_del.clicked.connect(self.delete_chapter)
+        btn_row.addWidget(btn_add)
+        btn_row.addWidget(btn_del)
+        btn_row.addStretch()
+        hint = QLabel("右键更多操作")
+        hint.setStyleSheet("color:#888; font-size:11px;")
+        btn_row.addWidget(hint)
+        ll.addLayout(btn_row)
         ml.addWidget(left)
 
         # ---- 右侧 Tab ----
@@ -1196,22 +1196,34 @@ class MainWindow(QMainWindow):
 
     # ---- 章节管理 ----
     def _on_chapter_list_context_menu(self, pos):
-        """v1.92 BUG-066:章节列表右键菜单 — 锁定/解锁本章"""
+        """章节列表右键菜单 — 全部操作"""
         from PyQt5.QtWidgets import QMenu
-        item = self.chapter_list.itemAt(pos)
-        if not item:
-            return
-        idx = self.chapter_list.row(item)
-        if not (0 <= idx < len(self.chapters)):
-            return
-        ch = self.chapters[idx]
         menu = QMenu(self.chapter_list)
-        if ch.get("locked"):
-            act = menu.addAction("🔓 解锁本章")
-            act.triggered.connect(lambda: self._toggle_chapter_lock(idx, False))
-        else:
-            act = menu.addAction("🔒 锁定本章(中稿/终稿,防止后续修改)")
-            act.triggered.connect(lambda: self._toggle_chapter_lock(idx, True))
+        item = self.chapter_list.itemAt(pos)
+        idx = self.chapter_list.row(item) if item else -1
+
+        # ── 章节操作(有选中时) ──
+        if item and 0 <= idx < len(self.chapters):
+            ch = self.chapters[idx]
+            menu.addAction("✏️ 重命名", self.rename_chapter)
+            menu.addAction("🗑️ 删除选中", self.delete_chapter)
+            menu.addSeparator()
+            if ch.get("locked"):
+                menu.addAction("🔓 解锁本章",
+                    lambda: self._toggle_chapter_lock(idx, False))
+            else:
+                menu.addAction("🔒 锁定本章",
+                    lambda: self._toggle_chapter_lock(idx, True))
+            menu.addSeparator()
+
+        # ── 通用操作(始终可用) ──
+        menu.addAction("➕ 新增章节", self.add_chapter)
+        menu.addSeparator()
+        menu.addAction("📂 导入存档", self.open_project)
+        menu.addAction("📁 新建空白创作", self.new_project)
+        menu.addAction("📁 新建目录", self.new_directory)
+        menu.addAction("⬆️ 返回上级目录", self.back_directory)
+
         menu.exec_(self.chapter_list.viewport().mapToGlobal(pos))
 
     def _toggle_chapter_lock(self, idx, locked):
