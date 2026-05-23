@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.17.8"
+APP_VERSION = "v2.17.9"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -869,7 +869,7 @@ class MainWindow(QMainWindow):
         from PyQt5.QtWidgets import QToolButton
         self.btn_theme_toggle = QToolButton()
         self.btn_theme_toggle.setText("🎨 主题切换")
-        self.btn_theme_toggle.setToolTip("左键循环 / 右键选主题\n☀️浅色→🌙暗黑→🌿护眼绿→🌅暖黄")
+        self.btn_theme_toggle.setToolTip("左键循环 / 右键选主题\n☀️浅色→🌙暗黑→🌿护眼绿→🌅暖黄→⚡盘古黑金")
         self.btn_theme_toggle.clicked.connect(self._on_toggle_theme)
         self.btn_theme_toggle.setContextMenuPolicy(Qt.CustomContextMenu)
         self.btn_theme_toggle.customContextMenuRequested.connect(

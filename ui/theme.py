@@ -150,6 +150,59 @@ class ThemeManager:
                 "HighlightedText": "#ffffff",
             },
         },
+        "pangu": {
+            "label": "⚡ 盘古黑金",
+            "icon": "⚡",
+            "qss": _make_qss(
+                bg="#0a0a14", fg="#d4a843", input_bg="#0d0d1a",
+                border="#2a2520", accent="#b8860b", accent_fg="#0a0a14",
+                tab_bg="#12121f", hover="#1e1e30", alt_bg="#0f0f1c",
+                btn_bg="#161625", dim="#6b5d3a",
+            ) + """
+    /* ── 盘古黑金特效 ── */
+    QTabBar::tab:selected {
+        background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+            stop:0 #b8860b, stop:1 #8b6508);
+        color: #0a0a14;
+        font-weight: bold;
+    }
+    QPushButton {
+        border: 1px solid #3d3520;
+    }
+    QPushButton:hover {
+        border-color: #d4a843;
+        color: #ffd700;
+    }
+    QGroupBox {
+        border: 1px solid #2a2520;
+    }
+    QGroupBox::title {
+        color: #d4a843;
+    }
+    QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+        background-color: #3d3520;
+    }
+    QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+        background-color: #d4a843;
+    }
+    QHeaderView::section {
+        background-color: #161625;
+        color: #d4a843;
+        border: 1px solid #2a2520;
+    }
+    QProgressBar::chunk {
+        background-color: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+            stop:0 #b8860b, stop:1 #ffd700);
+    }
+    """,
+            "palette": {
+                "Window": "#0a0a14", "WindowText": "#d4a843",
+                "Base": "#0d0d1a", "AlternateBase": "#0f0f1c",
+                "Text": "#d4a843", "Button": "#161625",
+                "ButtonText": "#d4a843", "Highlight": "#b8860b",
+                "HighlightedText": "#0a0a14",
+            },
+        },
     }
 
     # 保持向后兼容
