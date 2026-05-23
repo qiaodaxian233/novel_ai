@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.16.2"
+APP_VERSION = "v2.16.3"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -875,6 +875,11 @@ class MainWindow(QMainWindow):
         self.btn_theme_toggle.customContextMenuRequested.connect(
             lambda p: self._show_theme_menu())
         _tb_pangu.addWidget(self.btn_theme_toggle)
+        # AI 智能取名(放工具栏,方便访问)
+        _act_naming = QAction("🎭 智能换名", self)
+        _act_naming.setToolTip("AI生成角色名,选中后全文替换(正文+大纲+角色库)")
+        _act_naming.triggered.connect(self._open_ai_naming)
+        _tb_pangu.addAction(_act_naming)
         self.setStatusBar(sb)
         sb.addWidget(QLabel(f"© 2026 {APP_NAME} {APP_VERSION}"))
         self._status_stats = QLabel("0章 · 0字")
