@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.14.5"
+APP_VERSION = "v2.14.6"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -10107,6 +10107,21 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # ── 屏蔽无害的 Qt 警告(stylesheet / DirectWrite) ──
+    from PyQt5.QtCore import qInstallMessageHandler, QtWarningMsg
+    _original_handler = None
+    def _qt_message_filter(mode, context, message):
+        if mode == QtWarningMsg:
+            if "Could not parse stylesheet" in message:
+                return
+            if "DirectWrite" in message:
+                return
+        if _original_handler:
+            _original_handler(mode, context, message)
+        elif message:
+            print(message)
+    qInstallMessageHandler(_qt_message_filter)
+
     # ── 第 8 项: 4K HiDPI 自动缩放 ──────────────────────
     # 必须在 QApplication 创建 *之前* 设置这两个属性
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)

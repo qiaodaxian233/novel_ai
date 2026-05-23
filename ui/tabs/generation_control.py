@@ -53,7 +53,7 @@ class GenerationControl(QWidget):
         # A. 浏览器内核挂载
         # ═══════════════════════════════════════════════
         bbox = QGroupBox("🌐 浏览器内核挂载")
-        bbox.setStyleSheet("QGroupBox { font-weight: bold; }")
+        bbox.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         blay = QVBoxLayout(bbox)
         blay.setSpacing(6)
 
@@ -102,7 +102,7 @@ class GenerationControl(QWidget):
         # ═══════════════════════════════════════════════
         layout.addSpacing(6)
         gen_box = QGroupBox("📖 生成操作")
-        gen_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        gen_box.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         gen_lay = QVBoxLayout(gen_box)
         gen_lay.setSpacing(8)
 
@@ -174,7 +174,7 @@ class GenerationControl(QWidget):
         # ═══════════════════════════════════════════════
         layout.addSpacing(6)
         opt_box = QGroupBox("⚙ 自动化 & 质量校验")
-        opt_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        opt_box.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         opt_lay = QVBoxLayout(opt_box)
         opt_lay.setSpacing(6)
 
@@ -236,7 +236,7 @@ class GenerationControl(QWidget):
         _qs_ctx = _QS_ctx("NovelAI", "CreationSettings")
 
         ctx_box = QGroupBox("📖 一致性上下文(注入到下章 prompt)")
-        ctx_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        ctx_box.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         ctx_lay = QVBoxLayout(ctx_box)
         ctx_lay.setSpacing(6)
 
@@ -299,7 +299,7 @@ class GenerationControl(QWidget):
         # ═══════════════════════════════════════════════
         layout.addSpacing(4)
         log_box = QGroupBox("📋 生成日志")
-        log_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        log_box.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         ll = QVBoxLayout(log_box)
         self.log_edit = QPlainTextEdit()
         self.log_edit.setReadOnly(True)

@@ -189,7 +189,7 @@ class CreationSettings(QWidget):
 
         # ---- v1.10:🔊 TTS 朗读配置 ----
         tts_box = QGroupBox("🔊 TTS 朗读(章节编辑器右上角 🔊 朗读本章 按钮)")
-        tts_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        tts_box.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         tts_lay = QVBoxLayout(tts_box)
         # 后端下拉
         tts_r1 = QHBoxLayout()
@@ -269,7 +269,7 @@ class CreationSettings(QWidget):
 
         # ---- v1.32:🔬 13 法对话诊断 ----
         dc_box = QGroupBox("🔬 13 法对话诊断")
-        dc_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        dc_box.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         dc_lay = QVBoxLayout(dc_box)
         # 老刀风格开关
         from PyQt5.QtCore import QSettings as _QS_dc

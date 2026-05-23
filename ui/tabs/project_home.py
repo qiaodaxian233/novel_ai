@@ -58,7 +58,7 @@ class ProjectHomeTab(QWidget):
 
         # 左 1/3:快捷操作
         action_box = QGroupBox("📂 项目操作")
-        action_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        action_box.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         action_lay = QVBoxLayout(action_box)
         for txt, color, slot_name in [
             ("📂 打开项目", "#3498db", "open"),
@@ -91,7 +91,7 @@ class ProjectHomeTab(QWidget):
 
         # 右 2/3:当前项目统计仪表盘
         stats_box = QGroupBox("📊 当前项目")
-        stats_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        stats_box.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         stats_lay = QVBoxLayout(stats_box)
 
         # 数据卡片(章数/总字数/最后保存)
@@ -137,7 +137,7 @@ class ProjectHomeTab(QWidget):
 
         # ── 底部:最近项目列表 ──
         recent_box = QGroupBox("🕐 最近项目(点击切换)")
-        recent_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        recent_box.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         recent_lay = QVBoxLayout(recent_box)
         self.list_recent = QListWidget()
         self.list_recent.setAlternatingRowColors(True)
