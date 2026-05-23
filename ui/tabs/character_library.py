@@ -471,6 +471,38 @@ class CharacterLibrary(QWidget):
             self.tbl_timeline.removeRow(r)
     
     # ── 4. 物品库子页 ──────────────────────────────────────
+    # 按题材分类的物品类型
+    ITEM_TYPES_BY_GENRE = {
+        "都市": ["礼物", "信物", "钥匙", "照片", "文件", "珠宝", "手机", "车", "房产", "合同", "日记"],
+        "言情": ["礼物", "信物", "戒指", "项链", "照片", "信件", "钥匙", "文件", "日记", "手机"],
+        "玄幻": ["法器", "灵器", "丹药", "秘籍", "材料", "坐骑", "防具", "灵石", "令牌", "灵宠"],
+        "修仙": ["法器", "灵器", "丹药", "秘籍", "材料", "坐骑", "防具", "灵石", "令牌", "仙器"],
+        "奇幻": ["魔法器具", "药水", "卷轴", "武器", "护甲", "宝石", "魔杖", "坐骑", "圣物"],
+        "悬疑": ["证物", "线索", "文件", "录音", "照片", "钥匙", "日记", "武器", "毒药", "密码"],
+        "科幻": ["芯片", "能量核", "装甲", "武器", "飞船", "AI模块", "改造体", "数据卡"],
+        "历史": ["圣旨", "兵符", "宝剑", "玉佩", "书信", "地图", "令牌", "印章", "密旨"],
+        "军事": ["武器", "情报", "电台", "地图", "勋章", "军令", "弹药", "密码本"],
+        "游戏": ["武器", "防具", "药水", "材料", "坐骑", "宠物", "技能书", "宝箱", "任务道具"],
+    }
+
+    def _get_item_types_for_genre(self):
+        """根据当前题材返回适合的物品类型"""
+        # 尝试从创作设置获取题材
+        try:
+            mw = self.window()
+            genres = mw.tab_settings.get_selected_genres() or []
+        except Exception:
+            genres = []
+        types = set()
+        for g in genres:
+            for key, vals in self.ITEM_TYPES_BY_GENRE.items():
+                if key in g:
+                    types.update(vals)
+        if not types:
+            # 默认通用类型
+            types = {"信物", "礼物", "钥匙", "文件", "武器", "道具"}
+        return sorted(types)
+
     def _build_items_tab(self):
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -497,20 +529,28 @@ class CharacterLibrary(QWidget):
         self.tbl_items.setColumnWidth(3, 80)
         lay.addWidget(self.tbl_items)
         
-        tip = QLabel(
-            "💡 类型示例: 法器/灵器/丹药/秘籍/材料/信物/防具/坐骑\n"
-            "    防止 AI 漏掉主角已有装备,或重复让主角『获得』同一件东西")
-        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
-        tip.setWordWrap(True)
-        lay.addWidget(tip)
+        self.lbl_item_types = QLabel("")
+        self.lbl_item_types.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        self.lbl_item_types.setWordWrap(True)
+        lay.addWidget(self.lbl_item_types)
+        self._refresh_item_type_hint()
         
         self.sub_tabs.addTab(w, "💎 物品库")
     
+    def _refresh_item_type_hint(self):
+        """刷新物品类型提示(根据题材)"""
+        types = self._get_item_types_for_genre()
+        self.lbl_item_types.setText(
+            f"💡 当前题材适用类型: {'/'.join(types)}\n"
+            f"    防止AI漏掉主角已有装备,或重复让主角『获得』同一件东西")
+
     def _add_item(self):
         from PyQt5.QtWidgets import QTableWidgetItem
         r = self.tbl_items.rowCount()
         self.tbl_items.insertRow(r)
-        defaults = ["新物品", "法器", "李远", "1", "未启用"]
+        types = self._get_item_types_for_genre()
+        default_type = types[0] if types else "道具"
+        defaults = ["新物品", default_type, "", "", ""]
         for c, v in enumerate(defaults):
             self.tbl_items.setItem(r, c, QTableWidgetItem(v))
     
