@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.15.7"
+APP_VERSION = "v2.15.8"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -428,10 +428,16 @@ class MainWindow(QMainWindow):
         # 恢复上次设置和项目数据
         # 先加载项目数据，再加载设置（QSettings优先级更高，覆盖项目文件中的旧设置）
         self._autoload()
-        # 自动启动浏览器(如果上次勾了"自动启动")
-        if self.tab_generation.chk_auto_start.isChecked():
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(1500, self._auto_start_browser)
+        # 自动启动浏览器(直接读 QSettings,不依赖 checkbox 加载时序)
+        try:
+            from PyQt5.QtCore import QSettings as _QS_auto
+            _auto = _QS_auto("NovelAI", "GenerationControl").value(
+                "browser.auto_start", False, type=bool)
+            if _auto:
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(2000, self._auto_start_browser)
+        except Exception:
+            pass
         # v1.41: 启动后自动跳到 🏠 项目主页 Tab(看仪表盘)
         try:
             self.tabs.setCurrentIndex(0)
@@ -9896,7 +9902,18 @@ class MainWindow(QMainWindow):
     def _open_ai_naming(self):
         """打开 AI 取名对话框(非模态,等 AI 回复后更新)"""
         from ui.ai_naming import AINamingDialog
-        dlg = AINamingDialog(parent=self)
+        # 自动识别主角名
+        auto_name = ""
+        try:
+            tbl = self.tab_charlib.tbl_chars
+            for r in range(tbl.rowCount()):
+                role = (tbl.item(r, 1).text() if tbl.item(r, 1) else "").lower()
+                if "主角" in role or "男主" in role or "女主" in role:
+                    auto_name = tbl.item(r, 0).text() if tbl.item(r, 0) else ""
+                    break
+        except Exception:
+            pass
+        dlg = AINamingDialog(old_name=auto_name, parent=self)
         self._naming_dlg = dlg
         dlg.finished.connect(self._on_naming_dlg_closed)
         dlg.show()
@@ -9919,11 +9936,12 @@ class MainWindow(QMainWindow):
             dlg.on_names_received(content)
 
     def _do_global_rename(self, result):
-        """全文替换角色名"""
+        """全文替换角色名(章节+大纲+角色库)"""
         if not result:
             return
         old_name, new_name = result
         count = 0
+        # 1. 章节正文/标题/摘要
         for ch in self.chapters:
             content = ch.get("content", "")
             if old_name in content:
@@ -9935,14 +9953,55 @@ class MainWindow(QMainWindow):
             summary = ch.get("summary", "")
             if old_name in summary:
                 ch["summary"] = summary.replace(old_name, new_name)
+        # 2. 大纲(全部编辑框)
+        outline_fields = 0
+        try:
+            for edit in [
+                self.tab_outline.seed_edit,
+                self.tab_outline.worldview_edit,
+                self.tab_outline.lo_edit,
+                self.tab_outline.structure_edit,
+                self.tab_outline.chapter_outline_edit,
+            ]:
+                text = edit.toPlainText()
+                if old_name in text:
+                    edit.setPlainText(text.replace(old_name, new_name))
+                    outline_fields += 1
+        except Exception:
+            pass
+        # 3. 角色库表格
+        charlib_hits = 0
+        try:
+            tbl = self.tab_charlib.tbl_chars
+            for r in range(tbl.rowCount()):
+                for c in range(tbl.columnCount()):
+                    item = tbl.item(r, c)
+                    if item and old_name in item.text():
+                        item.setText(item.text().replace(old_name, new_name))
+                        charlib_hits += 1
+        except Exception:
+            pass
+        # 4. 对话记忆
+        try:
+            mem_text = self.tab_memory.memory_edit.toPlainText()
+            if old_name in mem_text:
+                self.tab_memory.memory_edit.setPlainText(
+                    mem_text.replace(old_name, new_name))
+        except Exception:
+            pass
         # 刷新 UI
         self._refresh_chapter_list()
         if 0 <= self.current_chapter_index < len(self.chapters):
             ch = self.chapters[self.current_chapter_index]
             self.tab_editor.load_chapter(
                 ch.get("title", ""), ch.get("content", ""))
+        parts = [f"{count}章正文"]
+        if outline_fields:
+            parts.append(f"{outline_fields}个大纲字段")
+        if charlib_hits:
+            parts.append(f"{charlib_hits}处角色库")
         self.tab_generation.log(
-            f"🎭 全文替换:「{old_name}」→「{new_name}」({count} 章受影响)",
+            f"🎭 全文替换:「{old_name}」→「{new_name}」({' + '.join(parts)})",
             "success")
 
     def show_dom_diagnostics(self):
