@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.18.2"
+APP_VERSION = "v2.18.3"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -10896,22 +10896,60 @@ def main():
 
     try:
         if splash:
-            splash.set_progress("正在初始化主界面...")
+            splash.set_progress("正在初始化...")
             app.processEvents()
+
+        # ── 项目启动器(闪屏后第一个界面) ──
+        from ui.project_launcher import ProjectLauncher
+        from pathlib import Path as _Path
+        _proj_dir = _Path.home() / "NovelAI_Projects"
+        _proj_dir.mkdir(exist_ok=True)
+
+        if splash:
+            splash.set_progress("✓ 加载完成!", QColor("#00FF00"))
+            app.processEvents()
+            import time; time.sleep(0.3)
+
+        launcher = ProjectLauncher(str(_proj_dir))
+        if os.path.exists(_ico_path):
+            launcher.setWindowIcon(QIcon(_ico_path))
+        if splash:
+            splash.finish(launcher)
+        result = launcher.exec_()
+        selected_project = launcher.selected_path
+
+        if result != QDialog.Accepted or not selected_project:
+            sys.exit(0)
+
+        # ── 加载主窗口 ──
         win = MainWindow()
         if os.path.exists(_ico_path):
             win.setWindowIcon(QIcon(_ico_path))
         elif os.path.exists(_icon_path):
             win.setWindowIcon(QIcon(_icon_path))
-        if splash:
-            splash.set_progress("正在加载项目数据...")
-            app.processEvents()
+
+        # 加载选中的项目
+        if PROJECT_IO_AVAILABLE:
+            try:
+                from pathlib import Path as _P2
+                target = _P2(selected_project)
+                d = project_io.load_project_folder(target)
+                win.current_project_file = str(target.resolve())
+                win._load_payload_into_ui(d)
+                win._project_title = target.name
+                win._update_window_title()
+                win._push_to_recent(win.current_project_file)
+                from PyQt5.QtCore import QSettings as _QSL
+                _QSL("NovelAI", "UI").setValue(
+                    "last_project_path", win.current_project_file)
+                win.tab_generation.log(f"📂 已打开: {target.name}", "success")
+            except Exception as _e:
+                win.current_project_file = selected_project
+                win._project_title = _Path(selected_project).name
+                win._update_window_title()
+                print(f"[launcher] 加载项目: {_e}", flush=True)
+
         win.show()
-        if splash:
-            splash.set_progress("✓ 加载完成!", QColor("#00FF00"))
-            app.processEvents()
-            import time; time.sleep(0.5)
-            splash.finish(win)
         # v1.20:应用编辑器自定义颜色(如果之前调过)
         try:
             win.tab_editor._apply_editor_colors()
