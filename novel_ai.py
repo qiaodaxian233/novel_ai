@@ -1177,37 +1177,22 @@ class MainWindow(QMainWindow):
         self.tab_generation.log("🔄 手动新建对话 — AI上下文已清空", "success")
 
     def _check_auto_shutdown(self):
-        """批量生成完毕后检查是否需要自动关机"""
+        """批量生成完毕后自动保存+关机(不弹窗)"""
         if not hasattr(self.tab_generation, 'chk_shutdown'):
             return
         if not self.tab_generation.chk_shutdown.isChecked():
             return
-        self.tab_generation.log("🔌 批量生成完毕,准备自动关机...", "success")
-        # 先保存项目
+        self.tab_generation.log("🔌 批量生成完毕,保存项目后关机...", "success")
         try:
             self.save_project()
-            self.tab_generation.log("✅ 项目已保存", "success")
+            self.tab_generation.log("✅ 项目已保存,30秒后关机", "success")
         except Exception as e:
-            self.tab_generation.log(f"⚠ 保存失败: {e}", "warn")
-        # 60秒倒计时(给用户取消机会)
-        ret = QMessageBox.question(
-            self, "🔌 自动关机",
-            "批量生成已完成,项目已保存。\n\n"
-            "60秒后将自动关机!\n\n"
-            "点「Yes」立即关机\n"
-            "点「No」取消关机",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No)
-        if ret == QMessageBox.Yes:
-            self.tab_generation.log("🔌 正在关机...", "warn")
-            import subprocess, sys
-            if sys.platform == "win32":
-                subprocess.Popen("shutdown /s /t 30", shell=True)
-            else:
-                subprocess.Popen("shutdown -h +1", shell=True)
+            self.tab_generation.log(f"⚠ 保存失败: {e},仍然关机", "warn")
+        import subprocess, sys
+        if sys.platform == "win32":
+            subprocess.Popen("shutdown /s /t 30", shell=True)
         else:
-            self.tab_generation.log("取消关机", "info")
-            self.tab_generation.chk_shutdown.setChecked(False)
+            subprocess.Popen("shutdown -h +1", shell=True)
 
     def _goto_url(self):
         if not self.worker.is_ready():
