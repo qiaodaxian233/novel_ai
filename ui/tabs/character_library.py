@@ -73,11 +73,13 @@ class CharacterLibrary(QWidget):
         # v1.70: 切换到 🕸️ 关系网 子页时自动用最新数据刷新图
         self.sub_tabs.currentChanged.connect(self._on_sub_tab_changed)
         
-        # 底部: 操作按钮
+        # 底部: 操作按钮 (v2.21.2 紧凑化 — 缩短文字、压缩边距、统一小字号)
         from PyQt5.QtCore import QSettings as _QS_charlib
         _cls = _QS_charlib("NovelAI", "CharLib")
         btn_row = QHBoxLayout()
-        self.chk_inject = QCheckBox("写章节时自动注入到提示词")
+        btn_row.setSpacing(4)  # v2.21.2:控件间距 6->4
+        btn_row.setContentsMargins(0, 4, 0, 0)
+        self.chk_inject = QCheckBox("自动注入")
         self.chk_inject.setChecked(_cls.value("inject", True, type=bool))
         self.chk_inject.setToolTip(
             "勾选后,每次生成新章节会把:\n"
@@ -91,8 +93,7 @@ class CharacterLibrary(QWidget):
 
         # v1.84:POV 模式 — 让 AI 用某个角色的视角写本章,自动按其已知信息边界收窄注入
         # 配合 v1.79 信息隔离,直接堵"路人甲突然知道主角秘密"这种 OOC bug
-        btn_row.addSpacing(20)
-        btn_row.addWidget(QLabel("👁 视角:"))
+        btn_row.addSpacing(8)
         self.cb_pov_mode = QComboBox()
         self.cb_pov_mode.addItems(["全知视角", "主角 POV", "角色 POV"])
         self.cb_pov_mode.setCurrentText(
@@ -113,8 +114,8 @@ class CharacterLibrary(QWidget):
         btn_row.addWidget(self.cb_pov_mode)
 
         self.le_pov_character = QLineEdit()
-        self.le_pov_character.setPlaceholderText("仅『角色 POV』时填角色名(如:林悦)")
-        self.le_pov_character.setMaximumWidth(180)
+        self.le_pov_character.setPlaceholderText("角色名")
+        self.le_pov_character.setMaximumWidth(90)
         self.le_pov_character.setText(_cls.value("pov_character", "", type=str))
         self.le_pov_character.textChanged.connect(
             lambda t: _QS_charlib("NovelAI", "CharLib").setValue("pov_character", t))
@@ -125,7 +126,7 @@ class CharacterLibrary(QWidget):
         # 每章生成完后自动抽取到所有库(默认勾上,QSettings 记住用户选择)
         # v1.81 文案修正:库数从 v1.50 初的 6 个扩到 v1.80 时的 10+ 个,
         # 文案改用"全部库"避免误导用户以为只有 6 个
-        self.chk_auto_extract = QCheckBox("✨ 每章生成后自动抽取到全部库")
+        self.chk_auto_extract = QCheckBox("✨ 自动抽取")
         # 从 QSettings 读上次选择,首次默认 True(推荐使用)
         from PyQt5.QtCore import QSettings as _QS
         _settings = _QS("NovelAI", "UserPrefs")
@@ -149,7 +150,7 @@ class CharacterLibrary(QWidget):
         btn_row.addWidget(self.chk_auto_extract)
         
         # v1.64:B 方案 — AI 抽 6 库时同步主角状态字段
-        self.chk_auto_sync_hero = QCheckBox("🎯 同步主角状态")
+        self.chk_auto_sync_hero = QCheckBox("🎯 同步状态")
         _cs = _QS("NovelAI", "CreationSettings")
         self.chk_auto_sync_hero.setChecked(
             _cs.value("auto_sync_hero_state", True, type=bool))
@@ -167,16 +168,22 @@ class CharacterLibrary(QWidget):
 
         btn_row.addStretch()
         
-        self.btn_extract_from_chapters = QPushButton("🔄 立即从所有章节提取")
+        self.btn_extract_from_chapters = QPushButton("🔄 立即提取")
+        self.btn_extract_from_chapters.setToolTip("立即从所有章节提取角色/关系/时间线/物品/伏笔等数据")
         self.btn_extract_from_chapters.setStyleSheet(
-            "background:#3498db;color:white;padding:6px 12px;border-radius:3px;")
+            "background:#3498db;color:white;padding:3px 10px;border-radius:3px;font-size:11px;")
         btn_row.addWidget(self.btn_extract_from_chapters)
         
-        self.btn_export = QPushButton("📥 导出库")
+        self.btn_export = QPushButton("📥 导出")
+        self.btn_export.setToolTip("导出全部库为 JSON")
+        self.btn_export.setStyleSheet("padding:3px 8px;font-size:11px;")
         btn_row.addWidget(self.btn_export)
-        self.btn_import = QPushButton("📤 导入库")
+        self.btn_import = QPushButton("📤 导入")
+        self.btn_import.setToolTip("从 JSON 导入到全部库")
+        self.btn_import.setStyleSheet("padding:3px 8px;font-size:11px;")
         btn_row.addWidget(self.btn_import)
-        self.btn_copy_extract_prompt = QPushButton("📋 复制提取 Prompt")
+        self.btn_copy_extract_prompt = QPushButton("📋 复制 Prompt")
+        self.btn_copy_extract_prompt.setStyleSheet("padding:3px 8px;font-size:11px;")
         self.btn_copy_extract_prompt.setToolTip(
             "把一份完整 prompt 复制到剪贴板,贴给 DeepSeek/ChatGPT。\n"
             "AI 返回的 JSON 直接保存为 .json,用『导入库』即可一键合并。")
@@ -184,11 +191,11 @@ class CharacterLibrary(QWidget):
         
         # 🗑 清空所有数据
         btn_row.addStretch()
-        self.btn_clear_all = QPushButton("🗑 清空所有")
+        self.btn_clear_all = QPushButton("🗑 清空")
         self.btn_clear_all.setToolTip("清空角色库、关系、时间线、物品、伏笔等全部数据")
         self.btn_clear_all.setStyleSheet(
-            "QPushButton { color:#e74c3c; border:1px solid #e74c3c; padding:4px 12px;"
-            "border-radius:3px; } QPushButton:hover { background:#fce4e4; }")
+            "QPushButton { color:#e74c3c; border:1px solid #e74c3c; padding:3px 10px;"
+            "border-radius:3px; font-size:11px; } QPushButton:hover { background:#fce4e4; }")
         self.btn_clear_all.clicked.connect(self._clear_all_data)
         btn_row.addWidget(self.btn_clear_all)
         layout.addLayout(btn_row)
