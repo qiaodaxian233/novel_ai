@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.15.2"
+APP_VERSION = "v2.15.3"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -871,13 +871,26 @@ class MainWindow(QMainWindow):
         _btn_theme.customContextMenuRequested.connect(lambda p: self._show_theme_menu())
         _tb_pangu.addWidget(_btn_theme)
         self.setStatusBar(sb)
-        sb.addWidget(QLabel(f"© 2026 {APP_NAME} {APP_VERSION} | Python + PyQt5"))
+        sb.addWidget(QLabel(f"© 2026 {APP_NAME} {APP_VERSION}"))
+        self._status_stats = QLabel("0章 · 0字")
+        self._status_stats.setStyleSheet("padding:2px 10px; color:#666;")
+        sb.addPermanentWidget(self._status_stats)
         self._status_indicator = QLabel("● 未启动")
         self._status_indicator.setStyleSheet(
             "color: #999; font-weight: bold; padding: 2px 8px;")
         sb.addPermanentWidget(self._status_indicator)
 
     def _connect_signals(self):
+        # 常用快捷键
+        from PyQt5.QtWidgets import QShortcut
+        from PyQt5.QtGui import QKeySequence
+        QShortcut(QKeySequence("Ctrl+G"), self).activated.connect(
+            lambda: self.tabs.setCurrentWidget(self.tab_generation))
+        QShortcut(QKeySequence("Ctrl+E"), self).activated.connect(
+            lambda: self.tabs.setCurrentWidget(self.tab_editor))
+        QShortcut(QKeySequence("F5"), self).activated.connect(
+            self._refresh_chapter_list)
+
         # 创作设置
         self.tab_settings.btn_gen_insp.clicked.connect(self.gen_inspiration)
         self.tab_settings.btn_regen_insp.clicked.connect(self.gen_inspiration)
@@ -1172,11 +1185,27 @@ class MainWindow(QMainWindow):
             else:
                 self.lbl_chapter_count.setText(
                     f"章节列表 (共 {n} 章 · {total_wc:,}字 · Ctrl多选 · 可拖拽排序)")
+        # 状态栏 + 窗口标题同步
+        if hasattr(self, "_status_stats"):
+            self._status_stats.setText(f"{n}章 · {total_wc:,}字")
+        self._update_window_title()
         # v1.63: 章节数变了 → 重算上下文注入字数预估
         try:
             self._update_ctx_estimate()
         except Exception:
             pass
+
+    def _update_window_title(self, suffix=""):
+        """更新窗口标题: APP名 — 项目名 [状态]"""
+        parts = [APP_FULL]
+        proj = getattr(self, "_project_title", "") or ""
+        if not proj and getattr(self, "current_project_file", None):
+            proj = Path(self.current_project_file).stem
+        if proj:
+            parts.append(proj)
+        if suffix:
+            parts.append(suffix)
+        self.setWindowTitle(" — ".join(parts))
 
     def _on_chapter_clicked(self, item):
         idx = self.chapter_list.row(item)
@@ -5723,6 +5752,10 @@ class MainWindow(QMainWindow):
         self._batch_remaining -= 1
         print(f"[batch] 章节入库完成 batch_remaining={self._batch_remaining} "
               f"paused={self._batch_paused}", flush=True)
+        if self._batch_remaining > 0:
+            self._update_window_title(f"⏳ 剩余{self._batch_remaining}章")
+        else:
+            self._update_window_title("✅ 生成完成")
 
         # v1.32:✨ 自动 13 法静态扫描(如果开了开关)
         try:
@@ -7437,6 +7470,8 @@ class MainWindow(QMainWindow):
             QSettings("NovelAI", "UI").setValue(
                 "last_project_path", self.current_project_file)
             self.tab_generation.log(f"📂 已打开: {target.name}", "success")
+            self._project_title = target.name
+            self._update_window_title()
             # 刷新项目主页
             if hasattr(self, "tab_home"):
                 self.tab_home.refresh(self)
@@ -8753,6 +8788,7 @@ class MainWindow(QMainWindow):
         self.tab_generation.log(
             f"▶ 批量启动:{self._batch_remaining} 章,目标 {target_with_offset} 字"
             f"(基础 {target} {offset:+d}),死磕 {self.tab_generation.retry_count.value()} 次", "info")
+        self._update_window_title(f"⏳ 生成中({self._batch_remaining}章)")
         self._send_next_chapter()
 
     def batch_count_value(self):
@@ -8949,6 +8985,8 @@ class MainWindow(QMainWindow):
                     loaded_path = str(lp)
                     self.current_project_file = loaded_path
                     print(f"[autoload] ✓ 加载上次项目文件夹: {lp}", flush=True)
+                    self._project_title = Path(lp).name
+                    self._update_window_title()
                     # v1.41: 推到最近项目列表(确保 last 也在 recent 顶端)
                     try:
                         self._push_to_recent(loaded_path)
