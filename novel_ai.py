@@ -899,9 +899,9 @@ class MainWindow(QMainWindow):
         from PyQt5.QtWidgets import QShortcut
         from PyQt5.QtGui import QKeySequence
         QShortcut(QKeySequence("Ctrl+G"), self).activated.connect(
-            lambda: self.tabs.setCurrentWidget(self.tab_generation))
+            lambda: self._switch_to_tab(self.tab_generation))
         QShortcut(QKeySequence("Ctrl+E"), self).activated.connect(
-            lambda: self.tabs.setCurrentWidget(self.tab_editor))
+            lambda: self._switch_to_tab(self.tab_editor))
         QShortcut(QKeySequence("F5"), self).activated.connect(
             self._refresh_chapter_list)
 
@@ -1286,6 +1286,25 @@ class MainWindow(QMainWindow):
         # 也输出到日志
         self.tab_generation.log(f"[监控] {task_id}: {status}", "info")
 
+    def _switch_to_tab(self, widget):
+        """智能切Tab:支持嵌套子Tab"""
+        idx = self.tabs.indexOf(widget)
+        if idx >= 0:
+            self.tabs.setCurrentIndex(idx)
+            return
+        for group in [getattr(self, '_tab_world', None),
+                      getattr(self, '_tab_chars', None),
+                      getattr(self, '_tab_engine', None)]:
+            if group is None:
+                continue
+            sub_idx = group.indexOf(widget)
+            if sub_idx >= 0:
+                parent_idx = self.tabs.indexOf(group)
+                if parent_idx >= 0:
+                    self.tabs.setCurrentIndex(parent_idx)
+                group.setCurrentIndex(sub_idx)
+                return
+
     def _update_window_title(self, suffix=""):
         """更新窗口标题: APP名 — 项目名 [状态]"""
         parts = [APP_FULL]
@@ -1319,7 +1338,7 @@ class MainWindow(QMainWindow):
         self.current_chapter_index = idx
         ch = self.chapters[idx]
         self.tab_editor.show_chapter(ch, idx)  # 记录索引,供风格检测/备选版本使用
-        self.tabs.setCurrentWidget(self.tab_editor)
+        self._switch_to_tab(self.tab_editor)
 
     # ---- 章节管理 ----
     def _on_chapter_list_context_menu(self, pos):
@@ -1396,7 +1415,7 @@ class MainWindow(QMainWindow):
             self.current_chapter_index = len(self.chapters) - 1
             self._refresh_chapter_list()
             self.tab_editor.load_chapter(title, "")
-            self.tabs.setCurrentWidget(self.tab_editor)
+            self._switch_to_tab(self.tab_editor)
 
     def delete_chapter(self):
         selected = self.chapter_list.selectedItems()
@@ -1522,7 +1541,7 @@ class MainWindow(QMainWindow):
                 "  pip install -U selenium")
             return
         if not self.worker.is_ready():
-            self.tabs.setCurrentWidget(self.tab_generation)
+            self._switch_to_tab(self.tab_generation)
             QMessageBox.information(
                 self, "请先启动浏览器",
                 "请先在『生成控制』页点『🚀 启动浏览器』,完成 AI 网站登录后再生成。")
@@ -1552,7 +1571,7 @@ class MainWindow(QMainWindow):
                         "info")
         except Exception:
             self.worker._deep_think_enabled = False
-        self.tabs.setCurrentWidget(self.tab_generation)
+        self._switch_to_tab(self.tab_generation)
         self.tab_generation.log(f"准备发送:{label} ({len(prompt)} 字符)", "info")
         # 记录这次任务的目标位置(由 _on_response_received 处理回填)
         # v1.97 BUG-071:字典写入 — key=label(== worker 侧 task_id),避免并发任务串台
@@ -1791,13 +1810,13 @@ class MainWindow(QMainWindow):
             t = next((ln.strip() for ln in content.splitlines() if ln.strip()), "")
             t = re.sub(r'^[「《【\s"\']+|[」》】\s"\']+$', '', t)[:30]
             if t: self.tab_settings.title_input.setText(t)
-            self.tabs.setCurrentWidget(self.tab_settings)
+            self._switch_to_tab(self.tab_settings)
         elif target == "outline_full":
             # 整段内容始终填入章节大纲框
             self.tab_outline.chapter_outline_edit.setPlainText(content)
             # 同时尝试按标题拆分回填各分项框
             self._auto_fill_outline(content)
-            self.tabs.setCurrentWidget(self.tab_outline)
+            self._switch_to_tab(self.tab_outline)
         elif target and target.startswith("outline_part:"):
             part = target.split(":", 1)[1]
             mp = {
@@ -1809,10 +1828,10 @@ class MainWindow(QMainWindow):
             }
             if part in mp:
                 mp[part].setPlainText(content)
-            self.tabs.setCurrentWidget(self.tab_outline)
+            self._switch_to_tab(self.tab_outline)
         elif target == "intro":
             self.tab_outline.intro_edit.setPlainText(content)
-            self.tabs.setCurrentWidget(self.tab_outline)
+            self._switch_to_tab(self.tab_outline)
         elif target in ("chapter", "golden_three"):
             if self.workflow and meta.get("_workflow_ctx") and target == "chapter":
                 # ★ 新路径:由 workflow.start() 发起的章节(含 _workflow_ctx)
@@ -1829,7 +1848,7 @@ class MainWindow(QMainWindow):
                 cb(content)
         elif target == "optimize":
             self.tab_editor.content_edit.setPlainText(content)
-            self.tabs.setCurrentWidget(self.tab_editor)
+            self._switch_to_tab(self.tab_editor)
         elif target == "dialogue_critic":
             # v1.32:13 法对话诊断 AI 返回
             try:
@@ -1927,7 +1946,7 @@ class MainWindow(QMainWindow):
             if content.strip():
                 self.tab_memory.chars_edit.setPlainText(content.strip())
                 self.tab_generation.log("✓ 角色档案已更新", "success")
-            self.tabs.setCurrentWidget(self.tab_memory)
+            self._switch_to_tab(self.tab_memory)
             if meta.get("chain_full_memory"):
                 QTimer.singleShot(800, self._run_next_full_memory_step)
         elif target == "world_extract":
@@ -1964,7 +1983,7 @@ class MainWindow(QMainWindow):
             else:
                 # 仅显示在编辑器
                 self.tab_editor.content_edit.setPlainText(content.strip())
-                self.tabs.setCurrentWidget(self.tab_editor)
+                self._switch_to_tab(self.tab_editor)
         elif target == "long_term_extract":
             # 长期记忆提取 - 追加到现有内容
             if content.strip() and content.strip() != "无":
@@ -1974,7 +1993,7 @@ class MainWindow(QMainWindow):
                 self.tab_generation.log("✓ 长期记忆已追加", "success")
             else:
                 self.tab_generation.log("本章无新增长期记忆", "info")
-            self.tabs.setCurrentWidget(self.tab_memory)
+            self._switch_to_tab(self.tab_memory)
             if meta.get("chain_full_memory"):
                 QTimer.singleShot(800, self._run_next_full_memory_step)
 
@@ -3770,7 +3789,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "尚未生成任何章节,无法提取")
             return
         if not self.worker.is_ready():
-            self.tabs.setCurrentWidget(self.tab_generation)
+            self._switch_to_tab(self.tab_generation)
             QMessageBox.warning(
                 self, "请先启动浏览器",
                 "请先在『生成控制』页点『🚀 启动浏览器』,完成 AI 网站登录后再提取。")
@@ -3819,7 +3838,7 @@ class MainWindow(QMainWindow):
                 self._charlib_chain_post = False
                 QTimer.singleShot(500, self._run_next_post_chapter_step)
             else:
-                self.tabs.setCurrentWidget(self.tab_charlib)
+                self._switch_to_tab(self.tab_charlib)
             return
         ch_num = queue.pop(0)
         ch = self.chapters[ch_num - 1]
@@ -4374,7 +4393,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "尚未生成任何章节,无法抽取")
             return
         if not self.worker.is_ready():
-            self.tabs.setCurrentWidget(self.tab_generation)
+            self._switch_to_tab(self.tab_generation)
             QMessageBox.warning(
                 self, "请先启动浏览器",
                 "请先在『生成控制』页点『🚀 启动浏览器』,完成 AI 网站登录后再抽取。")
@@ -7502,7 +7521,7 @@ class MainWindow(QMainWindow):
         self.tab_generation.log(
             f"▶ 一键生成对话记忆启动,共 {self._full_memory_total} 步:{steps_desc}",
             "info")
-        self.tabs.setCurrentWidget(self.tab_memory)
+        self._switch_to_tab(self.tab_memory)
 
         self._run_next_full_memory_step()
 
@@ -8501,7 +8520,7 @@ class MainWindow(QMainWindow):
         if not options:
             # 解析失败,直接填入
             self.tab_settings.inspiration_edit.setPlainText(content)
-            self.tabs.setCurrentWidget(self.tab_settings)
+            self._switch_to_tab(self.tab_settings)
             return
 
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
@@ -8545,7 +8564,7 @@ class MainWindow(QMainWindow):
 
         if dlg.exec_() == QDialog.Accepted and selected[0]:
             self.tab_settings.inspiration_edit.setPlainText(selected[0])
-            self.tabs.setCurrentWidget(self.tab_settings)
+            self._switch_to_tab(self.tab_settings)
             self.tab_generation.log("💡 已选择创意灵感", "success")
 
     def gen_title(self):
