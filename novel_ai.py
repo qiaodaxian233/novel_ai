@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.15.4"
+APP_VERSION = "v2.15.5"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -428,6 +428,10 @@ class MainWindow(QMainWindow):
         # 恢复上次设置和项目数据
         # 先加载项目数据，再加载设置（QSettings优先级更高，覆盖项目文件中的旧设置）
         self._autoload()
+        # 自动启动浏览器(如果上次勾了"自动启动")
+        if self.tab_generation.chk_auto_start.isChecked():
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(1500, self._auto_start_browser)
         # v1.41: 启动后自动跳到 🏠 项目主页 Tab(看仪表盘)
         try:
             self.tabs.setCurrentIndex(0)
@@ -1068,6 +1072,13 @@ class MainWindow(QMainWindow):
         }.get(ch, "Chrome standalone")
         self.tab_generation.log(f"准备启动浏览器({mode_label})...", "info")
         self.worker.start(channel=ch)
+
+    def _auto_start_browser(self):
+        """启动时自动连接浏览器+导航到上次AI站点"""
+        if not SELENIUM_AVAILABLE:
+            return
+        self.tab_generation.log("🚀 自动启动浏览器(上次设置)...", "info")
+        self.launch_browser()
 
     def _on_browser_started(self):
         # 浏览器就绪后,自动跳到当前选定的 AI 网站

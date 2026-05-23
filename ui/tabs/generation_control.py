@@ -73,7 +73,11 @@ class GenerationControl(QWidget):
             "font-weight:bold; border-radius:3px;")
         self.btn_close = QPushButton("⛔ 关闭浏览器")
         self.btn_close.setEnabled(False)
+        self.chk_auto_start = QCheckBox("自动启动")
+        self.chk_auto_start.setChecked(False)
+        self.chk_auto_start.setToolTip("下次打开软件自动启动浏览器并连接上次的AI")
         b1.addWidget(self.btn_launch); b1.addWidget(self.btn_close)
+        b1.addWidget(self.chk_auto_start)
         blay.addLayout(b1)
 
         b2 = QHBoxLayout()
@@ -333,6 +337,7 @@ class GenerationControl(QWidget):
             ("crit.ai_style", self.chk_crit_ai_style, "isChecked", "setChecked", "stateChanged", True),
             ("site.last_model", self.site_combo, "currentText", "setCurrentText", "currentTextChanged", "DeepSeek"),
             ("tts.auto_read", self.chk_auto_tts, "isChecked", "setChecked", "stateChanged", False),
+            ("browser.auto_start", self.chk_auto_start, "isChecked", "setChecked", "stateChanged", False),
         ]
         for attr in ("chk_autosave_proj", "chk_autosave_txt", "chk_auto_grab"):
             if hasattr(self, attr):
