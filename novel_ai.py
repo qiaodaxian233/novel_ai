@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.18.7"
+APP_VERSION = "v2.18.8"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -889,7 +889,18 @@ class MainWindow(QMainWindow):
         self._status_stats = QLabel("0章 · 0字")
         self._status_stats.setStyleSheet("padding:2px 10px; color:#666;")
         sb.addPermanentWidget(self._status_stats)
-        self._status_indicator = QLabel("● 未启动")
+        # 任务计时器(中间)
+        self._status_task = QLabel("")
+        self._status_task.setStyleSheet(
+            "padding:2px 12px; color:#1a73e8; font-weight:bold;")
+        sb.addPermanentWidget(self._status_task)
+        self._task_start_time = None
+        self._task_current_name = ""
+        self._task_timer = QTimer(self)
+        self._task_timer.timeout.connect(self._tick_task_timer)
+        self._task_timer.setInterval(1000)
+        # 状态指示器(右侧)
+        self._status_indicator = QLabel("● 空闲")
         self._status_indicator.setStyleSheet(
             "color: #999; font-weight: bold; padding: 2px 8px;")
         sb.addPermanentWidget(self._status_indicator)
@@ -1285,6 +1296,43 @@ class MainWindow(QMainWindow):
                     "color:#1a73e8; font-weight:bold; padding:2px 8px;")
         # 也输出到日志
         self.tab_generation.log(f"[监控] {task_id}: {status}", "info")
+        # 启动/停止计时器
+        if "📤" in status:
+            # 任务开始
+            self._task_current_name = task_id
+            self._task_start_time = datetime.now()
+            self._task_timer.start()
+            self._tick_task_timer()
+        elif "✅" in status or "❌" in status:
+            # 任务完成/失败
+            elapsed = ""
+            if self._task_start_time:
+                secs = int((datetime.now() - self._task_start_time).total_seconds())
+                elapsed = f" ({secs}秒)"
+            self._status_task.setText(f"{task_id}: {status}{elapsed}")
+            self._task_timer.stop()
+            self._task_start_time = None
+
+    def _tick_task_timer(self):
+        """每秒更新任务计时"""
+        if self._task_start_time:
+            from datetime import datetime
+            secs = int((datetime.now() - self._task_start_time).total_seconds())
+            mins = secs // 60
+            s = secs % 60
+            time_str = f"{mins}:{s:02d}" if mins > 0 else f"{s}秒"
+            self._status_task.setText(
+                f"⏱ {self._task_current_name}  {time_str}")
+            # 超时变色
+            if secs > 60:
+                self._status_task.setStyleSheet(
+                    "padding:2px 12px; color:#e74c3c; font-weight:bold;")
+            elif secs > 30:
+                self._status_task.setStyleSheet(
+                    "padding:2px 12px; color:#e67e22; font-weight:bold;")
+            else:
+                self._status_task.setStyleSheet(
+                    "padding:2px 12px; color:#1a73e8; font-weight:bold;")
 
     def _switch_to_tab(self, widget):
         """智能切Tab:支持嵌套子Tab"""
