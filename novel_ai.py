@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.16.8"
+APP_VERSION = "v2.16.9"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -10177,23 +10177,21 @@ class MainWindow(QMainWindow):
             dlg.on_names_received(content)
 
     def _do_global_rename(self, result):
-        """全文替换角色名(章节+大纲+角色库)"""
+        """全文替换角色名(所有章节字段+大纲+角色库+记忆+Canon)"""
         if not result:
             return
         old_name, new_name = result
         count = 0
-        # 1. 章节正文/标题/摘要
+        # 1. 章节:所有字符串字段都替换
         for ch in self.chapters:
-            content = ch.get("content", "")
-            if old_name in content:
-                ch["content"] = content.replace(old_name, new_name)
+            hit = False
+            for key in list(ch.keys()):
+                val = ch[key]
+                if isinstance(val, str) and old_name in val:
+                    ch[key] = val.replace(old_name, new_name)
+                    hit = True
+            if hit:
                 count += 1
-            title = ch.get("title", "")
-            if old_name in title:
-                ch["title"] = title.replace(old_name, new_name)
-            summary = ch.get("summary", "")
-            if old_name in summary:
-                ch["summary"] = summary.replace(old_name, new_name)
         # 2. 大纲(全部编辑框)
         outline_fields = 0
         try:
@@ -10230,17 +10228,29 @@ class MainWindow(QMainWindow):
                     mem_text.replace(old_name, new_name))
         except Exception:
             pass
+        # 5. Canon Guard(锁定/演变设定)
+        canon_hits = 0
+        try:
+            for edit in [self.tab_canon.canon_edit]:
+                text = edit.toPlainText()
+                if old_name in text:
+                    edit.setPlainText(text.replace(old_name, new_name))
+                    canon_hits += 1
+        except Exception:
+            pass
         # 刷新 UI
         self._refresh_chapter_list()
         if 0 <= self.current_chapter_index < len(self.chapters):
             ch = self.chapters[self.current_chapter_index]
             self.tab_editor.load_chapter(
                 ch.get("title", ""), ch.get("content", ""))
-        parts = [f"{count}章正文"]
+        parts = [f"{count}章"]
         if outline_fields:
-            parts.append(f"{outline_fields}个大纲字段")
+            parts.append(f"{outline_fields}个大纲")
         if charlib_hits:
             parts.append(f"{charlib_hits}处角色库")
+        if canon_hits:
+            parts.append("Canon设定")
         self.tab_generation.log(
             f"🎭 全文替换:「{old_name}」→「{new_name}」({' + '.join(parts)})",
             "success")
