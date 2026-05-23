@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.17.9"
+APP_VERSION = "v2.18.0"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -10792,21 +10792,40 @@ def main():
     elif os.path.exists(_icon_path):
         app.setWindowIcon(QIcon(_icon_path))
 
-    # ── 启动闪屏 ──
+    # ── 启动闪屏(带进度条) ──
     from PyQt5.QtWidgets import QSplashScreen
-    from PyQt5.QtGui import QPixmap, QFont as _QFont
-    _splash_pix = None
-    if os.path.exists(_icon_path):
-        _splash_pix = QPixmap(_icon_path).scaled(
-            480, 480, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    from PyQt5.QtGui import QPixmap, QFont as _QFont, QPainter
+    _splash_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "assets", "splash.png")
+    if not os.path.exists(_splash_path):
+        _splash_path = _icon_path  # 降级用icon
     splash = None
-    if _splash_pix and not _splash_pix.isNull():
-        splash = QSplashScreen(_splash_pix)
-        splash.setFont(_QFont("Microsoft YaHei", 11))
-        splash.show()
-        splash.showMessage("正在加载盘古写作引擎...",
-            Qt.AlignBottom | Qt.AlignHCenter, QColor("#FFD700"))
-        app.processEvents()
+    _splash_modules = [
+        "盘古核心引擎", "禁用词系统", "风格权重", "对话记忆",
+        "Canon守卫", "角色管理", "技能库", "情绪分析",
+        "章节编辑器", "生成控制", "故事大纲", "世界观构建",
+        "伏笔追踪", "节奏稽核", "人物弧光", "关系图谱",
+        "TTS语音", "流程引擎", "差异化系统", "AI文风检测",
+        "剧情地图", "读者评审", "A/B对比", "短剧转换",
+        "智能取名", "项目管理", "主题系统", "浏览器引擎",
+        "自动保存",
+    ]
+    if os.path.exists(_splash_path):
+        _pix = QPixmap(_splash_path).scaled(
+            520, 520, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        if not _pix.isNull():
+            splash = QSplashScreen(_pix)
+            splash.setFont(_QFont("Microsoft YaHei", 9))
+            splash.show()
+            # 显示模块加载进度
+            for i, mod in enumerate(_splash_modules):
+                pct = int((i + 1) / len(_splash_modules) * 100)
+                splash.showMessage(
+                    f"  正在加载核心模块 ({i+1}/{len(_splash_modules)}) · "
+                    f"{mod}    {pct}%",
+                    Qt.AlignBottom | Qt.AlignLeft, QColor("#FFD700"))
+                app.processEvents()
+                import time; time.sleep(0.03)
 
     # v1.20:启动时应用上次保存的主题(light/dark)
     try:
@@ -10840,25 +10859,24 @@ def main():
 
     try:
         if splash:
-            splash.showMessage("正在初始化界面...",
-                Qt.AlignBottom | Qt.AlignHCenter, QColor("#FFD700"))
+            splash.showMessage("  正在初始化主界面...",
+                Qt.AlignBottom | Qt.AlignLeft, QColor("#FFD700"))
             app.processEvents()
         win = MainWindow()
-        # 设置窗口图标
         if os.path.exists(_ico_path):
             win.setWindowIcon(QIcon(_ico_path))
         elif os.path.exists(_icon_path):
             win.setWindowIcon(QIcon(_icon_path))
         if splash:
-            splash.showMessage("正在加载项目数据...",
-                Qt.AlignBottom | Qt.AlignHCenter, QColor("#FFD700"))
+            splash.showMessage("  正在加载项目数据...",
+                Qt.AlignBottom | Qt.AlignLeft, QColor("#FFD700"))
             app.processEvents()
         win.show()
         if splash:
-            splash.showMessage("加载完成!",
-                Qt.AlignBottom | Qt.AlignHCenter, QColor("#00FF00"))
+            splash.showMessage("  ✓ 加载完成!",
+                Qt.AlignBottom | Qt.AlignLeft, QColor("#00FF00"))
             app.processEvents()
-            import time; time.sleep(0.3)
+            import time; time.sleep(0.5)
             splash.finish(win)
         # v1.20:应用编辑器自定义颜色(如果之前调过)
         try:
