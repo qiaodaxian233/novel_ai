@@ -27,6 +27,25 @@ class CreationSettings(QWidget):
         super().__init__()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+
+        # ── 🔒 锁定设置按钮(防止滑动误触) ──
+        lock_row = QHBoxLayout()
+        lock_row.setContentsMargins(10, 5, 10, 0)
+        self.btn_lock = QPushButton("🔒 设置已锁定(点击解锁)")
+        self.btn_lock.setCheckable(True)
+        self.btn_lock.setChecked(True)
+        self._settings_locked = True
+        self.btn_lock.setStyleSheet(
+            "QPushButton { background:#e74c3c; color:white; padding:6px 16px;"
+            "font-weight:bold; border-radius:4px; }"
+            "QPushButton:checked { background:#e74c3c; }"
+            "QPushButton:!checked { background:#27ae60; }"
+            "QPushButton:hover { opacity:0.9; }")
+        self.btn_lock.clicked.connect(self._toggle_lock)
+        lock_row.addWidget(self.btn_lock)
+        lock_row.addStretch()
+        outer.addLayout(lock_row)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         outer.addWidget(scroll)
@@ -202,8 +221,10 @@ class CreationSettings(QWidget):
         wl_lay.addLayout(wl_btn_row)
         layout.addWidget(wl_box)
 
-        # ---- v1.10:🔊 TTS 朗读配置 ----
-        tts_box = QGroupBox("🔊 TTS 朗读(章节编辑器右上角 🔊 朗读本章 按钮)")
+        # ---- v1.10:🔊 TTS 朗读配置(默认折叠) ----
+        tts_box = QGroupBox("🔊 TTS 朗读配置(点击展开)")
+        tts_box.setCheckable(True)
+        tts_box.setChecked(False)
         tts_box.setStyleSheet("QGroupBox::title { font-weight: bold; }")
         tts_lay = QVBoxLayout(tts_box)
         # 后端下拉
@@ -882,6 +903,26 @@ class CreationSettings(QWidget):
 
     def get_personas(self):
         return [n for n, cb in self.persona_checks.items() if cb.isChecked()]
+
+    def _toggle_lock(self):
+        """切换锁定/解锁"""
+        locked = self.btn_lock.isChecked()
+        self._settings_locked = locked
+        if locked:
+            self.btn_lock.setText("🔒 设置已锁定(点击解锁)")
+            self.btn_lock.setStyleSheet(
+                "QPushButton { background:#e74c3c; color:white; padding:6px 16px;"
+                "font-weight:bold; border-radius:4px; }")
+        else:
+            self.btn_lock.setText("🔓 设置已解锁(点击锁定)")
+            self.btn_lock.setStyleSheet(
+                "QPushButton { background:#27ae60; color:white; padding:6px 16px;"
+                "font-weight:bold; border-radius:4px; }")
+        # 禁用/启用所有滑块和SpinBox
+        for sl in self.findChildren(QSlider):
+            sl.setEnabled(not locked)
+        for sb in self.findChildren(QSpinBox):
+            sb.setEnabled(not locked)
 
     def get_full_settings_block(self):
         """生成一段格式化的「完整设定」文本,用于注入提示词"""
