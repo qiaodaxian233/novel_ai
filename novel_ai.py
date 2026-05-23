@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.17.4"
+APP_VERSION = "v2.17.5"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -10213,41 +10213,140 @@ class MainWindow(QMainWindow):
             dlg.on_names_received(content)
 
     def _do_global_rename(self, result):
-        """全文替换角色名(所有章节字段+大纲+角色库+记忆+Canon)"""
+        """全文替换角色名 — 带预览确认"""
         if not result:
             return
         old_name, new_name = result
-        count = 0
-        # 1. 章节:所有字符串字段都替换
-        for ch in self.chapters:
-            hit = False
+
+        # ── 收集所有出现位置 ──
+        occurrences = []  # [(source_label, context_text, index_in_source), ...]
+
+        # 章节
+        for i, ch in enumerate(self.chapters):
             for key in list(ch.keys()):
                 val = ch[key]
                 if isinstance(val, str) and old_name in val:
-                    ch[key] = val.replace(old_name, new_name)
-                    hit = True
-            if hit:
-                count += 1
-        # 2. 大纲(全部编辑框,一个不漏)
-        outline_fields = 0
+                    for m in __import__('re').finditer(__import__('re').escape(old_name), val):
+                        start = max(0, m.start() - 15)
+                        end = min(len(val), m.end() + 15)
+                        ctx = val[start:end].replace('\n', ' ')
+                        occurrences.append((
+                            f"第{i+1}章.{key}", ctx, m.start()))
+
+        # 大纲
+        outline_edits = []
         try:
-            for edit in [
-                self.tab_outline.intro_edit,
-                self.tab_outline.seed_edit,
-                self.tab_outline.worldview_edit,
-                self.tab_outline.lo_edit,
-                self.tab_outline.structure_edit,
-                self.tab_outline.chapter_outline_edit,
-                self.tab_outline.special_edit,
-            ]:
-                text = edit.toPlainText()
-                if old_name in text:
-                    edit.setPlainText(text.replace(old_name, new_name))
-                    outline_fields += 1
+            outline_edits = [
+                ("简介", self.tab_outline.intro_edit),
+                ("故事种子", self.tab_outline.seed_edit),
+                ("世界观", self.tab_outline.worldview_edit),
+                ("LO层", self.tab_outline.lo_edit),
+                ("故事结构", self.tab_outline.structure_edit),
+                ("章节大纲", self.tab_outline.chapter_outline_edit),
+                ("特殊需求", self.tab_outline.special_edit),
+            ]
         except Exception:
             pass
-        # 3. 角色库表格
-        charlib_hits = 0
+        for label, edit in outline_edits:
+            text = edit.toPlainText()
+            if old_name in text:
+                for m in __import__('re').finditer(
+                        __import__('re').escape(old_name), text):
+                    start = max(0, m.start() - 15)
+                    end = min(len(text), m.end() + 15)
+                    ctx = text[start:end].replace('\n', ' ')
+                    occurrences.append((f"大纲.{label}", ctx, m.start()))
+
+        if not occurrences:
+            QMessageBox.information(self, "替换",
+                f"没有找到「{old_name}」")
+            return
+
+        # ── 弹出预览对话框 ──
+        from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
+            QCheckBox, QScrollArea, QWidget, QPushButton, QLabel)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"🔍 预览替换: 「{old_name}」→「{new_name}」")
+        dlg.resize(700, 500)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(
+            f"找到 {len(occurrences)} 处「{old_name}」,取消勾选不想替换的:"))
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        clayout = QVBoxLayout(container)
+        checks = []
+        for src, ctx, pos in occurrences:
+            highlighted = ctx.replace(
+                old_name, f"【{old_name}→{new_name}】")
+            chk = QCheckBox(f"[{src}] ...{highlighted}...")
+            chk.setChecked(True)
+            chk.setStyleSheet("font-size:12px; padding:2px;")
+            clayout.addWidget(chk)
+            checks.append(chk)
+        clayout.addStretch()
+        scroll.setWidget(container)
+        lay.addWidget(scroll)
+
+        # 按钮
+        btn_row = QHBoxLayout()
+        btn_all = QPushButton(f"全选({len(checks)})")
+        btn_all.clicked.connect(lambda: [c.setChecked(True) for c in checks])
+        btn_row.addWidget(btn_all)
+        btn_none = QPushButton("全不选")
+        btn_none.clicked.connect(lambda: [c.setChecked(False) for c in checks])
+        btn_row.addWidget(btn_none)
+        btn_row.addStretch()
+        btn_ok = QPushButton(f"✅ 替换勾选的")
+        btn_ok.setStyleSheet(
+            "QPushButton { background:#27ae60; color:white; padding:8px 16px;"
+            "font-weight:bold; border-radius:4px; }")
+        btn_ok.clicked.connect(dlg.accept)
+        btn_row.addWidget(btn_ok)
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(dlg.reject)
+        btn_row.addWidget(btn_cancel)
+        lay.addLayout(btn_row)
+
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        # ── 按勾选执行替换(从后往前,避免偏移) ──
+        # 按 source 分组
+        to_replace = {}
+        for i, (src, ctx, pos) in enumerate(occurrences):
+            if checks[i].isChecked():
+                to_replace.setdefault(src, []).append(pos)
+
+        count = 0
+        # 章节替换
+        for i, ch in enumerate(self.chapters):
+            for key in list(ch.keys()):
+                val = ch[key]
+                if not isinstance(val, str):
+                    continue
+                positions = to_replace.get(f"第{i+1}章.{key}", [])
+                if not positions:
+                    continue
+                # 从后往前替换
+                for pos in sorted(positions, reverse=True):
+                    val = val[:pos] + new_name + val[pos+len(old_name):]
+                ch[key] = val
+                count += 1
+
+        # 大纲替换
+        for label, edit in outline_edits:
+            positions = to_replace.get(f"大纲.{label}", [])
+            if not positions:
+                continue
+            text = edit.toPlainText()
+            for pos in sorted(positions, reverse=True):
+                text = text[:pos] + new_name + text[pos+len(old_name):]
+            edit.setPlainText(text)
+            count += 1
+
+        # 角色库/记忆/Canon — 这些全量替换(没有同名冲突风险)
         try:
             tbl = self.tab_charlib.tbl_chars
             for r in range(tbl.rowCount()):
@@ -10255,43 +10354,32 @@ class MainWindow(QMainWindow):
                     item = tbl.item(r, c)
                     if item and old_name in item.text():
                         item.setText(item.text().replace(old_name, new_name))
-                        charlib_hits += 1
         except Exception:
             pass
-        # 4. 对话记忆
         try:
-            mem_text = self.tab_memory.memory_edit.toPlainText()
-            if old_name in mem_text:
+            mem = self.tab_memory.memory_edit.toPlainText()
+            if old_name in mem:
                 self.tab_memory.memory_edit.setPlainText(
-                    mem_text.replace(old_name, new_name))
+                    mem.replace(old_name, new_name))
         except Exception:
             pass
-        # 5. Canon Guard(锁定/演变设定)
-        canon_hits = 0
         try:
-            for edit in [self.tab_canon.canon_edit]:
-                text = edit.toPlainText()
-                if old_name in text:
-                    edit.setPlainText(text.replace(old_name, new_name))
-                    canon_hits += 1
+            canon = self.tab_canon.canon_edit.toPlainText()
+            if old_name in canon:
+                self.tab_canon.canon_edit.setPlainText(
+                    canon.replace(old_name, new_name))
         except Exception:
             pass
-        # 刷新 UI
+
+        selected = sum(1 for c in checks if c.isChecked())
         self._refresh_chapter_list()
         if 0 <= self.current_chapter_index < len(self.chapters):
             ch = self.chapters[self.current_chapter_index]
             self.tab_editor.load_chapter(
                 ch.get("title", ""), ch.get("content", ""))
-        parts = [f"{count}章"]
-        if outline_fields:
-            parts.append(f"{outline_fields}个大纲")
-        if charlib_hits:
-            parts.append(f"{charlib_hits}处角色库")
-        if canon_hits:
-            parts.append("Canon设定")
         self.tab_generation.log(
-            f"🎭 全文替换:「{old_name}」→「{new_name}」({' + '.join(parts)})",
-            "success")
+            f"🎭 精准替换:「{old_name}」→「{new_name}」"
+            f"({selected}/{len(occurrences)}处)", "success")
 
     def show_dom_diagnostics(self):
         """🔬 诊断当前 AI 网页 DOM:看每个选择器在当前页命中了多少元素"""
