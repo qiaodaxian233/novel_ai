@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.20.6"
+APP_VERSION = "v2.20.7"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1105,6 +1105,10 @@ class MainWindow(QMainWindow):
             "msedge": "Edge standalone",
         }.get(ch, "Chrome standalone")
         self.tab_generation.log(f"准备启动浏览器({mode_label})...", "info")
+        # 传递隐藏浏览器标记
+        self.worker._hide_browser = (
+            hasattr(self.tab_generation, 'chk_hide_browser') and
+            self.tab_generation.chk_hide_browser.isChecked())
         self.worker.start(channel=ch)
 
     def _auto_start_browser(self):

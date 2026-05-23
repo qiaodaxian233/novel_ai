@@ -84,8 +84,14 @@ class GenerationControl(QWidget):
             "QPushButton { background:#e67e22; color:white; padding:6px 12px;"
             "border-radius:3px; font-weight:bold; }"
             "QPushButton:hover { background:#d35400; }")
+        self.chk_hide_browser = QCheckBox("🫥 隐藏浏览器")
+        self.chk_hide_browser.setChecked(False)
+        self.chk_hide_browser.setToolTip(
+            "启动时隐藏Chrome窗口(在后台运行)\n"
+            "取消勾选后重启浏览器即可显示")
         b1.addWidget(self.btn_launch); b1.addWidget(self.btn_close)
         b1.addWidget(self.btn_new_chat)
+        b1.addWidget(self.chk_hide_browser)
         b1.addWidget(self.chk_auto_start)
         blay.addLayout(b1)
 

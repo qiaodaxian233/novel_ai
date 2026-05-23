@@ -213,6 +213,9 @@ class BrowserWorker(QObject):
             "--no-first-run",
             "--no-default-browser-check",
         ]
+        # 隐藏浏览器:移到屏幕外
+        if getattr(self, '_hide_browser', False):
+            cmd += ["--window-position=-2400,-2400", "--window-size=800,600"]
         kwargs = {}
         if sys.platform == "win32":
             kwargs["creationflags"] = 0x00000008  # DETACHED_PROCESS
