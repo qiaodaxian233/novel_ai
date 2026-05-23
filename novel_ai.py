@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.19.1"
+APP_VERSION = "v2.19.2"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1619,7 +1619,7 @@ class MainWindow(QMainWindow):
                         "info")
         except Exception:
             self.worker._deep_think_enabled = False
-        self._switch_to_tab(self.tab_generation)
+        # 不再自动跳转到生成引擎(用户反馈:打断工作流)
         self.tab_generation.log(f"准备发送:{label} ({len(prompt)} 字符)", "info")
         # 记录这次任务的目标位置(由 _on_response_received 处理回填)
         # v1.97 BUG-071:字典写入 — key=label(== worker 侧 task_id),避免并发任务串台
