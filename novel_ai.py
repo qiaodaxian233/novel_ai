@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.19.6"
+APP_VERSION = "v2.19.7"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -5340,7 +5340,7 @@ class MainWindow(QMainWindow):
             "[演化项 - 可推进但不可凭空打脸]\n" + evolving)
 
     def _run_canon_audit(self, content, ch_num, on_done):
-        """对一章正文跑 Canon 稽核 prompt。
+        """对一章正文跑 Canon 稽核 prompt(含反重复检测)。
         on_done(violations: list) 在 AI 回复后被调用。"""
         if not hasattr(self, "tab_canon"):
             on_done([])
@@ -5350,8 +5350,24 @@ class MainWindow(QMainWindow):
         if locked == "(暂无锁定项)" and evolving == "(暂无演化项)":
             on_done([])
             return
+
+        # 收集前面章节的关键事件(用于反重复检测)
+        prev_events = []
+        for i, ch in enumerate(self.chapters):
+            if i >= ch_num - 1:
+                break  # 只看前面的章节
+            summary = ch.get("summary", "")
+            ch_content = ch.get("content", "")
+            if summary:
+                prev_events.append(f"第{i+1}章: {summary[:150]}")
+            elif ch_content:
+                # 没有摘要就用正文前200字
+                prev_events.append(f"第{i+1}章: {ch_content[:200]}...")
+        prev_events_text = "\n".join(prev_events) if prev_events else "(这是第1章,无前章)"
+
         prompt = PROMPTS["canon_audit"].format(
-            canon_locked=locked, canon_evolving=evolving, content=content[:6000])
+            canon_locked=locked, canon_evolving=evolving,
+            prev_events=prev_events_text, content=content[:6000])
         # 暂存 callback,_on_response_received 里特殊处理
         self._canon_audit_callback = (on_done, ch_num)
         self._send_to_ai(prompt, f"Canon稽核-第{ch_num}章", target="canon_audit")
