@@ -26,15 +26,15 @@ def _build_timeline_html(chapters, canon_items=None, foreshadows=None):
         emo = ch.get("emotion_scores", {})
         ch_data.append({
             "num": ch_num,
-            "title": ch.get("title", f"第{ch_num}章"),
-            "summary": (ch.get("summary") or "")[:120],
-            "hook": (ch.get("hook") or "")[:60],
-            "tension": emo.get("tension", 0),
-            "satisfaction": emo.get("satisfaction", 0),
-            "emotion": emo.get("emotion", 0),
-            "warmth": emo.get("warmth", 0),
-            "emo_summary": emo.get("summary", ""),
-            "seeds": (ch.get("_pangu_seeds_summary") or ""),
+            "title": str(ch.get("title", f"第{ch_num}章") or ""),
+            "summary": str(ch.get("summary") or "")[:120],
+            "hook": str(ch.get("hook") or "")[:60] if isinstance(ch.get("hook"), str) else "",
+            "tension": emo.get("tension", 0) if isinstance(emo, dict) else 0,
+            "satisfaction": emo.get("satisfaction", 0) if isinstance(emo, dict) else 0,
+            "emotion": emo.get("emotion", 0) if isinstance(emo, dict) else 0,
+            "warmth": emo.get("warmth", 0) if isinstance(emo, dict) else 0,
+            "emo_summary": str(emo.get("summary", "")) if isinstance(emo, dict) else "",
+            "seeds": str(ch.get("_pangu_seeds_summary") or ""),
         })
 
     # Canon 锁定项按章号分组
