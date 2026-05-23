@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.16.6"
+APP_VERSION = "v2.16.7"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -8406,8 +8406,11 @@ class MainWindow(QMainWindow):
         genres = self.tab_settings.get_selected_genres()
         if not genres:
             QMessageBox.warning(self, "提示", "请至少选一个题材"); return
-        prompt = PROMPTS["creative_inspiration"].format(genre="/".join(genres))
-        self.tab_generation.log("💡 正在生成创意灵感,请等待...", "info")
+        platform = self.tab_settings.get_platform()
+        prompt = PROMPTS["creative_inspiration"].format(
+            genre="/".join(genres), platform=platform)
+        self.tab_generation.log(
+            f"💡 正在根据{platform}{'/'.join(genres)}类热榜生成创意...", "info")
         self._send_to_ai(prompt, "创意灵感", target="inspiration")
 
     def gen_title(self):
