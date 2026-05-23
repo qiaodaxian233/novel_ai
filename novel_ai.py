@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.19.3"
+APP_VERSION = "v2.19.4"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -11083,17 +11083,42 @@ def main():
                 win._update_window_title()
                 print(f"[launcher] 加载项目: {_e}", flush=True)
 
-        # 自动识别分辨率 + 最大化
+        # 自动识别 1K/2K/4K 分辨率
         from PyQt5.QtWidgets import QDesktopWidget
-        screen = QDesktopWidget().availableGeometry()
-        win.setMinimumSize(800, 600)  # 确保可缩小
-        if screen.width() >= 1920:
-            win.showMaximized()
-        elif screen.width() >= 1366:
-            win.resize(int(screen.width() * 0.9), int(screen.height() * 0.9))
-            win.show()
+        screen = QDesktopWidget().screenGeometry()
+        dpi = app.primaryScreen().logicalDotsPerInch() if hasattr(app, 'primaryScreen') else 96
+        sw, sh = screen.width(), screen.height()
+        win.setMinimumSize(800, 600)
+
+        if sw >= 3840:
+            # 4K (3840×2160+)
+            _res = "4K"
+            _font_scale = 1.5
+        elif sw >= 2560:
+            # 2K (2560×1440+)
+            _res = "2K"
+            _font_scale = 1.2
         else:
-            win.showMaximized()
+            # 1K (1920×1080 及以下)
+            _res = "1K"
+            _font_scale = 1.0
+
+        # 应用字体缩放(如果用户没手动设过)
+        from PyQt5.QtCore import QSettings as _QSr
+        _manual = _QSr("NovelAI", "CreationSettings").value(
+            "font_scale", 0.0, type=float) or 0.0
+        if _manual < 0.5 and _font_scale > 1.0:
+            from PyQt5.QtGui import QFont as _QFr
+            _f = app.font()
+            _base = _f.pointSizeF() if _f.pointSizeF() > 0 else 9.0
+            _f.setPointSizeF(_base * _font_scale)
+            app.setFont(_f)
+            app.setProperty("_novelai_dpi_scale", _font_scale)
+
+        win.showMaximized()
+        win.tab_generation.log(
+            f"🖥 屏幕: {sw}×{sh} ({_res}) · DPI:{dpi:.0f} · "
+            f"字体缩放:×{_font_scale}", "info")
         # v1.20:应用编辑器自定义颜色(如果之前调过)
         try:
             win.tab_editor._apply_editor_colors()
