@@ -92,6 +92,23 @@ class AINamingDialog(QDialog):
         self.lbl_status.setStyleSheet("color:#888; padding:4px;")
         layout.addWidget(self.lbl_status)
 
+        # ── 自定义输入 ──
+        custom_row = QHBoxLayout()
+        custom_row.addWidget(QLabel("或手动输入:"))
+        self.input_custom = QLineEdit()
+        self.input_custom.setPlaceholderText("自己想的名字,直接输入")
+        self.input_custom.setStyleSheet("padding:6px; font-size:14px;")
+        self.input_custom.textChanged.connect(self._on_custom_changed)
+        custom_row.addWidget(self.input_custom)
+        btn_use_custom = QPushButton("✅ 用这个名字")
+        btn_use_custom.setStyleSheet(
+            "QPushButton { background:#8e44ad; color:white; padding:6px 14px;"
+            "border-radius:4px; } "
+            "QPushButton:hover { background:#7d3c98; }")
+        btn_use_custom.clicked.connect(self._on_use_custom)
+        custom_row.addWidget(btn_use_custom)
+        layout.addLayout(custom_row)
+
         # ── 底部操作 ──
         bottom = QHBoxLayout()
         self.btn_replace = QPushButton("✅ 用选中名字替换全文")
@@ -193,8 +210,29 @@ class AINamingDialog(QDialog):
             if btn is not clicked_btn:
                 btn.setChecked(False)
         self.selected_name = name
+        self.input_custom.clear()  # 清空自定义输入
         self.btn_replace.setEnabled(True)
         self.btn_replace.setText(f"✅ 用「{name}」替换全文")
+
+    def _on_custom_changed(self, text):
+        """自定义输入时,取消AI选中"""
+        if text.strip():
+            for btn in self._name_buttons:
+                btn.setChecked(False)
+            self.selected_name = None
+
+    def _on_use_custom(self):
+        """使用自定义名字"""
+        name = self.input_custom.text().strip()
+        if not name:
+            QMessageBox.information(self, "提示", "请输入名字")
+            return
+        old = self._get_old_name()
+        if not old:
+            QMessageBox.information(self, "提示", "请选择要替换的角色")
+            return
+        self.selected_name = name
+        self.accept()
 
     def _on_replace(self):
         if not self.selected_name:
