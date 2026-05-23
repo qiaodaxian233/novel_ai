@@ -199,8 +199,14 @@ class GenerationControl(QWidget):
         self.chk_auto_tts = QCheckBox("🔊 自动朗读")
         self.chk_auto_tts.setChecked(False)
         self.chk_auto_tts.setToolTip("每章入库后自动朗读,按顺序排队播放")
+        self.chk_new_chat = QCheckBox("🔄 每章新对话")
+        self.chk_new_chat.setChecked(True)
+        self.chk_new_chat.setToolTip(
+            "每章写完后在AI网站开启新对话,避免上下文污染\n"
+            "(推荐开启:防止前面章节的错误名字/内容影响后面)")
         for w in (self.auto_save_project, self.auto_save,
-                  self.auto_grab, self.use_attachment, self.chk_auto_tts):
+                  self.auto_grab, self.use_attachment,
+                  self.chk_auto_tts, self.chk_new_chat):
             orow1.addWidget(w)
         orow1.addStretch()
         self.btn_clear = QPushButton("🗑 清除日志")

@@ -509,10 +509,11 @@ class BrowserWorker(QObject):
             if action == "navigate":
                 self._goto(task["url"])
             elif action == "goto":
-                # E 模块:对话槽切换导航(同 navigate,alias 更清晰)
                 self._goto(task["url"])
                 self.log_signal.emit(
                     f"已导航到:{task['url'][:80]}", "info")
+            elif action == "new_chat":
+                self._start_new_chat(task.get("url", ""))
             elif action == "send_prompt":
                 self._send_prompt(task)
             elif action == "just_grab":
@@ -548,6 +549,51 @@ class BrowserWorker(QObject):
                 pass
         self.driver.get(url)
         self.log_signal.emit(f"已访问:{url}", "info")
+
+    def _start_new_chat(self, url=""):
+        """开启新对话:点击新对话按钮或刷新页面"""
+        if not self._is_alive():
+            return
+        self.log_signal.emit("🔄 正在开启新对话...", "info")
+        try:
+            # 方法1: 尝试用JS点击新对话按钮(各站点通用选择器)
+            clicked = self.driver.execute_script(r"""
+                // DeepSeek: 侧栏"新对话"按钮
+                const selectors = [
+                    'a[href="/"]',
+                    'div[class*="new-chat"]',
+                    'button[class*="new-chat"]',
+                    'div[class*="NewChat"]',
+                    'a[class*="new-chat"]',
+                ];
+                for (const sel of selectors) {
+                    const el = document.querySelector(sel);
+                    if (el && el.offsetParent !== null) {
+                        el.click();
+                        return 'clicked:' + sel;
+                    }
+                }
+                return null;
+            """)
+            if clicked:
+                self.log_signal.emit(f"✓ 新对话已开启({clicked})", "success")
+                import time; time.sleep(2)
+                return
+        except Exception:
+            pass
+        # 方法2: 刷新页面(最可靠的兜底)
+        try:
+            cur_url = self._current_url() or url
+            if cur_url:
+                # 去掉路径中的对话ID,只保留域名
+                from urllib.parse import urlparse
+                parsed = urlparse(cur_url)
+                base = f"{parsed.scheme}://{parsed.netloc}/"
+                self.driver.get(base)
+                self.log_signal.emit(f"✓ 已导航到首页开启新对话: {base}", "success")
+                import time; time.sleep(2)
+        except Exception as e:
+            self.log_signal.emit(f"⚠ 开启新对话失败: {e}", "warn")
 
     def run_dom_diagnostics(self):
         """诊断:对当前页跑所有候选选择器,返回命中情况

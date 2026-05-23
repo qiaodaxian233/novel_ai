@@ -565,8 +565,24 @@ class NextChapterStep(PipelineStep):
         return mw._batch_remaining > 0 and not mw._batch_paused
 
     def run(self, ctx: PipelineContext, done):
-        QTimer.singleShot(800, self._mw._send_next_chapter)
-        done()  # 本步同步完成,下一章独立走自己的 workflow
+        mw = self._mw
+        # 每章新对话:在发送下一章前开启新对话
+        try:
+            if (hasattr(mw, 'tab_generation') and
+                    hasattr(mw.tab_generation, 'chk_new_chat') and
+                    mw.tab_generation.chk_new_chat.isChecked() and
+                    mw.worker.is_ready()):
+                url = mw.tab_generation.url_input.text().strip()
+                mw.worker.submit({"action": "new_chat", "url": url})
+                mw.tab_generation.log("🔄 新对话:下一章将在干净的上下文中生成", "info")
+                # 等新对话加载完再发下一章
+                QTimer.singleShot(3000, mw._send_next_chapter)
+                done()
+                return
+        except Exception:
+            pass
+        QTimer.singleShot(800, mw._send_next_chapter)
+        done()
 
 
 class EndBatchStep(PipelineStep):
