@@ -692,6 +692,8 @@ class GenerationWorkflow:
 
     def _run_pre_write(self, ctx: PipelineContext):
         """串行跑所有 pre_write 步,全部完成后发送给浏览器"""
+        if hasattr(self._mw, '_update_task_monitor'):
+            self._mw._update_task_monitor(f"第{ctx.ch_num}章", "📤 写前注入")
         steps = [s for s in self._registry.get("pre_write") if s.enabled]
         self._run_step_list(steps, ctx, self._after_pre_write)
 
@@ -770,6 +772,8 @@ class GenerationWorkflow:
     # ------------------------------------------------------------------
 
     def _run_post_write(self, ctx: PipelineContext):
+        if hasattr(self._mw, '_update_task_monitor'):
+            self._mw._update_task_monitor(f"第{ctx.ch_num}章", "🔍 写后校验")
         steps = [s for s in self._registry.get("post_write") if s.enabled]
         self._run_step_list(steps, ctx, self._after_post_write)
 
@@ -785,6 +789,9 @@ class GenerationWorkflow:
 
     def _retry(self, ctx: PipelineContext):
         mw = self._mw
+        if hasattr(mw, '_update_task_monitor'):
+            mw._update_task_monitor(f"第{ctx.ch_num}章",
+                f"🔄 重试(剩{ctx.retry_left}次)")
         if ctx.retry_left <= 0:
             # ★ BUG-062 硬下限:死磕用尽 + 内容异常短(<800 字)→ 拒绝入库,
             #   防止 JSON 评分残留 / 抓取错位的废话当成章节进 chapters[],
@@ -844,6 +851,9 @@ class GenerationWorkflow:
 
     def _accept(self, ctx: PipelineContext):
         mw = self._mw
+        if hasattr(mw, '_update_task_monitor'):
+            wc = len(ctx.content.strip()) if ctx.content else 0
+            mw._update_task_monitor(f"第{ctx.ch_num}章", f"✅ 入库({wc}字)")
 
         # 📋 管家:章节流程开始(workflow 路径)
         try:
