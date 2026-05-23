@@ -59,6 +59,26 @@ class AINamingDialog(QDialog):
         row2.addWidget(self.combo_era)
         info_lay.addLayout(row2)
 
+        row2b = QHBoxLayout()
+        row2b.addWidget(QLabel("字数:"))
+        self.combo_length = QComboBox()
+        self.combo_length.addItems(["不限", "2字(如:苏棠)", "3字(如:顾衍之)", "4字(如:欧阳明月)"])
+        row2b.addWidget(self.combo_length)
+        row2b.addWidget(QLabel("风格:"))
+        self.combo_style = QComboBox()
+        self.combo_style.addItems(["不限", "现实普通", "文艺清新", "古风雅致", "霸气强势", "温柔甜美"])
+        row2b.addWidget(self.combo_style)
+        info_lay.addLayout(row2b)
+
+        row2c = QHBoxLayout()
+        row2c.addWidget(QLabel("指定姓:"))
+        self.input_surname = QLineEdit()
+        self.input_surname.setPlaceholderText("留空=AI随机,填'顾'=所有名字姓顾")
+        self.input_surname.setMaximumWidth(200)
+        row2c.addWidget(self.input_surname)
+        row2c.addStretch()
+        info_lay.addLayout(row2c)
+
         row3 = QHBoxLayout()
         row3.addWidget(QLabel("补充:"))
         self.input_desc = QLineEdit()
@@ -147,6 +167,23 @@ class AINamingDialog(QDialog):
             parts.append(f"原名: {old}(需要替换)")
         parts.append(f"性别: {self.combo_gender.currentText()}")
         parts.append(f"背景: {self.combo_era.currentText()}")
+        # 字数要求
+        length = self.combo_length.currentText()
+        if "2字" in length:
+            parts.append("名字长度: 必须2个字(姓1字+名1字)")
+        elif "3字" in length:
+            parts.append("名字长度: 必须3个字(姓1字+名2字,或复姓+名1字)")
+        elif "4字" in length:
+            parts.append("名字长度: 必须4个字(复姓2字+名2字)")
+        # 风格
+        style = self.combo_style.currentText()
+        if style != "不限":
+            parts.append(f"名字风格: {style}")
+        # 指定姓氏
+        surname = self.input_surname.text().strip()
+        if surname:
+            parts.append(f"指定姓氏: 所有名字必须姓'{surname}'")
+        # 补充
         desc = self.input_desc.text().strip()
         if desc:
             parts.append(f"角色特征: {desc}")
