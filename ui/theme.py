@@ -155,6 +155,39 @@ class ThemeManager:
         background-color: #3c3c3c;
     }
 
+    /* ─── 按钮(通用) ─── */
+    QPushButton {
+        background-color: #3c3c3c;
+        color: #d4d4d4;
+        border: 1px solid #555;
+        padding: 5px 12px;
+        border-radius: 3px;
+    }
+    QPushButton:hover {
+        background-color: #4f4f4f;
+        border-color: #888;
+    }
+    QPushButton:pressed {
+        background-color: #094771;
+    }
+    QPushButton:disabled {
+        background-color: #2d2d30;
+        color: #666;
+    }
+
+    /* ─── 进度条 ─── */
+    QProgressBar {
+        background-color: #2d2d30;
+        border: 1px solid #3c3c3c;
+        border-radius: 3px;
+        color: #d4d4d4;
+        text-align: center;
+    }
+    QProgressBar::chunk {
+        background-color: #094771;
+        border-radius: 2px;
+    }
+
     /* ─── 标签 / 工具提示 ─── */
     QLabel {
         color: #d4d4d4;
