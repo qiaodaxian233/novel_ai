@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.16.9"
+APP_VERSION = "v2.17.0"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -10192,15 +10192,17 @@ class MainWindow(QMainWindow):
                     hit = True
             if hit:
                 count += 1
-        # 2. 大纲(全部编辑框)
+        # 2. 大纲(全部编辑框,一个不漏)
         outline_fields = 0
         try:
             for edit in [
+                self.tab_outline.intro_edit,
                 self.tab_outline.seed_edit,
                 self.tab_outline.worldview_edit,
                 self.tab_outline.lo_edit,
                 self.tab_outline.structure_edit,
                 self.tab_outline.chapter_outline_edit,
+                self.tab_outline.special_edit,
             ]:
                 text = edit.toPlainText()
                 if old_name in text:
