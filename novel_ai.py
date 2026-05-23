@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.15.1"
+APP_VERSION = "v2.15.2"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -302,6 +302,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_FULL)
+        self._project_title = ""  # 当前项目名,用于窗口标题
         self.resize(1280, 820)
         # 按 font_scale 把全局样式表里的 font-size: Npx 全部按倍率放大
         # 这是修 BUG-016 的关键 — 不然 app.setFont() 被这里的 13px 死压
@@ -860,6 +861,15 @@ class MainWindow(QMainWindow):
         _act_diff_info.setToolTip("查看章节差异化(防 AI 套路)当前状态和下一章预览参数")
         _act_diff_info.triggered.connect(self._on_pangu_diff_info)
         _tb_pangu.addAction(_act_diff_info)
+        # 主题切换(左键循环,右键选择)
+        from PyQt5.QtWidgets import QToolButton
+        _btn_theme = QToolButton()
+        _btn_theme.setText("🎨 主题")
+        _btn_theme.setToolTip("左键循环 / 右键选择\n☀️浅色→🌙暗黑→🌿护眼绿→🌅暖黄")
+        _btn_theme.clicked.connect(self._on_toggle_theme)
+        _btn_theme.setContextMenuPolicy(Qt.CustomContextMenu)
+        _btn_theme.customContextMenuRequested.connect(lambda p: self._show_theme_menu())
+        _tb_pangu.addWidget(_btn_theme)
         self.setStatusBar(sb)
         sb.addWidget(QLabel(f"© 2026 {APP_NAME} {APP_VERSION} | Python + PyQt5"))
         self._status_indicator = QLabel("● 未启动")
