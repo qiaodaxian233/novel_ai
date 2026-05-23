@@ -331,6 +331,8 @@ class GenerationControl(QWidget):
             ("crit.rhythm", self.chk_crit_rhythm, "isChecked", "setChecked", "stateChanged", False),
             ("crit.char", self.chk_crit_char, "isChecked", "setChecked", "stateChanged", False),
             ("crit.ai_style", self.chk_crit_ai_style, "isChecked", "setChecked", "stateChanged", True),
+            ("site.last_model", self.site_combo, "currentText", "setCurrentText", "currentTextChanged", "DeepSeek"),
+            ("tts.auto_read", self.chk_auto_tts, "isChecked", "setChecked", "stateChanged", False),
         ]
         for attr in ("chk_autosave_proj", "chk_autosave_txt", "chk_auto_grab"):
             if hasattr(self, attr):
@@ -338,8 +340,13 @@ class GenerationControl(QWidget):
                 items.append((f"save.{attr}", w, "isChecked", "setChecked", "stateChanged", True))
         for key, widget, getter, setter, sig_name, default in items:
             try:
-                stored = s.value(key, default,
-                                 type=int if isinstance(default, int) else bool)
+                if isinstance(default, int):
+                    _type = int
+                elif isinstance(default, str):
+                    _type = str
+                else:
+                    _type = bool
+                stored = s.value(key, default, type=_type)
                 getattr(widget, setter)(stored)
                 signal = getattr(widget, sig_name)
                 signal.connect(

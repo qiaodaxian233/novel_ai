@@ -8,9 +8,7 @@ from PyQt5.QtCore import QSettings
 
 
 # ── 基础 QSS 模板 ──
-_BASE_FONT = """
-    * { font-size: 13px; }
-"""
+_BASE_FONT = ""  # 不强制全局字体,让控件保持自己的 font-size
 
 _QSS_TEMPLATE = """
     {base_font}

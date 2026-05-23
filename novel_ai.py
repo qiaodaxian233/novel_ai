@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.15.3"
+APP_VERSION = "v2.15.4"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -783,19 +783,7 @@ class MainWindow(QMainWindow):
         # v1.20:Tab 右上角加 ☀️/🌙 主题切换按钮
         from PyQt5.QtCore import QSettings as _QS_theme
         _theme_name = _QS_theme("NovelAI", "UI").value("theme", "light", type=str)
-        _cur_theme = ThemeManager.THEMES.get(_theme_name, ThemeManager.THEMES.get("light", {}))
-        self.btn_theme_toggle = QPushButton(
-            f"{_cur_theme.get('icon', '☀️')} 主题切换")
-        self.btn_theme_toggle.setToolTip(
-            f"当前: {_cur_theme.get('label', '浅色')}\n"
-            "点击循环: ☀️浅色 → 🌙暗黑 → 🌿护眼绿 → 🌅暖黄")
-        self.btn_theme_toggle.setStyleSheet(
-            "QPushButton { background:#5d6d7e; color:white; border:1px solid #888;"
-            "border-radius:4px; font-size:12px; padding:4px 10px; } "
-            "QPushButton:hover { background:#7f8c8d; } "
-            "QPushButton:pressed { background:#34495e; }")
-        self.btn_theme_toggle.clicked.connect(self._on_toggle_theme)
-        self.tabs.setCornerWidget(self.btn_theme_toggle)
+        # 主题切换按钮已在工具栏(差异化旁边),不再放Tab角落
         self.tab_settings = CreationSettings()
         self.tab_outline = StoryOutline()
         self.tab_memory = DialogMemory()
@@ -863,13 +851,14 @@ class MainWindow(QMainWindow):
         _tb_pangu.addAction(_act_diff_info)
         # 主题切换(左键循环,右键选择)
         from PyQt5.QtWidgets import QToolButton
-        _btn_theme = QToolButton()
-        _btn_theme.setText("🎨 主题")
-        _btn_theme.setToolTip("左键循环 / 右键选择\n☀️浅色→🌙暗黑→🌿护眼绿→🌅暖黄")
-        _btn_theme.clicked.connect(self._on_toggle_theme)
-        _btn_theme.setContextMenuPolicy(Qt.CustomContextMenu)
-        _btn_theme.customContextMenuRequested.connect(lambda p: self._show_theme_menu())
-        _tb_pangu.addWidget(_btn_theme)
+        self.btn_theme_toggle = QToolButton()
+        self.btn_theme_toggle.setText("🎨 主题切换")
+        self.btn_theme_toggle.setToolTip("左键循环 / 右键选主题\n☀️浅色→🌙暗黑→🌿护眼绿→🌅暖黄")
+        self.btn_theme_toggle.clicked.connect(self._on_toggle_theme)
+        self.btn_theme_toggle.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.btn_theme_toggle.customContextMenuRequested.connect(
+            lambda p: self._show_theme_menu())
+        _tb_pangu.addWidget(self.btn_theme_toggle)
         self.setStatusBar(sb)
         sb.addWidget(QLabel(f"© 2026 {APP_NAME} {APP_VERSION}"))
         self._status_stats = QLabel("0章 · 0字")
@@ -7829,55 +7818,64 @@ class MainWindow(QMainWindow):
         print("[Theme] 视图菜单 + Ctrl+Shift+D 快捷键已注册", flush=True)
 
     def _on_toggle_theme(self):
-        """切换主题 — 智能清除颜色但保留字体"""
+        """循环切换主题"""
+        themes = list(ThemeManager.THEMES.keys())
+        cur = ThemeManager.current()
+        idx = themes.index(cur) if cur in themes else 0
+        new_name = themes[(idx + 1) % len(themes)]
+        self._apply_theme(new_name)
+
+    def _show_theme_menu(self):
+        """右键选择主题"""
+        from PyQt5.QtWidgets import QMenu
+        menu = QMenu(self)
+        cur = ThemeManager.current()
+        for key, theme in ThemeManager.THEMES.items():
+            label = theme.get("label", key)
+            act = menu.addAction(f"{'✓ ' if key == cur else '   '}{label}")
+            act.triggered.connect(lambda checked, k=key: self._apply_theme(k))
+        menu.exec_(self.btn_theme_toggle.mapToGlobal(
+            self.btn_theme_toggle.rect().bottomLeft()))
+
+    def _apply_theme(self, name):
+        """应用指定主题 — 智能清除颜色,保留字体"""
         from PyQt5.QtWidgets import QApplication
         import re as _re
         app = QApplication.instance()
         if app is None:
             return
-
-        # 获取可用主题列表,循环切换
-        themes = list(ThemeManager.THEMES.keys())
-        cur = ThemeManager.current()
-        idx = themes.index(cur) if cur in themes else 0
-        new_name = themes[(idx + 1) % len(themes)]
-        ThemeManager.apply(app, new_name)
+        ThemeManager.apply(app, name)
 
         # 智能清除子控件样式:只删颜色,保留字体
         _accent_colors = {"#e65100", "#1a73e8", "#27ae60", "#8e44ad",
                           "#e67e22", "#3498db", "#2ecc71", "#cc3333",
                           "#e74c3c", "#0f3460", "#1557b0", "#bf360c",
-                          "#c0392b", "#d35400", "#2980b9", "#6c3483"}
+                          "#c0392b", "#d35400", "#2980b9", "#6c3483",
+                          "#5d6d7e"}
         cleared = 0
         for w in self.findChildren(QWidget):
             ss = w.styleSheet()
             if not ss:
                 continue
-            # 保留功能按钮的特殊颜色
             if any(c in ss.lower() for c in _accent_colors):
                 continue
-            # 保留 DEBUG 面板
             if hasattr(self, 'tab_debug') and w is getattr(self.tab_debug, 'log_edit', None):
                 continue
-            # 提取 font 相关属性,只清颜色
-            font_props = []
-            for prop in _re.findall(r'(font-(?:size|family|weight)[^;]*;)', ss):
-                font_props.append(prop)
-            # 如果只有字体属性没有颜色,不清
+            # 提取所有 font 相关属性(含末尾无分号的)
+            font_props = _re.findall(
+                r'font(?:-size|-family|-weight)?[^;{}]*(?:;|(?=\s*["}]))', ss)
             if font_props and not _re.search(r'(?:background|color)\s*:', ss):
                 continue
-            # 保留字体,清掉颜色
             if font_props:
-                w.setStyleSheet(" ".join(font_props))
+                preserved = " ".join(p.strip().rstrip(";") + ";" for p in font_props)
+                w.setStyleSheet(preserved)
             else:
                 w.setStyleSheet("")
             cleared += 1
 
-        # QSS 设在 MainWindow
-        qss = ThemeManager.THEMES.get(new_name, {}).get("qss", "")
+        qss = ThemeManager.THEMES.get(name, {}).get("qss", "")
         self.setStyleSheet(qss)
 
-        # 强制刷新
         for w in app.allWidgets():
             try:
                 w.style().unpolish(w)
@@ -7885,16 +7883,15 @@ class MainWindow(QMainWindow):
                 w.update()
             except Exception:
                 pass
-
         try:
             self.tab_editor._apply_editor_colors()
         except Exception:
             pass
 
-        label = ThemeManager.THEMES.get(new_name, {}).get("label", new_name)
-        self.btn_theme_toggle.setText(ThemeManager.THEMES.get(new_name, {}).get("icon", "🎨"))
-        self.btn_theme_toggle.setToolTip(f"当前: {label} (点击切换下一个)")
-        self.tab_generation.log(f"🎨 主题 → {label} (清除 {cleared} 个私有样式)", "info")
+        label = ThemeManager.THEMES.get(name, {}).get("label", name)
+        icon = ThemeManager.THEMES.get(name, {}).get("icon", "🎨")
+        self.btn_theme_toggle.setText(f"{icon} 主题切换")
+        self.tab_generation.log(f"🎨 主题 → {label}", "info")
 
     def _init_tts(self):
         """启动时初始化 TTS:QMediaPlayer + 状态"""
