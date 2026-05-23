@@ -283,13 +283,14 @@ class LifespanLoopsPanel(QWidget):
         self._refresh_total_hint()
         self.refresh_status()
 
-        # 伏笔
-        cfg = getattr(self.mw, "open_loops", None) \
-              or dict(DEFAULT_OPEN_LOOPS_CFG)
-        self.chk_loops_on.setChecked(bool(cfg.get("enabled", False)))
-        self.spin_warn_gap.setValue(int(cfg.get("warn_gap", 80)))
-        self.spin_critical_gap.setValue(int(cfg.get("critical_gap", 150)))
-        self._refresh_loops_table()
+        # 伏笔(已移到独立Tab,这里跳过)
+        if hasattr(self, 'chk_loops_on'):
+            cfg = getattr(self.mw, "open_loops", None) \
+                  or dict(DEFAULT_OPEN_LOOPS_CFG)
+            self.chk_loops_on.setChecked(bool(cfg.get("enabled", False)))
+            self.spin_warn_gap.setValue(int(cfg.get("warn_gap", 80)))
+            self.spin_critical_gap.setValue(int(cfg.get("critical_gap", 150)))
+            self._refresh_loops_table()
 
     def sync_to_mw(self):
         """从 UI 把数据写回 mw.lifespan_ledger / mw.open_loops。
@@ -314,10 +315,11 @@ class LifespanLoopsPanel(QWidget):
         led["critical_threshold"] = self.spin_critical.value()
         led["default_per_chapter"] = self.spin_default_per.value()
 
-        cfg = self.mw.open_loops
-        cfg["enabled"] = self.chk_loops_on.isChecked()
-        cfg["warn_gap"] = self.spin_warn_gap.value()
-        cfg["critical_gap"] = self.spin_critical_gap.value()
+        if hasattr(self, 'chk_loops_on'):
+            cfg = self.mw.open_loops
+            cfg["enabled"] = self.chk_loops_on.isChecked()
+            cfg["warn_gap"] = self.spin_warn_gap.value()
+            cfg["critical_gap"] = self.spin_critical_gap.value()
 
     def refresh_status(self):
         """刷新"当前状态"显示。"""
