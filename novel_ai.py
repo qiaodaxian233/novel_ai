@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.20.3"
+APP_VERSION = "v2.20.4"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -951,6 +951,7 @@ class MainWindow(QMainWindow):
         # 生成控制 - 浏览器
         self.tab_generation.btn_launch.clicked.connect(self.launch_browser)
         self.tab_generation.btn_close.clicked.connect(self.close_browser)
+        self.tab_generation.btn_new_chat.clicked.connect(self._manual_new_chat)
         self.tab_generation.btn_go.clicked.connect(self._goto_url)
         self.tab_generation.btn_grab.clicked.connect(self.grab_response)
 
@@ -1162,6 +1163,15 @@ class MainWindow(QMainWindow):
         self.worker.stop()
         self.tab_generation.btn_launch.setEnabled(True)
         self.tab_generation.btn_close.setEnabled(False)
+
+    def _manual_new_chat(self):
+        """手动开启新对话"""
+        if not self.worker.is_ready():
+            QMessageBox.warning(self, "提示", "请先启动浏览器")
+            return
+        url = self.tab_generation.url_input.text().strip()
+        self.worker.submit({"action": "new_chat", "url": url})
+        self.tab_generation.log("🔄 手动新建对话 — AI上下文已清空", "success")
 
     def _goto_url(self):
         if not self.worker.is_ready():

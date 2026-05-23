@@ -76,7 +76,16 @@ class GenerationControl(QWidget):
         self.chk_auto_start = QCheckBox("自动启动")
         self.chk_auto_start.setChecked(False)
         self.chk_auto_start.setToolTip("下次打开软件自动启动浏览器并连接上次的AI")
+        self.btn_new_chat = QPushButton("🔄 新建对话")
+        self.btn_new_chat.setToolTip(
+            "在AI网站开启新对话,清空上下文\n"
+            "建议: 改完大纲/名字后点一下,防止AI用旧名字")
+        self.btn_new_chat.setStyleSheet(
+            "QPushButton { background:#e67e22; color:white; padding:6px 12px;"
+            "border-radius:3px; font-weight:bold; }"
+            "QPushButton:hover { background:#d35400; }")
         b1.addWidget(self.btn_launch); b1.addWidget(self.btn_close)
+        b1.addWidget(self.btn_new_chat)
         b1.addWidget(self.chk_auto_start)
         blay.addLayout(b1)
 
