@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.16.1"
+APP_VERSION = "v2.16.2"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -592,6 +592,7 @@ class MainWindow(QMainWindow):
             ("📥 导入外部小说续写...", self.import_continuation, ""),
             ("🕐 最近项目", "__RECENT__", ""),   # v1.41 标记,下面动态填充
             ("保存项目", self.save_project, "Ctrl+S"),
+            ("📝 项目重命名", self.rename_project, ""),
             ("🕓 恢复历史版本(最近 10 次)", self.restore_project_backup, ""),
             (None, None, ""),
             ("退出", self.close, ""),
@@ -1268,6 +1269,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction("📂 导入存档", self.open_project)
         menu.addAction("📁 新建空白创作", self.new_project)
+        menu.addAction("📝 项目重命名", self.rename_project)
         menu.addAction("📁 新建目录", self.new_directory)
         menu.addAction("⬆️ 返回上级目录", self.back_directory)
 
@@ -9131,6 +9133,38 @@ class MainWindow(QMainWindow):
             pass
         self.tab_generation.log(f"📁 新建项目:「{title}」", "success")
         self.statusBar().showMessage(f"新项目「{title}」已创建", 3000)
+
+    def rename_project(self):
+        """重命名当前项目"""
+        if not self.current_project_file:
+            QMessageBox.information(self, "提示", "没有打开的项目")
+            return
+        old_path = Path(self.current_project_file)
+        old_name = old_path.name
+        new_name, ok = QInputDialog.getText(
+            self, "项目重命名", "新名字:", text=old_name)
+        if not ok or not new_name.strip() or new_name.strip() == old_name:
+            return
+        new_name = new_name.strip()
+        import re as _re
+        safe_name = _re.sub(r'[\\/:*?"<>|]', '_', new_name)
+        new_path = old_path.parent / safe_name
+        if new_path.exists():
+            QMessageBox.warning(self, "重命名", f"「{safe_name}」已存在")
+            return
+        try:
+            old_path.rename(new_path)
+            self.current_project_file = str(new_path)
+            self._project_title = new_name
+            self._update_window_title()
+            from PyQt5.QtCore import QSettings
+            QSettings("NovelAI", "UI").setValue(
+                "last_project_path", self.current_project_file)
+            self._push_to_recent(self.current_project_file)
+            self.tab_generation.log(
+                f"📁 项目重命名:「{old_name}」→「{new_name}」", "success")
+        except Exception as e:
+            QMessageBox.warning(self, "重命名失败", str(e))
 
     def open_project(self):
         """v1.50:直接弹文件夹选择器,去掉 v1.30 迁移期的二选一弹窗
