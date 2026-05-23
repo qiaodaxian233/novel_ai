@@ -1,267 +1,209 @@
 # -*- coding: utf-8 -*-
-"""
-ui/theme.py - 应用主题管理器(亮/暗主题切换 + QSettings 持久化)
+"""ui/theme.py - 多主题管理器
 
-v2.02 P3 拆分:从 novel_ai.py 第 216-439 行整体搬运,内容零修改。
-被 novel_ai.py 顶部 `from ui.theme import ThemeManager` 导入。
+支持主题: 浅色 / 暗黑 / 护眼绿 / 暖黄
+v2.15.1 重写。
 """
-
 from PyQt5.QtCore import QSettings
 
+
+# ── 基础 QSS 模板 ──
+_BASE_FONT = """
+    * { font-size: 13px; }
+"""
+
+_QSS_TEMPLATE = """
+    {base_font}
+    QMainWindow, QWidget, QDialog, QFrame {{
+        background-color: {bg}; color: {fg};
+    }}
+    QPlainTextEdit, QTextEdit, QLineEdit {{
+        background-color: {input_bg}; color: {fg};
+        border: 1px solid {border}; selection-background-color: {accent};
+    }}
+    QGroupBox {{
+        border: 1px solid {border}; margin-top: 12px; padding-top: 6px; color: {fg};
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin; left: 8px; color: {fg}; font-weight: bold;
+    }}
+    QTabWidget::pane {{ background-color: {bg}; border: 1px solid {border}; }}
+    QTabBar::tab {{
+        background-color: {tab_bg}; color: {fg};
+        padding: 6px 14px; border: 1px solid {border}; border-bottom: 0;
+    }}
+    QTabBar::tab:selected {{ background-color: {accent}; color: {accent_fg}; }}
+    QTabBar::tab:hover {{ background-color: {hover}; }}
+    QTableWidget, QTreeWidget, QListWidget, QTableView, QTreeView, QListView {{
+        background-color: {input_bg}; color: {fg};
+        gridline-color: {border}; alternate-background-color: {alt_bg};
+        selection-background-color: {accent}; selection-color: {accent_fg};
+    }}
+    QHeaderView::section {{
+        background-color: {tab_bg}; color: {fg};
+        border: 1px solid {border}; padding: 4px;
+    }}
+    QComboBox, QSpinBox, QDoubleSpinBox {{
+        background-color: {hover}; color: {fg};
+        border: 1px solid {border}; padding: 3px 6px;
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: {tab_bg}; color: {fg}; selection-background-color: {accent};
+    }}
+    QCheckBox, QRadioButton {{ color: {fg}; spacing: 6px; }}
+    QMenuBar {{ background-color: {tab_bg}; color: {fg}; }}
+    QMenuBar::item:selected {{ background-color: {accent}; }}
+    QMenu {{ background-color: {tab_bg}; color: {fg}; border: 1px solid {border}; }}
+    QMenu::item:selected {{ background-color: {accent}; }}
+    QPushButton {{
+        background-color: {btn_bg}; color: {fg};
+        border: 1px solid {border}; padding: 5px 12px; border-radius: 3px;
+    }}
+    QPushButton:hover {{ background-color: {hover}; }}
+    QPushButton:pressed {{ background-color: {accent}; }}
+    QPushButton:disabled {{ background-color: {tab_bg}; color: {dim}; }}
+    QProgressBar {{
+        background-color: {tab_bg}; border: 1px solid {border};
+        border-radius: 3px; color: {fg}; text-align: center;
+    }}
+    QProgressBar::chunk {{ background-color: {accent}; border-radius: 2px; }}
+    QScrollBar:vertical {{
+        background-color: {bg}; width: 12px; border: 0;
+    }}
+    QScrollBar::handle:vertical {{
+        background-color: {border}; min-height: 24px; border-radius: 3px;
+    }}
+    QScrollBar::handle:vertical:hover {{ background-color: {hover}; }}
+    QScrollBar:horizontal {{ background-color: {bg}; height: 12px; border: 0; }}
+    QScrollBar::handle:horizontal {{
+        background-color: {border}; min-width: 24px; border-radius: 3px;
+    }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ background: none; }}
+    QStatusBar {{ background-color: {tab_bg}; color: {fg}; }}
+    QToolBar {{ background-color: {tab_bg}; border: 0; }}
+    QSplitter::handle {{ background-color: {border}; }}
+    QLabel {{ color: {fg}; background: transparent; }}
+    QToolTip {{ background-color: {tab_bg}; color: {fg}; border: 1px solid {border}; }}
+"""
+
+
+def _make_qss(**colors):
+    return _QSS_TEMPLATE.format(base_font=_BASE_FONT, **colors)
+
+
 class ThemeManager:
-    """v1.20 全局主题管理器
-    - light:默认浅色主题(保持原貌)
-    - dark:深炭灰主题(VSCode Dark 同款色板,保留 ✨ 金色强调)
-    - apply(app, name):一键切换,持久化到 QSettings('NovelAI','UI').theme
-    """
-    LIGHT_QSS = ""   # 空字符串 = 用 Qt 默认浅色主题
+    """多主题管理器"""
 
-    DARK_QSS = """
-    /* ─── 主背景 + 文字 ─── */
-    QMainWindow, QWidget, QDialog, QFrame {
-        background-color: #1e1e1e;
-        color: #d4d4d4;
-    }
-
-    /* ─── 文本输入 ─── */
-    QPlainTextEdit, QTextEdit, QLineEdit {
-        background-color: #1a1a1a;
-        color: #d4d4d4;
-        border: 1px solid #3c3c3c;
-        selection-background-color: #094771;
-    }
-
-    /* ─── GroupBox 框 ─── */
-    QGroupBox {
-        border: 1px solid #3c3c3c;
-        margin-top: 12px;
-        padding-top: 6px;
-        color: #d4d4d4;
-    }
-    QGroupBox::title {
-        subcontrol-origin: margin;
-        left: 8px;
-        color: #d4d4d4;
-    }
-
-    /* ─── Tab ─── */
-    QTabWidget::pane {
-        background-color: #1e1e1e;
-        border: 1px solid #3c3c3c;
-    }
-    QTabBar::tab {
-        background-color: #2d2d30;
-        color: #d4d4d4;
-        padding: 6px 14px;
-        border: 1px solid #3c3c3c;
-        border-bottom: 0;
-    }
-    QTabBar::tab:selected {
-        background-color: #094771;
-        color: #ffffff;
-    }
-    QTabBar::tab:hover {
-        background-color: #3c3c3c;
-    }
-
-    /* ─── 表格 / 树 / 列表 ─── */
-    QTableWidget, QTreeWidget, QListWidget, QTableView, QTreeView, QListView {
-        background-color: #1a1a1a;
-        color: #d4d4d4;
-        gridline-color: #3c3c3c;
-        alternate-background-color: #252526;
-        selection-background-color: #094771;
-        selection-color: #ffffff;
-    }
-    QHeaderView::section {
-        background-color: #2d2d30;
-        color: #d4d4d4;
-        border: 1px solid #3c3c3c;
-        padding: 4px;
+    THEMES = {
+        "light": {
+            "label": "☀️ 浅色",
+            "icon": "☀️",
+            "qss": "",   # 浅色用 Fusion 默认
+            "palette": None,  # 用 standardPalette
+        },
+        "dark": {
+            "label": "🌙 暗黑",
+            "icon": "🌙",
+            "qss": _make_qss(
+                bg="#1e1e1e", fg="#d4d4d4", input_bg="#1a1a1a",
+                border="#3c3c3c", accent="#094771", accent_fg="#ffffff",
+                tab_bg="#2d2d30", hover="#4f4f4f", alt_bg="#252526",
+                btn_bg="#3c3c3c", dim="#787878",
+            ),
+            "palette": {
+                "Window": "#1e1e1e", "WindowText": "#d4d4d4",
+                "Base": "#1a1a1a", "AlternateBase": "#252526",
+                "Text": "#d4d4d4", "Button": "#3c3c3c",
+                "ButtonText": "#d4d4d4", "Highlight": "#094771",
+                "HighlightedText": "#ffffff",
+            },
+        },
+        "green": {
+            "label": "🌿 护眼绿",
+            "icon": "🌿",
+            "qss": _make_qss(
+                bg="#f0f5e6", fg="#2d3319", input_bg="#f7faf0",
+                border="#c5d6a0", accent="#5a8c32", accent_fg="#ffffff",
+                tab_bg="#e4edcf", hover="#d8e5bb", alt_bg="#eaf2dc",
+                btn_bg="#e4edcf", dim="#8a9970",
+            ),
+            "palette": {
+                "Window": "#f0f5e6", "WindowText": "#2d3319",
+                "Base": "#f7faf0", "AlternateBase": "#eaf2dc",
+                "Text": "#2d3319", "Button": "#e4edcf",
+                "ButtonText": "#2d3319", "Highlight": "#5a8c32",
+                "HighlightedText": "#ffffff",
+            },
+        },
+        "warm": {
+            "label": "🌅 暖黄",
+            "icon": "🌅",
+            "qss": _make_qss(
+                bg="#faf5ee", fg="#3d2b1f", input_bg="#fff9f2",
+                border="#d4b896", accent="#c67f4a", accent_fg="#ffffff",
+                tab_bg="#f0e4d4", hover="#e8d5bf", alt_bg="#f5ece0",
+                btn_bg="#f0e4d4", dim="#a08060",
+            ),
+            "palette": {
+                "Window": "#faf5ee", "WindowText": "#3d2b1f",
+                "Base": "#fff9f2", "AlternateBase": "#f5ece0",
+                "Text": "#3d2b1f", "Button": "#f0e4d4",
+                "ButtonText": "#3d2b1f", "Highlight": "#c67f4a",
+                "HighlightedText": "#ffffff",
+            },
+        },
     }
 
-    /* ─── 下拉 / 微调 ─── */
-    QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit, QTimeEdit {
-        background-color: #3c3c3c;
-        color: #d4d4d4;
-        border: 1px solid #555;
-        padding: 3px 6px;
-    }
-    QComboBox QAbstractItemView {
-        background-color: #2d2d30;
-        color: #d4d4d4;
-        selection-background-color: #094771;
-    }
-
-    /* ─── Checkbox / Radio(保留特殊 color 如金色,只换通用)─── */
-    QCheckBox, QRadioButton {
-        color: #d4d4d4;
-        spacing: 6px;
-    }
-
-    /* ─── 菜单 ─── */
-    QMenuBar {
-        background-color: #2d2d30;
-        color: #d4d4d4;
-    }
-    QMenuBar::item:selected {
-        background-color: #094771;
-    }
-    QMenu {
-        background-color: #2d2d30;
-        color: #d4d4d4;
-        border: 1px solid #3c3c3c;
-    }
-    QMenu::item:selected {
-        background-color: #094771;
-    }
-
-    /* ─── 滚动条 ─── */
-    QScrollBar:vertical {
-        background-color: #1e1e1e;
-        width: 12px;
-        border: 0;
-    }
-    QScrollBar::handle:vertical {
-        background-color: #3c3c3c;
-        min-height: 24px;
-        border-radius: 3px;
-    }
-    QScrollBar::handle:vertical:hover {
-        background-color: #4f4f4f;
-    }
-    QScrollBar:horizontal {
-        background-color: #1e1e1e;
-        height: 12px;
-        border: 0;
-    }
-    QScrollBar::handle:horizontal {
-        background-color: #3c3c3c;
-        min-width: 24px;
-        border-radius: 3px;
-    }
-    QScrollBar::add-line, QScrollBar::sub-line { background: none; }
-
-    /* ─── 状态栏 / 工具栏 / 分隔线 ─── */
-    QStatusBar {
-        background-color: #2d2d30;
-        color: #d4d4d4;
-    }
-    QToolBar {
-        background-color: #2d2d30;
-        border: 0;
-    }
-    QSplitter::handle {
-        background-color: #3c3c3c;
-    }
-
-    /* ─── 按钮(通用) ─── */
-    QPushButton {
-        background-color: #3c3c3c;
-        color: #d4d4d4;
-        border: 1px solid #555;
-        padding: 5px 12px;
-        border-radius: 3px;
-    }
-    QPushButton:hover {
-        background-color: #4f4f4f;
-        border-color: #888;
-    }
-    QPushButton:pressed {
-        background-color: #094771;
-    }
-    QPushButton:disabled {
-        background-color: #2d2d30;
-        color: #666;
-    }
-
-    /* ─── 进度条 ─── */
-    QProgressBar {
-        background-color: #2d2d30;
-        border: 1px solid #3c3c3c;
-        border-radius: 3px;
-        color: #d4d4d4;
-        text-align: center;
-    }
-    QProgressBar::chunk {
-        background-color: #094771;
-        border-radius: 2px;
-    }
-
-    /* ─── 标签 / 工具提示 ─── */
-    QLabel {
-        color: #d4d4d4;
-        background: transparent;
-    }
-    QToolTip {
-        background-color: #2d2d30;
-        color: #d4d4d4;
-        border: 1px solid #555;
-    }
-
-    /* ─── ✨ 金色强调保留(用户要求)─── */
-    /* 局部 setStyleSheet('color:#b4884e') 会自然覆盖此处通用色 */
-    """
+    # 保持向后兼容
+    LIGHT_QSS = ""
+    DARK_QSS = THEMES["dark"]["qss"]
 
     @classmethod
-    def apply(cls, app, name):
-        """app 是 QApplication 实例,name = 'light' 或 'dark'
-        v1.33 BUG-047: Fusion style 的 background/text 受 QPalette 控制,
-        QSS 优先级低 → 必须同时设 QPalette + QSS 才能完全切换主题。
-        """
+    def apply(cls, app, name="light"):
+        """应用主题"""
         from PyQt5.QtGui import QPalette, QColor
-        from PyQt5.QtCore import Qt
-        # 1. 设 QPalette(Fusion style 听这个)
-        palette = QPalette()
-        if name == "dark":
-            # VSCode Dark 同款色板
-            palette.setColor(QPalette.Window,           QColor("#1e1e1e"))   # 主窗口背景
-            palette.setColor(QPalette.WindowText,       QColor("#d4d4d4"))   # 主文字
-            palette.setColor(QPalette.Base,             QColor("#1a1a1a"))   # 输入框/编辑器底
-            palette.setColor(QPalette.AlternateBase,    QColor("#252526"))   # 表格隔行
-            palette.setColor(QPalette.ToolTipBase,      QColor("#2d2d30"))
-            palette.setColor(QPalette.ToolTipText,      QColor("#d4d4d4"))
-            palette.setColor(QPalette.Text,             QColor("#d4d4d4"))   # 输入框文字
-            palette.setColor(QPalette.Button,           QColor("#3c3c3c"))   # 按钮底
-            palette.setColor(QPalette.ButtonText,       QColor("#d4d4d4"))
-            palette.setColor(QPalette.BrightText,       QColor("#ffffff"))
-            palette.setColor(QPalette.Link,             QColor("#3794ff"))
-            palette.setColor(QPalette.Highlight,        QColor("#094771"))   # 选中蓝
-            palette.setColor(QPalette.HighlightedText,  QColor("#ffffff"))
-            # Disabled 状态(防止灰按钮看不清)
-            palette.setColor(QPalette.Disabled, QPalette.WindowText,
-                             QColor("#787878"))
-            palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#787878"))
-            palette.setColor(QPalette.Disabled, QPalette.ButtonText,
-                             QColor("#787878"))
-        else:
-            # light = Fusion 默认浅色(不强制改,用 standardPalette)
-            from PyQt5.QtWidgets import QStyle
-            palette = app.style().standardPalette()
-        app.setPalette(palette)
+        theme = cls.THEMES.get(name, cls.THEMES["light"])
 
-        # 2. 再叠 QSS(细节:滚动条/表头/边框/hover)
-        qss = cls.DARK_QSS if name == "dark" else cls.LIGHT_QSS
+        palette_data = theme.get("palette")
+        if palette_data:
+            palette = QPalette()
+            _map = {
+                "Window": QPalette.Window, "WindowText": QPalette.WindowText,
+                "Base": QPalette.Base, "AlternateBase": QPalette.AlternateBase,
+                "Text": QPalette.Text, "Button": QPalette.Button,
+                "ButtonText": QPalette.ButtonText,
+                "Highlight": QPalette.Highlight,
+                "HighlightedText": QPalette.HighlightedText,
+            }
+            for key, role in _map.items():
+                if key in palette_data:
+                    palette.setColor(role, QColor(palette_data[key]))
+            app.setPalette(palette)
+        else:
+            from PyQt5.QtWidgets import QStyle
+            app.setPalette(app.style().standardPalette())
+
+        qss = theme.get("qss", "")
         app.setStyleSheet(qss)
 
         try:
-            from PyQt5.QtCore import QSettings
             QSettings("NovelAI", "UI").setValue("theme", name)
         except Exception:
             pass
 
     @classmethod
     def current(cls):
-        """读上次保存的主题(默认 light)"""
         try:
-            from PyQt5.QtCore import QSettings
             return QSettings("NovelAI", "UI").value("theme", "light", type=str)
         except Exception:
             return "light"
 
     @classmethod
     def toggle(cls, app):
-        """切换 light ↔ dark,返回新主题名"""
-        new = "dark" if cls.current() == "light" else "light"
+        """切换到下一个主题"""
+        themes = list(cls.THEMES.keys())
+        cur = cls.current()
+        idx = themes.index(cur) if cur in themes else 0
+        new = themes[(idx + 1) % len(themes)]
         cls.apply(app, new)
         return new
