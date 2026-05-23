@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.18.3"
+APP_VERSION = "v2.18.4"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -438,11 +438,9 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(2000, self._auto_start_browser)
         except Exception:
             pass
-        # v1.41: 启动后自动跳到 🏠 项目主页 Tab(看仪表盘)
+        # 启动后默认显示创作设置 Tab
         try:
             self.tabs.setCurrentIndex(0)
-            if hasattr(self, "tab_home"):
-                self.tab_home.refresh(self)
         except Exception:
             pass
         self.tab_settings.load_settings()
@@ -817,10 +815,8 @@ class MainWindow(QMainWindow):
         # 这里先占位 None,真正的 WorkflowPanel 在 __init__ 末尾装配
         self.tab_workflow = None
 
-        # v1.41: 项目主页 Tab(放最前面)
-        self.tab_home = ProjectHomeTab()
+        # Tab 列表(项目主页已移到启动器,不再需要)
         tab_list = [
-            (self.tab_home, "🏠 项目主页"),
             (self.tab_settings, "创作设置"),
             (self.tab_outline, "故事大纲"),
             (self.tab_memory, "对话记忆"),
@@ -1027,12 +1023,7 @@ class MainWindow(QMainWindow):
         # v1.38: 拆书章节 AI 分析
         self.tab_book_splitter.request_chapter_analysis.connect(
             self._on_book_chapter_analyze)
-        # v1.41: 项目主页快捷操作
-        self.tab_home.request_open_project.connect(self.open_project)
-        self.tab_home.request_new_project.connect(self.new_project)
-        self.tab_home.request_open_recent.connect(self._open_project_by_path)
-        self.tab_home.request_restore_backup.connect(self.restore_project_backup)
-        self.tab_home.request_import_continuation.connect(self.import_continuation)
+        # 项目主页已移到启动器(tab_home 不再存在)
         self._init_tts()
         # v1.21:加 视图 菜单 + Ctrl+Shift+D 快捷键(corner widget click bug 的兜底入口)
         try:
