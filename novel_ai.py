@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.16.0"
+APP_VERSION = "v2.16.1"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -9096,25 +9096,41 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"自动加载失败:{e}", 5000)
 
     def new_project(self):
+        # 先取名
+        title, ok = QInputDialog.getText(
+            self, "新建项目", "请给小说取个名字:",
+            text="我的新小说")
+        if not ok or not title.strip():
+            return
+        title = title.strip()
         if QMessageBox.question(
-            self, "新建项目", "新建将清空所有数据,继续?"
-        ) != QMessageBox.Yes: return
-        # v1.60 BUG-050: 用统一的 _reset_ui_state 清空(代替之前不完整的清单)
+            self, "新建项目",
+            f"新建「{title}」将清空当前所有数据,继续?"
+        ) != QMessageBox.Yes:
+            return
         self._reset_ui_state()
-        self.current_project_file = None
-        # 清 QSettings 的 last_project_path,下次启动不会回到老项目
+        # 创建项目文件夹
+        import re as _re
+        safe_title = _re.sub(r'[\\/:*?"<>|]', '_', title)
+        proj_path = self.project_dir / safe_title
+        proj_path.mkdir(parents=True, exist_ok=True)
+        self.current_project_file = str(proj_path)
+        self._project_title = title
+        self._update_window_title()
+        # 保存路径到 QSettings
         try:
             from PyQt5.QtCore import QSettings
-            QSettings("NovelAI", "UI").setValue("last_project_path", "")
+            QSettings("NovelAI", "UI").setValue(
+                "last_project_path", self.current_project_file)
         except Exception:
             pass
-        # 刷新项目主页(显示空状态)
         try:
             if hasattr(self, "tab_home"):
                 self.tab_home.refresh(self)
         except Exception:
             pass
-        self.statusBar().showMessage("新项目已创建", 3000)
+        self.tab_generation.log(f"📁 新建项目:「{title}」", "success")
+        self.statusBar().showMessage(f"新项目「{title}」已创建", 3000)
 
     def open_project(self):
         """v1.50:直接弹文件夹选择器,去掉 v1.30 迁移期的二选一弹窗
