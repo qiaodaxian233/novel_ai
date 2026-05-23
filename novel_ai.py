@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.18.1"
+APP_VERSION = "v2.18.2"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -7935,22 +7935,30 @@ class MainWindow(QMainWindow):
             self.btn_theme_toggle.rect().bottomLeft()))
 
     def _apply_theme(self, name):
-        """应用指定主题 — 智能清除颜色,保留字体"""
+        """应用指定主题 — 保留字体大小,显示切换进度"""
         from PyQt5.QtWidgets import QApplication
         import re as _re
         app = QApplication.instance()
         if app is None:
             return
+
+        # 保存当前字体(切换后恢复)
+        saved_font = app.font()
+
+        # 状态提示
+        self.statusBar().showMessage("🎨 正在切换主题...", 3000)
+        app.processEvents()
+
         ThemeManager.apply(app, name)
 
-        # 智能清除子控件样式:只删颜色,保留字体
+        # 智能清除:只清颜色相关属性,完全跳过只有font的控件
         _accent_colors = {"#e65100", "#1a73e8", "#27ae60", "#8e44ad",
                           "#e67e22", "#3498db", "#2ecc71", "#cc3333",
                           "#e74c3c", "#0f3460", "#1557b0", "#bf360c",
                           "#c0392b", "#d35400", "#2980b9", "#6c3483",
-                          "#5d6d7e"}
-        cleared = 0
-        for w in self.findChildren(QWidget):
+                          "#5d6d7e", "#b8860b", "#ffd700"}
+        children = self.findChildren(QWidget)
+        for i, w in enumerate(children):
             ss = w.styleSheet()
             if not ss:
                 continue
@@ -7958,28 +7966,28 @@ class MainWindow(QMainWindow):
                 continue
             if hasattr(self, 'tab_debug') and w is getattr(self.tab_debug, 'log_edit', None):
                 continue
-            # 提取所有 font 相关属性(含末尾无分号的)
-            font_props = _re.findall(
-                r'font(?:-size|-family|-weight)?[^;{}]*(?:;|(?=\s*["}]))', ss)
-            if font_props and not _re.search(r'(?:background|color)\s*:', ss):
-                continue
-            if font_props:
-                preserved = " ".join(p.strip().rstrip(";") + ";" for p in font_props)
-                w.setStyleSheet(preserved)
+            # 只有颜色没有字体 → 直接清空
+            has_color = bool(_re.search(r'(?:background|color)\s*:', ss))
+            has_font = bool(_re.search(r'font', ss))
+            if not has_color:
+                continue  # 没有颜色属性,不需要清
+            if has_font:
+                # 有字体+有颜色:只保留font行
+                font_lines = _re.findall(r'[^;{]*font[^;]*;', ss)
+                w.setStyleSheet(" ".join(font_lines))
             else:
                 w.setStyleSheet("")
-            cleared += 1
 
         qss = ThemeManager.THEMES.get(name, {}).get("qss", "")
         self.setStyleSheet(qss)
 
-        for w in app.allWidgets():
-            try:
-                w.style().unpolish(w)
-                w.style().polish(w)
-                w.update()
-            except Exception:
-                pass
+        # 恢复字体(防止主题QSS改变字体大小)
+        app.setFont(saved_font)
+
+        # 快速刷新(不逐个polish,减少卡顿)
+        app.processEvents()
+        self.update()
+
         try:
             self.tab_editor._apply_editor_colors()
         except Exception:
