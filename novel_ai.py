@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.18.5"
+APP_VERSION = "v2.18.6"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1253,6 +1253,31 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _update_task_monitor(self, task_id, status, retry=0):
+        """更新任务监控状态"""
+        from datetime import datetime
+        if not hasattr(self, "_task_monitor"):
+            self._task_monitor = {}
+        self._task_monitor[task_id] = {
+            "status": status, "time": datetime.now(), "retry": retry}
+        # 显示在状态栏
+        if hasattr(self, "_status_indicator"):
+            self._status_indicator.setText(f"● {task_id}: {status}")
+            if "❌" in status:
+                self._status_indicator.setStyleSheet(
+                    "color:#e74c3c; font-weight:bold; padding:2px 8px;")
+            elif "✅" in status:
+                self._status_indicator.setStyleSheet(
+                    "color:#27ae60; font-weight:bold; padding:2px 8px;")
+            elif "🔄" in status:
+                self._status_indicator.setStyleSheet(
+                    "color:#e67e22; font-weight:bold; padding:2px 8px;")
+            else:
+                self._status_indicator.setStyleSheet(
+                    "color:#1a73e8; font-weight:bold; padding:2px 8px;")
+        # 也输出到日志
+        self.tab_generation.log(f"[监控] {task_id}: {status}", "info")
+
     def _update_window_title(self, suffix=""):
         """更新窗口标题: APP名 — 项目名 [状态]"""
         parts = [APP_FULL]
@@ -1523,7 +1548,11 @@ class MainWindow(QMainWindow):
         self.tab_generation.log(f"准备发送:{label} ({len(prompt)} 字符)", "info")
         # 记录这次任务的目标位置(由 _on_response_received 处理回填)
         # v1.97 BUG-071:字典写入 — key=label(== worker 侧 task_id),避免并发任务串台
-        self._pending_task_targets[label] = {"target": target, "label": label, **extra}
+        self._pending_task_targets[label] = {
+            "target": target, "label": label,
+            "_original_prompt": prompt, **extra}
+        # 任务监控
+        self._update_task_monitor(label, "📤 已发送")
         # 应用人类延迟
         type_delay = 30 if self.tab_settings.delay_check.isChecked() else 5
         # 投递任务
@@ -1574,6 +1603,37 @@ class MainWindow(QMainWindow):
 
     def _on_response_received(self, task_id, content):
         """worker 回调:某次提示词的 AI 回复已抓取完毕"""
+        # ── 0字节/空内容自动重试 ──
+        if not content or not content.strip():
+            meta = self._pending_task_targets.get(task_id, {})
+            _retry_0b = meta.get("_retry_0byte", 0)
+            if _retry_0b < 3:
+                meta["_retry_0byte"] = _retry_0b + 1
+                self.tab_generation.log(
+                    f"⚠ 「{task_id}」返回空内容(0字节),自动重试"
+                    f"({_retry_0b+1}/3)...", "warn")
+                # 更新任务监控
+                self._update_task_monitor(task_id, "🔄 空内容重试", _retry_0b+1)
+                # 重新发送(用原始prompt)
+                prompt = meta.get("_original_prompt", "")
+                if prompt:
+                    self.worker.submit({
+                        "action": "send_prompt",
+                        "prompt": prompt,
+                        "task_id": task_id,
+                        "url": self.tab_generation.url_input.text().strip(),
+                    })
+                    return
+            self.tab_generation.log(
+                f"❌ 「{task_id}」连续3次返回空内容,放弃", "warn")
+            self._update_task_monitor(task_id, "❌ 空内容放弃")
+            self._pending_task_targets.pop(task_id, None)
+            return
+
+        # 任务监控:标记完成
+        self._update_task_monitor(task_id, f"✅ 收到{len(content)}字")
+        # 从 pending 超时计时器中移除
+        self._pending_task_targets.get(task_id, {}).pop("_retry_0byte", None)
         # ── BUG-077 直接回调(备用路径,根因已在 workflow_pipeline.py 修复) ──
         _crit_cb = getattr(self, "_critique_audit_callback", None)
         if _crit_cb and ("稽核" in (task_id or "") or "critique" in (task_id or "").lower()):
