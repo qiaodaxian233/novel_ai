@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.20.7"
+APP_VERSION = "v2.20.8"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -4477,7 +4477,9 @@ class MainWindow(QMainWindow):
                     print(f"[hero_state] apply 失败: {_e}", flush=True)
             else:
                 # AI 完全没返回 hero_state 字段 — 这是 prompt 没生效或 AI 输出格式不对
-                print(f"[hero_state v1.74] AI 没返回 hero_state 字段,跳过同步",
+                # 不跳过:用空字典也调一次同步(避免永远不更新)
+                hs = {}
+                print(f"[hero_state v1.74] AI 没返回 hero_state 字段,用空字典尝试同步",
                       flush=True)
 
         return added

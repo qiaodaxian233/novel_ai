@@ -1918,8 +1918,8 @@ class CharacterLibrary(QWidget):
 
         return nodes, edges
 
-    def _force_directed_layout(self, nodes, edges, iters=50,
-                                width=800, height=600):
+    def _force_directed_layout(self, nodes, edges, iters=80,
+                                width=1200, height=900):
         """v1.87:简化版 Fruchterman-Reingold 力导向布局。
         节点初始随机位置,每轮迭代:
           - 所有节点对之间施加斥力(防重叠)
@@ -1931,11 +1931,11 @@ class CharacterLibrary(QWidget):
         if not nodes:
             return {}
         n = len(nodes)
-        # 理想边长 k
+        # 理想边长 k(增大间距,节点多时更稀疏)
         area = width * height
-        k = math.sqrt(area / n) * 0.6
-        # 初始位置(中心附近随机散开)
-        random.seed(42)  # 可重现
+        k = math.sqrt(area / max(n, 1)) * 1.2
+        # 初始位置(中心附近随机散开,范围更大)
+        random.seed(42)
         pos = {
             node["id"]: [
                 width / 2 + random.uniform(-width / 4, width / 4),
