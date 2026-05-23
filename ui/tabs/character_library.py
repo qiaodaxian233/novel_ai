@@ -182,6 +182,15 @@ class CharacterLibrary(QWidget):
             "AI 返回的 JSON 直接保存为 .json,用『导入库』即可一键合并。")
         btn_row.addWidget(self.btn_copy_extract_prompt)
         
+        # 🗑 清空所有数据
+        btn_row.addStretch()
+        self.btn_clear_all = QPushButton("🗑 清空所有")
+        self.btn_clear_all.setToolTip("清空角色库、关系、时间线、物品、伏笔等全部数据")
+        self.btn_clear_all.setStyleSheet(
+            "QPushButton { color:#e74c3c; border:1px solid #e74c3c; padding:4px 12px;"
+            "border-radius:3px; } QPushButton:hover { background:#fce4e4; }")
+        self.btn_clear_all.clicked.connect(self._clear_all_data)
+        btn_row.addWidget(self.btn_clear_all)
         layout.addLayout(btn_row)
         
         self.btn_export.clicked.connect(self._export_lib)
@@ -706,6 +715,14 @@ class CharacterLibrary(QWidget):
         btn_add.clicked.connect(self._add_fore)
         btn_del = QPushButton("➖ 删除选中")
         btn_del.clicked.connect(self._del_fore)
+        btn_check = QPushButton("🔍 检查逾期伏笔")
+        btn_check.setToolTip("扫描所有伏笔,找出已超过计划回收章节但未回收的")
+        btn_check.setStyleSheet(
+            "QPushButton { background:#e74c3c; color:white; padding:4px 10px;"
+            "border-radius:3px; } QPushButton:hover { background:#c0392b; }")
+        btn_check.clicked.connect(self._check_overdue_foreshadows)
+        btn_clear_fore = QPushButton("🗑 清空伏笔")
+        btn_clear_fore.clicked.connect(self._clear_all_foreshadows)
         # v1.76 BUG-056:一键 AI 重评估 plan_pay_at=0 的伏笔
         self.btn_reeval_fore = QPushButton("🤖 AI 重评估未设回收期")
         self.btn_reeval_fore.setToolTip(
@@ -713,6 +730,7 @@ class CharacterLibrary(QWidget):
         self.btn_reeval_fore.setStyleSheet(
             "QPushButton { background:#fff3e0; color:#5d4037; border:1px solid #ffa726; }")
         top.addWidget(btn_add); top.addWidget(btn_del)
+        top.addWidget(btn_check); top.addWidget(btn_clear_fore)
         top.addWidget(self.btn_reeval_fore); top.addStretch()
         lay.addLayout(top)
         
@@ -752,6 +770,69 @@ class CharacterLibrary(QWidget):
         rows = sorted(set(idx.row() for idx in self.tbl_fore.selectedIndexes()), reverse=True)
         for r in rows:
             self.tbl_fore.removeRow(r)
+
+    def _check_overdue_foreshadows(self):
+        """检查逾期伏笔:已超过计划回收章节但未回收的"""
+        overdue = []
+        try:
+            mw = self.window()
+            current_ch = len(mw.chapters) if hasattr(mw, 'chapters') else 0
+        except Exception:
+            current_ch = 999
+        for r in range(self.tbl_fore.rowCount()):
+            paid_item = self.tbl_fore.item(r, 3)
+            paid = paid_item.text().strip() if paid_item else ""
+            if paid in ("是", "✓", "yes", "1"):
+                continue  # 已回收
+            plan_item = self.tbl_fore.item(r, 2)
+            plan = 0
+            try:
+                plan = int(plan_item.text().strip()) if plan_item else 0
+            except ValueError:
+                pass
+            if plan > 0 and current_ch >= plan:
+                content_item = self.tbl_fore.item(r, 1)
+                content = content_item.text() if content_item else "?"
+                ch_item = self.tbl_fore.item(r, 0)
+                ch = ch_item.text() if ch_item else "?"
+                overdue.append(f"第{ch}章埋下 → 计划第{plan}章回收(当前已写{current_ch}章):\n  {content}")
+        if overdue:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, f"⚠ 发现 {len(overdue)} 条逾期伏笔",
+                "\n\n".join(overdue[:10]))
+        else:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, "✅ 伏笔检查", "没有逾期伏笔,全部正常!")
+
+    def _clear_all_foreshadows(self):
+        """清空所有伏笔"""
+        from PyQt5.QtWidgets import QMessageBox
+        ret = QMessageBox.question(self, "确认清空",
+            f"确定清空全部 {self.tbl_fore.rowCount()} 条伏笔?")
+        if ret == QMessageBox.Yes:
+            self.tbl_fore.setRowCount(0)
+
+    def _clear_all_data(self):
+        """清空角色与世界的全部数据"""
+        from PyQt5.QtWidgets import QMessageBox
+        tables = []
+        for name in ['tbl_chars', 'tbl_relations', 'tbl_timeline',
+                     'tbl_items', 'tbl_fore']:
+            t = getattr(self, name, None)
+            if t:
+                tables.append((name, t))
+        total = sum(t.rowCount() for _, t in tables)
+        ret = QMessageBox.question(self, "⚠ 确认清空全部数据",
+            f"将清空角色与世界的所有数据:\n\n"
+            f"  角色库: {getattr(self, 'tbl_chars', None) and self.tbl_chars.rowCount() or 0} 条\n"
+            f"  关系: {getattr(self, 'tbl_relations', None) and self.tbl_relations.rowCount() or 0} 条\n"
+            f"  时间线: {getattr(self, 'tbl_timeline', None) and self.tbl_timeline.rowCount() or 0} 条\n"
+            f"  物品: {getattr(self, 'tbl_items', None) and self.tbl_items.rowCount() or 0} 条\n"
+            f"  伏笔: {getattr(self, 'tbl_fore', None) and self.tbl_fore.rowCount() or 0} 条\n\n"
+            f"总计 {total} 条数据,清空后不可恢复!\n继续?")
+        if ret == QMessageBox.Yes:
+            for name, t in tables:
+                t.setRowCount(0)
 
     # ── 5b. 威胁承诺子页(v1.77 BUG-057)────────────────────
     def _build_promises_tab(self):
