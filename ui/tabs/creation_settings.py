@@ -153,6 +153,21 @@ class CreationSettings(QWidget):
         self._genre_layout = glay  # 留引用,自定义条目时往里加
         layout.addWidget(gbox)
 
+        # ---- 主角名字(生成大纲时使用) ----
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("男主名字:"))
+        self.input_male_lead = QLineEdit()
+        self.input_male_lead.setPlaceholderText("如: 顾衍之")
+        self.input_male_lead.setMaximumWidth(150)
+        name_row.addWidget(self.input_male_lead)
+        name_row.addWidget(QLabel("女主名字:"))
+        self.input_female_lead = QLineEdit()
+        self.input_female_lead.setPlaceholderText("如: 苏棠")
+        self.input_female_lead.setMaximumWidth(150)
+        name_row.addWidget(self.input_female_lead)
+        name_row.addStretch()
+        layout.addLayout(name_row)
+
         # ---- 灵感 ----
         layout.addWidget(QLabel("创意灵感(注意手动标明男频还是女频)"))
         irow = QHBoxLayout()
@@ -892,6 +907,8 @@ class CreationSettings(QWidget):
             f"创作模式:{self.get_creation_mode()}\n"
             f"金手指:{gf_str}\n"
             f"主角人设:{ps_str}\n"
+            f"男主名字:{self.input_male_lead.text().strip() or '未指定(AI自动取名)'}\n"
+            f"女主名字:{self.input_female_lead.text().strip() or '未指定(AI自动取名)'}\n"
             f"每章字数:{self.get_words_per_chapter()} 字"
             f"(偏移 {self.get_prompt_offset():+d})\n"
             f"大纲详细度:{self.get_outline_detail()}\n"
