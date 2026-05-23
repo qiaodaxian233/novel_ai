@@ -532,24 +532,32 @@ class CreationSettings(QWidget):
         od_lay.addStretch()
         layout.addWidget(od_box)
 
-        # ---- 风格权重(滑块) ----
-        sw_box = QGroupBox("风格权重")
+        # ---- 风格权重(滑块,总计=100%) ----
+        sw_box = QGroupBox("风格权重 (总计 100%)")
         sw_lay = QGridLayout(sw_box)
         self.style_sliders = {}
+        self._style_pct_labels = {}
+        self._style_balancing = False  # 防递归
         defaults = {"爽文": 50, "文学": 0, "黑暗": 0, "轻松": 0, "搞笑": 50}
         for r, name in enumerate(STYLE_DIMENSIONS):
             sw_lay.addWidget(QLabel(name), r, 0)
             sl = QSlider(Qt.Horizontal)
             sl.setRange(0, 100)
-            sl.setValue(defaults.get(name, 50))
+            sl.setValue(defaults.get(name, 0))
             self.style_sliders[name] = sl
-            pct = QLabel(f"{defaults.get(name, 50)}%")
+            pct = QLabel(f"{defaults.get(name, 0)}%")
             pct.setMinimumWidth(40)
             pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            sl.valueChanged.connect(lambda v, lab=pct: lab.setText(f"{v}%"))
+            self._style_pct_labels[name] = pct
+            sl.valueChanged.connect(
+                lambda v, n=name: self._on_style_weight_changed(n, v))
             sw_lay.addWidget(sl, r, 1)
             sw_lay.addWidget(pct, r, 2)
         sw_lay.setColumnStretch(1, 1)
+        # 总计标签
+        self._style_total_label = QLabel("总计: 100%")
+        self._style_total_label.setStyleSheet("font-weight:bold; color:#27ae60;")
+        sw_lay.addWidget(self._style_total_label, len(STYLE_DIMENSIONS), 0, 1, 3)
         layout.addWidget(sw_box)
 
         # ---- 节奏 ----
@@ -788,6 +796,54 @@ class CreationSettings(QWidget):
     def get_outline_detail(self):
         b = self.detail_group.checkedButton()
         return b.text() if b else "标准"
+
+    def _on_style_weight_changed(self, changed_name, new_val):
+        """风格权重滑块变化 → 自动平衡其他滑块使总计=100"""
+        if self._style_balancing:
+            return
+        self._style_balancing = True
+        try:
+            others = [n for n in self.style_sliders if n != changed_name]
+            other_total = sum(self.style_sliders[n].value() for n in others)
+            remaining = 100 - new_val
+
+            if remaining < 0:
+                # 超过100,强制回调
+                new_val = 100
+                remaining = 0
+                self.style_sliders[changed_name].setValue(100)
+
+            if other_total > 0:
+                # 按比例缩减其他滑块
+                ratio = remaining / other_total
+                for n in others:
+                    old = self.style_sliders[n].value()
+                    self.style_sliders[n].setValue(int(old * ratio))
+            elif remaining > 0 and others:
+                # 其他都是0,把剩余平分给第一个非零的(或第一个)
+                self.style_sliders[others[0]].setValue(remaining)
+
+            # 更新所有标签
+            total = 0
+            for n, sl in self.style_sliders.items():
+                v = sl.value()
+                total += v
+                self._style_pct_labels[n].setText(f"{v}%")
+            # 修正舍入误差
+            if total != 100 and others:
+                diff = 100 - total
+                first_other = others[0]
+                self.style_sliders[first_other].setValue(
+                    self.style_sliders[first_other].value() + diff)
+                self._style_pct_labels[first_other].setText(
+                    f"{self.style_sliders[first_other].value()}%")
+                total = 100
+            self._style_total_label.setText(f"总计: {total}%")
+            self._style_total_label.setStyleSheet(
+                "font-weight:bold; color:#27ae60;" if total == 100
+                else "font-weight:bold; color:#e74c3c;")
+        finally:
+            self._style_balancing = False
 
     def get_style_weights(self):
         return {n: sl.value() for n, sl in self.style_sliders.items()}
