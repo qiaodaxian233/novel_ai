@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.21.0"
+APP_VERSION = "v2.21.1"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -398,6 +398,9 @@ class MainWindow(QMainWindow):
                 print(f"[warn] 盘古-lifespan 联动安装失败: {e}")
             if self.tab_lifespan is not None:
                 self.tab_lifespan.sync_from_mw()
+            # 伏笔检查Tab同步
+            if hasattr(self, 'tab_foreshadow'):
+                self.tab_foreshadow.sync_from_mw()
                 self.tab_lifespan.request_save.connect(self.save_project)
                 self.tab_lifespan.request_log.connect(
                     lambda m, lv: self.tab_generation.log(m, lv))

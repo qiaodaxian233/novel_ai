@@ -154,6 +154,7 @@ class ForeshadowTab(QWidget):
         self.edit_id.clear()
         self.edit_desc.clear()
         self.edit_keyword.clear()
+        self.sync_to_mw()
 
     def _on_close(self):
         row = self.table.currentRow()
@@ -165,6 +166,7 @@ class ForeshadowTab(QWidget):
             self.table.setItem(row, 3, QTableWidgetItem(str(ch_count)))
         except Exception:
             pass
+        self.sync_to_mw()
 
     def _on_reopen(self):
         row = self.table.currentRow()
@@ -173,11 +175,13 @@ class ForeshadowTab(QWidget):
         item = QTableWidgetItem("🟢 未回收")
         item.setForeground(QColor("#27ae60"))
         self.table.setItem(row, 5, item)
+        self.sync_to_mw()
 
     def _on_delete(self):
         row = self.table.currentRow()
         if row >= 0:
             self.table.removeRow(row)
+            self.sync_to_mw()
 
     def _on_clear(self):
         if self.table.rowCount() == 0:
@@ -186,6 +190,7 @@ class ForeshadowTab(QWidget):
             f"清空全部 {self.table.rowCount()} 条伏笔?")
         if ret == QMessageBox.Yes:
             self.table.setRowCount(0)
+            self.sync_to_mw()
 
     def _on_check(self):
         """检查逾期伏笔"""
@@ -254,3 +259,61 @@ class ForeshadowTab(QWidget):
             self.table.insertRow(r)
             for c, key in enumerate(["id", "desc", "added_ch", "last_touch", "keyword", "status"]):
                 self.table.setItem(r, c, QTableWidgetItem(row.get(key, "")))
+
+    def sync_to_mw(self):
+        """同步数据到 mw.open_loops,供工作流管线使用"""
+        if not self.mw:
+            return
+        loops = []
+        for r in range(self.table.rowCount()):
+            item = {}
+            for c, key in enumerate(["id", "desc", "added_ch", "last_seen_ch", "keyword", "status"]):
+                cell = self.table.item(r, c)
+                item[key] = cell.text() if cell else ""
+            # 转换状态
+            status_text = item.get("status", "")
+            if "已回收" in status_text or "closed" in status_text.lower():
+                item["status"] = "closed"
+            else:
+                item["status"] = "open"
+            # 转换章节号
+            try:
+                item["added_ch"] = int(item["added_ch"])
+            except (ValueError, TypeError):
+                item["added_ch"] = 0
+            try:
+                item["last_seen_ch"] = int(item["last_seen_ch"]) if item["last_seen_ch"] else item["added_ch"]
+            except (ValueError, TypeError):
+                item["last_seen_ch"] = item["added_ch"]
+            loops.append(item)
+        if not hasattr(self.mw, "open_loops") or self.mw.open_loops is None:
+            self.mw.open_loops = {}
+        self.mw.open_loops["enabled"] = self.chk_enabled.isChecked()
+        self.mw.open_loops["warn_gap"] = self.spin_warn.value()
+        self.mw.open_loops["critical_gap"] = self.spin_critical.value()
+        self.mw.open_loops["loops"] = loops
+
+    def sync_from_mw(self):
+        """从 mw.open_loops 读取数据(启动时/加载项目时)"""
+        if not self.mw:
+            return
+        cfg = getattr(self.mw, "open_loops", None)
+        if not cfg:
+            return
+        self.chk_enabled.setChecked(cfg.get("enabled", False))
+        self.spin_warn.setValue(int(cfg.get("warn_gap", 80)))
+        self.spin_critical.setValue(int(cfg.get("critical_gap", 150)))
+        self.table.setRowCount(0)
+        for loop in cfg.get("loops", []):
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            vals = [
+                str(loop.get("id", "")),
+                str(loop.get("desc", "")),
+                str(loop.get("added_ch", "")),
+                str(loop.get("last_seen_ch", "")),
+                str(loop.get("keyword", "")),
+                "✅ 已回收" if loop.get("status") == "closed" else "🟢 未回收",
+            ]
+            for c, v in enumerate(vals):
+                self.table.setItem(r, c, QTableWidgetItem(v))
