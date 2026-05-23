@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.18.4"
+APP_VERSION = "v2.18.5"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1237,7 +1237,15 @@ class MainWindow(QMainWindow):
                     f"章节列表 (共 {n} 章 · {total_wc:,}字 · Ctrl多选 · 可拖拽排序)")
         # 状态栏 + 窗口标题同步
         if hasattr(self, "_status_stats"):
-            self._status_stats.setText(f"{n}章 · {total_wc:,}字")
+            avg = total_wc // n if n > 0 else 0
+            target = 300  # 默认目标章数
+            try:
+                target = self.tab_settings.get_chapter_count() or 300
+            except Exception:
+                pass
+            pct = min(100, int(n / target * 100)) if target > 0 else 0
+            self._status_stats.setText(
+                f"{n}章 · {total_wc:,}字 · 均{avg:,}字/章 · 进度{n}/{target}({pct}%)")
         self._update_window_title()
         # v1.63: 章节数变了 → 重算上下文注入字数预估
         try:
