@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.17.3"
+APP_VERSION = "v2.17.4"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -9776,24 +9776,33 @@ class MainWindow(QMainWindow):
             pass  # 备份失败不影响主保存
 
     def restore_project_backup(self):
-        """第 2 项配套:从 .backups/ 里挑一个版本恢复"""
+        """从 .backups/ 里挑一个 zip 版本恢复"""
         if not self.current_project_file:
-            QMessageBox.information(self, "提示", "当前没有打开的项目文件,无备份可选")
+            QMessageBox.information(self, "提示", "当前没有打开的项目")
             return
         p = Path(self.current_project_file)
-        backup_dir = p.parent / ".backups"
+        # 新格式: 项目文件夹/.backups/backup-*.zip
+        backup_dir = p / ".backups"
         if not backup_dir.exists():
-            QMessageBox.information(self, "提示", f"找不到 {backup_dir}\n还没产生过备份")
+            # 兼容: 也试父目录
+            backup_dir = p.parent / ".backups"
+        if not backup_dir.exists():
+            QMessageBox.information(self, "提示",
+                f"备份目录不存在:\n{p / '.backups'}\n\n"
+                f"备份在每次保存时自动创建(最多保留10个)。\n"
+                f"请先保存一次项目。")
             return
         backups = sorted(
-            backup_dir.glob(f"{p.stem}.*{p.suffix}"),
+            backup_dir.glob("backup-*.zip"),
             key=lambda x: x.stat().st_mtime,
             reverse=True,
         )
         if not backups:
-            QMessageBox.information(self, "提示", "备份目录为空")
+            QMessageBox.information(self, "提示",
+                f"备份目录存在但没有 zip 文件:\n{backup_dir}")
             return
-        items = [f"{i+1}. {b.name}  ({datetime.fromtimestamp(b.stat().st_mtime).strftime('%m-%d %H:%M:%S')})"
+        from datetime import datetime
+        items = [f"{i+1}. {b.name}  ({datetime.fromtimestamp(b.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')})"
                  for i, b in enumerate(backups)]
         choice, ok = QInputDialog.getItem(
             self, "选择恢复版本",
@@ -9805,24 +9814,36 @@ class MainWindow(QMainWindow):
         chosen = backups[idx]
         ret = QMessageBox.question(
             self, "确认恢复",
-            f"将用以下备份覆盖当前项目文件:\n\n{chosen.name}\n\n"
-            f"当前文件会先备份为 .before_restore 后缀。继续?",
+            f"将用以下备份覆盖当前项目:\n\n{chosen.name}\n\n"
+            f"当前项目会先备份。继续?",
             QMessageBox.Yes | QMessageBox.No)
         if ret != QMessageBox.Yes:
             return
         try:
-            # 当前先额外存一份
-            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            before = backup_dir / f"{p.stem}.before_restore.{ts}{p.suffix}"
-            if p.exists():
-                before.write_bytes(p.read_bytes())
-            p.write_bytes(chosen.read_bytes())
-            QMessageBox.information(
-                self, "已恢复",
-                f"恢复完成。现重新打开项目以加载内容。\n\n"
-                f"恢复前的版本另存为:{before.name}")
+            import zipfile, shutil
+            # 先备份当前版本
+            if PROJECT_IO_AVAILABLE:
+                project_io.make_backup_zip(p, keep=15)
+            # 解压恢复
+            with zipfile.ZipFile(chosen, 'r') as z:
+                # 清空项目文件夹(保留.backups)
+                for item in p.iterdir():
+                    if item.name == ".backups":
+                        continue
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                z.extractall(p)
+            self.tab_generation.log(
+                f"✅ 已恢复备份: {chosen.name}", "success")
             # 重新加载
-            self.open_project(self.current_project_file)
+            if PROJECT_IO_AVAILABLE:
+                d = project_io.load_project_folder(p)
+                self._load_payload_into_ui(d)
+                self._refresh_chapter_list()
+            QMessageBox.information(self, "恢复完成",
+                f"已恢复: {chosen.name}\n项目数据已重新加载。")
         except Exception as e:
             QMessageBox.critical(self, "恢复失败", str(e))
 
