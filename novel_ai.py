@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.14.6"
+APP_VERSION = "v2.14.7"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -752,6 +752,9 @@ class MainWindow(QMainWindow):
         self.lbl_chapter_count.setStyleSheet("font-weight:bold; padding:2px;")
         ll.addWidget(self.lbl_chapter_count)
         self.chapter_list = QListWidget()
+        self.chapter_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.chapter_list.setDragDropMode(QListWidget.InternalMove)
+        self.chapter_list.model().rowsMoved.connect(self._on_chapters_reordered)
         self.chapter_list.itemClicked.connect(self._on_chapter_clicked)
         # v1.92 BUG-066:章节列表右键菜单(锁定/解锁章节)
         self.chapter_list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1118,25 +1121,50 @@ class MainWindow(QMainWindow):
 
     def _refresh_chapter_list(self):
         self.chapter_list.clear()
-        for ch in self.chapters:
-            # v1.92 BUG-066:已锁定章节加 🔒 前缀,直观区分
+        for i, ch in enumerate(self.chapters):
             _title = ch.get("title", "")
+            _content = ch.get("content", "")
+            _wc = len(_content.replace(" ", "").replace("\n", ""))
+
+            # 前缀标记
+            prefix = ""
             if ch.get("locked"):
-                _title = f"🔒 {_title}"
-            _item = QListWidgetItem(_title)
+                prefix = "🔒 "
+            # 字数后缀
+            if _wc > 0:
+                _display = f"{prefix}{_title} ({_wc}字)"
+            else:
+                _display = f"{prefix}{_title}"
+
+            _item = QListWidgetItem(_display)
+
+            # 颜色标记
             if ch.get("locked"):
-                _item.setToolTip("已锁定 — save/重命名/删除/写回均跳过。右键解锁")
+                _item.setForeground(QColor("#999"))
+                _item.setToolTip("已锁定 — 右键解锁")
+            elif _wc > 0 and _wc < 1000:
+                _item.setForeground(QColor("#e74c3c"))
+                _item.setToolTip(f"⚠ 字数偏少({_wc}字)")
+            elif ch.get("emotion_scores"):
+                emo = ch["emotion_scores"]
+                t = emo.get("tension", 5)
+                s = emo.get("satisfaction", 5)
+                if t + s >= 14:
+                    _item.setForeground(QColor("#e67e22"))
+                    _item.setToolTip(f"🔥 高燃章(紧张{t}+爽感{s})")
+
             self.chapter_list.addItem(_item)
         if 0 <= self.current_chapter_index < len(self.chapters):
             self.chapter_list.setCurrentRow(self.current_chapter_index)
-        # v1.61: 同步更新章节计数 label(导入/删除后立刻反馈)
         n = len(self.chapters)
+        total_wc = sum(len(ch.get("content", "").replace(" ", "").replace("\n", ""))
+                       for ch in self.chapters)
         if hasattr(self, "lbl_chapter_count"):
             if n == 0:
                 self.lbl_chapter_count.setText("章节列表 (空)")
             else:
                 self.lbl_chapter_count.setText(
-                    f"章节列表 (共 {n} 章 · 按 Ctrl 多选)")
+                    f"章节列表 (共 {n} 章 · {total_wc:,}字 · Ctrl多选 · 可拖拽排序)")
         # v1.63: 章节数变了 → 重算上下文注入字数预估
         try:
             self._update_ctx_estimate()
@@ -1231,22 +1259,47 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentWidget(self.tab_editor)
 
     def delete_chapter(self):
-        idx = self.chapter_list.currentRow()
-        if idx < 0: return
-        # v1.92 BUG-066:已锁定章节拒绝删除
-        if self.chapters[idx].get("locked"):
-            QMessageBox.warning(
-                self, "已锁定",
-                f"『{self.chapters[idx]['title']}』已锁定,无法删除。\n\n"
-                f"请先右键解锁本章后再操作。")
+        selected = self.chapter_list.selectedItems()
+        if not selected:
             return
-        if QMessageBox.question(
-            self, "确认", f"删除『{self.chapters[idx]['title']}』?"
-        ) == QMessageBox.Yes:
-            self.chapters.pop(idx)
+        indices = sorted({self.chapter_list.row(item) for item in selected}, reverse=True)
+
+        # 检查锁定
+        locked = [self.chapters[i]["title"] for i in indices
+                  if i < len(self.chapters) and self.chapters[i].get("locked")]
+        if locked:
+            QMessageBox.warning(self, "已锁定",
+                f"以下章节已锁定,无法删除:\n{'、'.join(locked)}\n\n请先右键解锁。")
+            return
+
+        # 确认
+        if len(indices) == 1:
+            msg = f"删除『{self.chapters[indices[0]]['title']}』?"
+        else:
+            msg = f"删除选中的 {len(indices)} 章?"
+        if QMessageBox.question(self, "确认", msg) == QMessageBox.Yes:
+            for idx in indices:  # 从后往前删
+                if idx < len(self.chapters):
+                    self.chapters.pop(idx)
             self.current_chapter_index = -1
             self.tab_editor.load_chapter("", "")
             self._refresh_chapter_list()
+
+    def _on_chapters_reordered(self):
+        """拖拽排序后同步 self.chapters 顺序"""
+        new_order = []
+        for i in range(self.chapter_list.count()):
+            item_text = self.chapter_list.item(i).text()
+            # 从 item 文本反查原章节(去掉字数后缀和锁定前缀)
+            for ch in self.chapters:
+                title = ch.get("title", "")
+                if title in item_text and ch not in new_order:
+                    new_order.append(ch)
+                    break
+        if len(new_order) == len(self.chapters):
+            self.chapters[:] = new_order
+            self._refresh_chapter_list()
+            self.tab_generation.log(f"📋 章节顺序已更新(拖拽排序)", "info")
 
     def rename_chapter(self):
         idx = self.chapter_list.currentRow()
