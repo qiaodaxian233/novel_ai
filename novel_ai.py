@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.19.8"
+APP_VERSION = "v2.19.9"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1581,6 +1581,14 @@ class MainWindow(QMainWindow):
             / 'intro' / 'chapter' / 'golden_three' / 'optimize'
             None 表示只显示日志,弹窗手动选择。
         """
+        # ── 防重复发送:同一个label正在等待中,不再发 ──
+        if label in self._pending_task_targets:
+            existing = self._pending_task_targets[label]
+            # 工作流内部重试(retry)允许覆盖,普通任务不允许
+            if existing.get("target") == target and "_retry" not in label.lower():
+                self.tab_generation.log(
+                    f"⚠ 「{label}」已在等待中,跳过重复发送", "warn")
+                return
         if not SELENIUM_AVAILABLE:
             QMessageBox.critical(
                 self, "缺少依赖",

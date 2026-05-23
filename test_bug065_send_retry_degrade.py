@@ -207,7 +207,7 @@ class TestSubmitSummaryPassesChContent(unittest.TestCase):
         with open(NOVEL_AI_PATH, encoding="utf-8") as f:
             src = f.read()
         idx = src.find("def _send_to_ai")
-        slice_ = src[idx:idx + 3500]
+        slice_ = src[idx:idx + 4000]
         # 必须有透传 _xxx 字段的逻辑
         self.assertIn("k.startswith(\"_\")", slice_,
                       "_send_to_ai 必须透传 _xxx 前缀的 extra 字段给 worker submit")
