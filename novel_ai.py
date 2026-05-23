@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.14.9"
+APP_VERSION = "v2.15.0"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -7787,34 +7787,59 @@ class MainWindow(QMainWindow):
         print("[Theme] 视图菜单 + Ctrl+Shift+D 快捷键已注册", flush=True)
 
     def _on_toggle_theme(self):
-        """v1.20/v1.21:切换 light ↔ dark 主题,立即生效"""
-        print("[Theme] toggle clicked", flush=True)   # v1.21:诊断
-        from PyQt5.QtWidgets import QApplication
+        """切换 light ↔ dark 主题 — 清除子控件私有样式 + 重设全局"""
+        from PyQt5.QtWidgets import QApplication, QPushButton, QGroupBox, QLabel
         app = QApplication.instance()
         if app is None:
-            print("[Theme] ERROR: QApplication.instance() 返回 None", flush=True)
             return
         new_name = ThemeManager.toggle(app)
-        print(f"[Theme] 切换到 {new_name},QSS 已 apply", flush=True)
-        # 切换按钮图标 — 新主题是 dark 则显示 ☀️(下一步切回 light)
         self.btn_theme_toggle.setText("☀️" if new_name == "dark" else "🌙")
-        # v1.21:强制刷新所有 widget 样式(setStyleSheet 不会自动 re-polish 现有 widget)
-        try:
-            for w in app.allWidgets():
+
+        # 清除所有子控件的私有 stylesheet(让它们跟全局主题走)
+        # 但保留有"特殊背景色"的按钮(橙色/蓝色/绿色/紫色 — 这些是功能按钮)
+        _accent_colors = {"#e65100", "#1a73e8", "#27ae60", "#8e44ad",
+                          "#e67e22", "#3498db", "#2ecc71", "#cc3333",
+                          "#e74c3c", "#0f3460", "#1557b0"}
+        cleared = 0
+        for w in self.findChildren(QWidget):
+            ss = w.styleSheet()
+            if not ss:
+                continue
+            # 跳过有特殊背景色的按钮(功能按钮保留颜色)
+            is_accent = False
+            for c in _accent_colors:
+                if c in ss.lower():
+                    is_accent = True
+                    break
+            if is_accent:
+                continue
+            # 跳过 DEBUG 面板(它有自己的暗色主题)
+            if hasattr(self, 'tab_debug') and w is getattr(self.tab_debug, 'log_edit', None):
+                continue
+            w.setStyleSheet("")
+            cleared += 1
+
+        # 重新设全局 QSS — 现在没有私有样式阻挡了
+        qss = ThemeManager.DARK_QSS if new_name == "dark" else ThemeManager.LIGHT_QSS
+        self.setStyleSheet(qss)
+
+        # 强制刷新
+        for w in app.allWidgets():
+            try:
                 w.style().unpolish(w)
                 w.style().polish(w)
                 w.update()
-            print(f"[Theme] 已 polish 刷新 {len(app.allWidgets())} 个 widget", flush=True)
-        except Exception as _e:
-            print(f"[Theme] polish 刷新失败: {_e}", flush=True)
-        # 应用编辑器自定义颜色(如果用户调过)
+            except Exception:
+                pass
+
         try:
             self.tab_editor._apply_editor_colors()
         except Exception:
             pass
         self.tab_generation.log(
-            f"🎨 主题已切换 → {'🌙 黑夜' if new_name == 'dark' else '☀️ 白天'}",
-            "info")
+            f"🎨 主题已切换 → {'🌙 黑夜' if new_name == 'dark' else '☀️ 白天'}"
+            f" (清除 {cleared} 个私有样式)", "info")
+        print(f"[Theme] → {new_name}, cleared {cleared} widget styles", flush=True)
 
     def _init_tts(self):
         """启动时初始化 TTS:QMediaPlayer + 状态"""
