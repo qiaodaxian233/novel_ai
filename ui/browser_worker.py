@@ -558,13 +558,28 @@ class BrowserWorker(QObject):
         try:
             # 方法1: 尝试用JS点击新对话按钮(各站点通用选择器)
             clicked = self.driver.execute_script(r"""
-                // DeepSeek: 侧栏"新对话"按钮
+                // DeepSeek: 新对话按钮(圆圈+加号图标)
+                // 通过SVG path内容精确识别
+                const allBtns = document.querySelectorAll('div[role="button"]');
+                for (const btn of allBtns) {
+                    if (btn.offsetParent === null) continue;
+                    const paths = btn.querySelectorAll('svg path');
+                    for (const p of paths) {
+                        const d = p.getAttribute('d') || '';
+                        // DeepSeek新对话按钮的"+"号SVG特征
+                        if (d.includes('4.93945') && d.includes('11.0605')) {
+                            btn.click();
+                            return 'clicked:deepseek-new-chat';
+                        }
+                    }
+                }
+                // 通用兜底: 找class含new-chat的元素
                 const selectors = [
-                    'a[href="/"]',
                     'div[class*="new-chat"]',
                     'button[class*="new-chat"]',
-                    'div[class*="NewChat"]',
                     'a[class*="new-chat"]',
+                    'button[aria-label*="New"]',
+                    'button[aria-label*="新"]',
                 ];
                 for (const sel of selectors) {
                     const el = document.querySelector(sel);
