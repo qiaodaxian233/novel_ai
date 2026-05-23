@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.16.7"
+APP_VERSION = "v2.16.8"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1703,8 +1703,7 @@ class MainWindow(QMainWindow):
 
         # 根据目标自动回填
         if target == "inspiration":
-            self.tab_settings.inspiration_edit.setPlainText(content)
-            self.tabs.setCurrentWidget(self.tab_settings)
+            self._show_inspiration_picker(content)
         elif target == "reader_panel":
             self._on_reader_panel_response(content)
         elif target == "novel_to_script":
@@ -8412,6 +8411,67 @@ class MainWindow(QMainWindow):
         self.tab_generation.log(
             f"💡 正在根据{platform}{'/'.join(genres)}类热榜生成创意...", "info")
         self._send_to_ai(prompt, "创意灵感", target="inspiration")
+
+    def _show_inspiration_picker(self, content):
+        """弹出灵感选择窗口 — 点击选一个"""
+        import re as _re
+        # 解析: "1. 【xxx】yyy" 或 "1. xxx" 格式
+        lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
+        options = []
+        for ln in lines:
+            # 去掉序号前缀 "1. " "2、" etc
+            cleaned = _re.sub(r'^\d+[.、)\]]\s*', '', ln).strip()
+            if cleaned and len(cleaned) > 5:
+                options.append(cleaned)
+        if not options:
+            # 解析失败,直接填入
+            self.tab_settings.inspiration_edit.setPlainText(content)
+            self.tabs.setCurrentWidget(self.tab_settings)
+            return
+
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
+        dlg = QDialog(self)
+        dlg.setWindowTitle("💡 选择一个创意灵感")
+        dlg.resize(650, 400)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("点击你最喜欢的一个:"))
+
+        selected = [None]
+        for i, opt in enumerate(options[:8]):
+            # 提取【】里的卖点做按钮标题
+            match = _re.search(r'【(.+?)】', opt)
+            title = match.group(1) if match else opt[:20]
+            detail = _re.sub(r'【.+?】', '', opt).strip()
+
+            btn = QPushButton(f"{i+1}. {title}")
+            btn.setToolTip(detail or opt)
+            btn.setStyleSheet(
+                "QPushButton { text-align:left; padding:10px 14px;"
+                "font-size:13px; border:2px solid #ccc; border-radius:6px;"
+                "margin:2px; } "
+                "QPushButton:hover { border-color:#1a73e8; background:#e8f0fe; }")
+            btn.clicked.connect(
+                lambda _, o=opt, d=dlg: (
+                    selected.__setitem__(0, o), d.accept()))
+            lay.addWidget(btn)
+
+        # 底部按钮
+        bottom = QHBoxLayout()
+        btn_regen = QPushButton("🎲 不喜欢?重新生成")
+        btn_regen.clicked.connect(lambda: (dlg.reject(), self.gen_inspiration()))
+        bottom.addWidget(btn_regen)
+        bottom.addStretch()
+        btn_all = QPushButton("📋 全部填入")
+        btn_all.setToolTip("把5个全填进去,自己改")
+        btn_all.clicked.connect(
+            lambda: (selected.__setitem__(0, content), dlg.accept()))
+        bottom.addWidget(btn_all)
+        lay.addLayout(bottom)
+
+        if dlg.exec_() == QDialog.Accepted and selected[0]:
+            self.tab_settings.inspiration_edit.setPlainText(selected[0])
+            self.tabs.setCurrentWidget(self.tab_settings)
+            self.tab_generation.log("💡 已选择创意灵感", "success")
 
     def gen_title(self):
         genres = self.tab_settings.get_selected_genres() or ["言情"]
