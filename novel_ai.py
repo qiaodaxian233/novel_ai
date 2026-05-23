@@ -10829,13 +10829,13 @@ def main():
 
         def drawContents(self, painter):
             painter.save()
-            painter.setFont(_QFont("Microsoft YaHei", 10, _QFont.Bold))
+            painter.setFont(_QFont("Microsoft YaHei", 13, _QFont.Bold))
             painter.setPen(QPen(self._color))
             # 文字画在底部金色框内(约 88%-95% 高度区域)
             h = self.pixmap().height()
             w = self.pixmap().width()
-            text_y = int(h * 0.88)
-            text_h = int(h * 0.07)
+            text_y = int(h * 0.84)
+            text_h = int(h * 0.09)
             from PyQt5.QtCore import QRect
             rect = QRect(int(w * 0.08), text_y, int(w * 0.84), text_h)
             painter.drawText(rect,
