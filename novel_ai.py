@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.19.2"
+APP_VERSION = "v2.19.3"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -11083,7 +11083,17 @@ def main():
                 win._update_window_title()
                 print(f"[launcher] 加载项目: {_e}", flush=True)
 
-        win.show()
+        # 自动识别分辨率 + 最大化
+        from PyQt5.QtWidgets import QDesktopWidget
+        screen = QDesktopWidget().availableGeometry()
+        win.setMinimumSize(800, 600)  # 确保可缩小
+        if screen.width() >= 1920:
+            win.showMaximized()
+        elif screen.width() >= 1366:
+            win.resize(int(screen.width() * 0.9), int(screen.height() * 0.9))
+            win.show()
+        else:
+            win.showMaximized()
         # v1.20:应用编辑器自定义颜色(如果之前调过)
         try:
             win.tab_editor._apply_editor_colors()
