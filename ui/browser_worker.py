@@ -1156,6 +1156,9 @@ class BrowserWorker(QObject):
         except Exception:
             normal_stable_wait = self.stable_wait
         no_change_streak = 0  # 连续无变化的轮数
+        # 0字符超时:如果90秒都是0字符,放弃等待(触发上层自动重试)
+        _zero_char_start = time.time()
+        _ZERO_CHAR_TIMEOUT = 90  # 秒
         # 继续生成防死循环计数:连续点击但 AI 没响应 → 3 次后放弃
         cg_attempts = 0
         cg_max_attempts = 3
@@ -1168,6 +1171,16 @@ class BrowserWorker(QObject):
                 cur_fp = f"{cur[:100]}|{len(cur)}"
                 if cur_fp == prev_response_fingerprint:
                     cur = ""  # 阻止把上一轮的输出当成本轮的
+
+            # ── 0字符超时检测:90秒无任何内容 → 放弃,触发上层自动重试 ──
+            if cur and len(cur.strip()) > 0:
+                _zero_char_start = time.time()  # 有内容了,重置计时
+            elif time.time() - _zero_char_start > _ZERO_CHAR_TIMEOUT:
+                self.log_signal.emit(
+                    f"⚠ 连续 {_ZERO_CHAR_TIMEOUT}秒 无任何回复内容(0字符),"
+                    f"放弃本次等待,触发自动重试", "warn")
+                last_text = ""  # 返回空 → 触发0字节重试
+                break
 
             # ★ 优先级最高:扫"继续生成"按钮,每轮 0.3s 都跑(不依赖 stopping/cur 状态)
             #   DeepSeek 显示"继续生成"时 stop 按钮可能还在,所以不能等 stopping=False 才检测
