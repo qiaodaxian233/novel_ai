@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.16.4"
+APP_VERSION = "v2.16.5"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1505,6 +1505,15 @@ class MainWindow(QMainWindow):
             **{k: v for k, v in extra.items()
                if k.startswith("_") and isinstance(v, (str, int, float, bool, type(None)))},
         })
+        # 超时提醒(90秒没回复就警告)
+        _task_label = label
+        def _check_timeout():
+            if _task_label in self._pending_task_targets:
+                self.tab_generation.log(
+                    f"⏰ 「{_task_label}」已等待90秒未回复,AI可能超时或页面卡住。"
+                    f"可以尝试刷新页面或重新发送。", "warn")
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(90000, _check_timeout)
 
     def _on_response_received(self, task_id, content):
         """worker 回调:某次提示词的 AI 回复已抓取完毕"""
@@ -8340,6 +8349,7 @@ class MainWindow(QMainWindow):
         if not genres:
             QMessageBox.warning(self, "提示", "请至少选一个题材"); return
         prompt = PROMPTS["creative_inspiration"].format(genre="/".join(genres))
+        self.tab_generation.log("💡 正在生成创意灵感,请等待...", "info")
         self._send_to_ai(prompt, "创意灵感", target="inspiration")
 
     def gen_title(self):
@@ -8350,6 +8360,7 @@ class MainWindow(QMainWindow):
         prompt = PROMPTS["title"].format(
             genre="/".join(genres), inspiration=insp,
             platform=self.tab_settings.get_platform())
+        self.tab_generation.log("🏷️ 正在生成书名,请等待...", "info")
         self._send_to_ai(prompt, "AI生成书名", target="title")
 
     # ---- 补丁3：大纲自动回填 ----
