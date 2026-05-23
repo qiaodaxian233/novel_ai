@@ -65,14 +65,13 @@ expect("章节列表 widget 也是空", mw.chapter_list.count() == 0)
 section("T3 — Tab 列表完整")
 # v1.41 加 🏠 项目主页 / v1.38 加 📚 拆书学习 / v7 时代删 小说封面生成
 expected = [
-    "创作设置", "故事大纲", "对话记忆", "Canon 设定",
-    "🎭 角色与世界",        # 角色库 + 关系 + 时间线 + 物品 + 伏笔
-    "寿元/伏笔",         # 来自 lifespan_loops 集成
-    "技能库",
-    "工作流",            # 来自 workflow_panel 集成
-    "生成控制", "章节编辑器",
-    "📚 拆书学习",         # v1.38 新增
-    "🔧 DEBUG",           # v2.13.4 新增
+    "创作设置",
+    "📝 世界构建",       # 子Tab: 故事大纲 + 对话记忆 + Canon
+    "🎭 角色系统",       # 子Tab: 角色与世界 + 寿元/伏笔 + 技能库
+    "⚙️ 生成引擎",       # 子Tab: 生成控制 + 工作流
+    "章节编辑器",
+    "📚 拆书学习",
+    "🔧 DEBUG",
 ]
 actual = [mw.tabs.tabText(i) for i in range(mw.tabs.count())]
 expect(f"Tab 数 = {len(expected)}",

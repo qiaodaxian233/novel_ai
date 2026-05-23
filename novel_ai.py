@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.18.6"
+APP_VERSION = "v2.18.7"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -413,17 +413,12 @@ class MainWindow(QMainWindow):
                 self.tab_generation.log(
                     f"⚠ 研究报告技能装载失败:{e}", "warn")
 
-        # ---- 工作流可视化 Tab(新增) ----
-        # 必须在 workflow.setup_default_steps 之后,这样 register hooks 才能拿到完整 step 列表
+        # ---- 工作流可视化(加入生成引擎组) ----
         if WORKFLOW_PANEL_AVAILABLE and self.workflow is not None:
             self.tab_workflow = WorkflowPanel(mw=self)
             self.tab_workflow.request_log.connect(
                 lambda m, lv: self.tab_generation.log(m, lv))
-            # 插到「技能库」之后、「生成控制」之前
-            insert_idx = self.tabs.indexOf(self.tab_generation)
-            if insert_idx < 0:
-                insert_idx = self.tabs.count()
-            self.tabs.insertTab(insert_idx, self.tab_workflow, "工作流")
+            self._tab_engine.addTab(self.tab_workflow, "工作流")
 
         # 恢复上次设置和项目数据
         # 先加载项目数据，再加载设置（QSettings优先级更高，覆盖项目文件中的旧设置）
@@ -818,18 +813,31 @@ class MainWindow(QMainWindow):
         # Tab 列表(项目主页已移到启动器,不再需要)
         tab_list = [
             (self.tab_settings, "创作设置"),
-            (self.tab_outline, "故事大纲"),
-            (self.tab_memory, "对话记忆"),
-            (self.tab_canon, "Canon 设定"),
-            (self.tab_charlib, "🎭 角色与世界"),
         ]
+
+        # ── 📝 世界构建(子Tab: 故事大纲 + 对话记忆 + Canon) ──
+        from PyQt5.QtWidgets import QTabWidget as _SubTW
+        self._tab_world = _SubTW()
+        self._tab_world.addTab(self.tab_outline, "故事大纲")
+        self._tab_world.addTab(self.tab_memory, "对话记忆")
+        self._tab_world.addTab(self.tab_canon, "Canon 设定")
+        tab_list.append((self._tab_world, "📝 世界构建"))
+
+        # ── 🎭 角色系统(子Tab: 角色与世界 + 寿元/伏笔 + 技能库) ──
+        self._tab_chars = _SubTW()
+        self._tab_chars.addTab(self.tab_charlib, "角色与世界")
         if self.tab_lifespan is not None:
-            tab_list.append((self.tab_lifespan, "寿元/伏笔"))
-        tab_list.append((self.tab_skills, "技能库"))
-        # v1.38: 拆书 Tab
+            self._tab_chars.addTab(self.tab_lifespan, "寿元/伏笔")
+        self._tab_chars.addTab(self.tab_skills, "技能库")
+        tab_list.append((self._tab_chars, "🎭 角色系统"))
+
+        # ── ⚙️ 生成引擎(子Tab: 生成控制 + 工作流) ──
+        self._tab_engine = _SubTW()
+        self._tab_engine.addTab(self.tab_generation, "生成控制")
+        # 工作流面板加入生成引擎组
         self.tab_book_splitter = BookSplitterTab()
         tab_list += [
-            (self.tab_generation, "生成控制"),
+            (self._tab_engine, "⚙️ 生成引擎"),
             (self.tab_editor, "章节编辑器"),
             (self.tab_book_splitter, "📚 拆书学习"),
         ]
