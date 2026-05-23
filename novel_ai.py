@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.16.5"
+APP_VERSION = "v2.16.6"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -1097,6 +1097,48 @@ class MainWindow(QMainWindow):
         self.tab_generation.log("🚀 自动启动浏览器(上次设置)...", "info")
         self.launch_browser()
 
+    def _tts_alert(self, text):
+        """语音报警(简单的一句话提醒,不走TTS队列)"""
+        import threading
+        def _speak():
+            try:
+                # 优先用 edge-tts
+                import asyncio
+                import edge_tts
+                import tempfile, os
+                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+                    tmp = f.name
+                async def _gen():
+                    comm = edge_tts.Communicate(text, "zh-CN-XiaoxiaoNeural")
+                    await comm.save(tmp)
+                asyncio.run(_gen())
+                # 播放
+                try:
+                    import pygame
+                    if not pygame.mixer.get_init():
+                        pygame.mixer.init()
+                    pygame.mixer.music.load(tmp)
+                    pygame.mixer.music.play()
+                    import time
+                    while pygame.mixer.music.get_busy():
+                        time.sleep(0.1)
+                except Exception:
+                    pass
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+            except ImportError:
+                # 没有 edge-tts,用系统蜂鸣
+                try:
+                    import winsound
+                    winsound.Beep(800, 500)
+                    winsound.Beep(600, 500)
+                    winsound.Beep(800, 500)
+                except Exception:
+                    pass
+        threading.Thread(target=_speak, daemon=True).start()
+
     def _on_browser_started(self):
         # 浏览器就绪后,自动跳到当前选定的 AI 网站
         url = self.tab_generation.url_input.text().strip()
@@ -1505,13 +1547,29 @@ class MainWindow(QMainWindow):
             **{k: v for k, v in extra.items()
                if k.startswith("_") and isinstance(v, (str, int, float, bool, type(None)))},
         })
-        # 超时提醒(90秒没回复就警告)
+        # 超时报警(90秒没回复 → 弹窗 + TTS语音提醒)
         _task_label = label
         def _check_timeout():
             if _task_label in self._pending_task_targets:
                 self.tab_generation.log(
-                    f"⏰ 「{_task_label}」已等待90秒未回复,AI可能超时或页面卡住。"
-                    f"可以尝试刷新页面或重新发送。", "warn")
+                    f"⏰ 「{_task_label}」已等待90秒未回复!", "warn")
+                # TTS 语音报警
+                try:
+                    self._tts_alert("注意,任务超时可能卡住了,请检查浏览器")
+                except Exception:
+                    pass
+                # 弹窗
+                QMessageBox.warning(
+                    self, "⏰ 任务超时",
+                    f"「{_task_label}」已等待 90 秒没有回复。\n\n"
+                    f"可能原因:\n"
+                    f"  • AI 正在深度思考(等久一点)\n"
+                    f"  • 页面卡住了(刷新浏览器)\n"
+                    f"  • 网络断了(检查网络)\n\n"
+                    f"你可以:\n"
+                    f"  1. 继续等待\n"
+                    f"  2. 切到浏览器手动刷新\n"
+                    f"  3. 重新点击生成")
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(90000, _check_timeout)
 
