@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
 class AINamingDialog(QDialog):
     """AI 取名对话框"""
 
-    def __init__(self, old_name="", parent=None):
+    def __init__(self, old_name="", char_list=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("🎭 AI 智能取名")
         self.resize(550, 480)
@@ -31,10 +31,22 @@ class AINamingDialog(QDialog):
         info_lay = QVBoxLayout(info_box)
 
         row1 = QHBoxLayout()
-        row1.addWidget(QLabel("原名:"))
-        self.input_old = QLineEdit(old_name)
-        self.input_old.setPlaceholderText("要替换的角色名(留空=新角色)")
-        row1.addWidget(self.input_old)
+        row1.addWidget(QLabel("选择角色:"))
+        self.combo_old = QComboBox()
+        self.combo_old.setEditable(True)
+        if char_list:
+            for name, role in char_list:
+                self.combo_old.addItem(f"{name} ({role})", name)
+        if old_name:
+            # 选中主角
+            for i in range(self.combo_old.count()):
+                if self.combo_old.itemData(i) == old_name:
+                    self.combo_old.setCurrentIndex(i)
+                    break
+            else:
+                self.combo_old.setEditText(old_name)
+        self.combo_old.setToolTip("选择要改名的角色,或手动输入")
+        row1.addWidget(self.combo_old)
         info_lay.addLayout(row1)
 
         row2 = QHBoxLayout()
@@ -96,9 +108,16 @@ class AINamingDialog(QDialog):
         bottom.addWidget(btn_cancel)
         layout.addLayout(bottom)
 
+    def _get_old_name(self):
+        """从 combo 获取原角色名"""
+        idx = self.combo_old.currentIndex()
+        if idx >= 0 and self.combo_old.itemData(idx):
+            return str(self.combo_old.itemData(idx)).strip()
+        return self.combo_old.currentText().strip().split(" (")[0].strip()
+
     def _build_char_info(self):
         parts = []
-        old = self.input_old.text().strip()
+        old = self._get_old_name()
         if old:
             parts.append(f"原名: {old}(需要替换)")
         parts.append(f"性别: {self.combo_gender.currentText()}")
@@ -180,7 +199,7 @@ class AINamingDialog(QDialog):
     def _on_replace(self):
         if not self.selected_name:
             return
-        old_name = self.input_old.text().strip()
+        old_name = self._get_old_name()
         if not old_name:
             QMessageBox.information(self, "提示", "请填写要替换的原名")
             return
@@ -188,6 +207,6 @@ class AINamingDialog(QDialog):
 
     def get_result(self):
         """返回 (old_name, new_name) 或 None"""
-        if self.selected_name and self.input_old.text().strip():
-            return (self.input_old.text().strip(), self.selected_name)
+        if self.selected_name and self._get_old_name():
+            return (self._get_old_name(), self.selected_name)
         return None

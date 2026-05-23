@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.15.8"
+APP_VERSION = "v2.15.9"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -9900,20 +9900,24 @@ class MainWindow(QMainWindow):
     # ── AI 智能取名 ──
 
     def _open_ai_naming(self):
-        """打开 AI 取名对话框(非模态,等 AI 回复后更新)"""
+        """打开 AI 取名对话框 — 自动识别所有角色"""
         from ui.ai_naming import AINamingDialog
-        # 自动识别主角名
+        # 收集所有角色
+        char_list = []  # [(name, role), ...]
         auto_name = ""
         try:
             tbl = self.tab_charlib.tbl_chars
             for r in range(tbl.rowCount()):
-                role = (tbl.item(r, 1).text() if tbl.item(r, 1) else "").lower()
-                if "主角" in role or "男主" in role or "女主" in role:
-                    auto_name = tbl.item(r, 0).text() if tbl.item(r, 0) else ""
-                    break
+                name = (tbl.item(r, 0).text() if tbl.item(r, 0) else "").strip()
+                role = (tbl.item(r, 1).text() if tbl.item(r, 1) else "").strip()
+                if name:
+                    char_list.append((name, role or "配角"))
+                    if not auto_name and ("主角" in role or "男主" in role or "女主" in role):
+                        auto_name = name
         except Exception:
             pass
-        dlg = AINamingDialog(old_name=auto_name, parent=self)
+        dlg = AINamingDialog(
+            old_name=auto_name, char_list=char_list, parent=self)
         self._naming_dlg = dlg
         dlg.finished.connect(self._on_naming_dlg_closed)
         dlg.show()
