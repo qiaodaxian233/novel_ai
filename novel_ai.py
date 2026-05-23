@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.15.5"
+APP_VERSION = "v2.15.6"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -645,6 +645,11 @@ class MainWindow(QMainWindow):
         a_ab.triggered.connect(self._start_ab_compare)
         a_ab.setToolTip("对当前章节重新生成一个版本,左右对比选更好的")
         tm.addAction(a_ab)
+        tm.addSeparator()
+        a_naming = QAction("🎭 AI 智能取名(全文替换)", self)
+        a_naming.triggered.connect(self._open_ai_naming)
+        a_naming.setToolTip("AI生成10个角色名,选中后全文替换")
+        tm.addAction(a_naming)
         tm.addAction(a_override)
         tm.addSeparator()
         a_clean_meta = QAction("🧹 扫描清理所有章节尾部元信息(本章完/钩子/选项)", self)
@@ -1626,6 +1631,8 @@ class MainWindow(QMainWindow):
             self._on_script_response(content)
         elif target == "ab_compare":
             self._on_ab_compare_response(content)
+        elif target == "ai_naming":
+            self._on_ai_naming_response(content)
         elif target == "conv_restore":
             # 记忆恢复确认回复 — 只记日志
             self.tab_generation.log(
@@ -9883,6 +9890,60 @@ class MainWindow(QMainWindow):
             hint.setStyleSheet("color:#999; padding:20px;")
             lay.addWidget(hint)
         dlg.exec_()
+
+    # ── AI 智能取名 ──
+
+    def _open_ai_naming(self):
+        """打开 AI 取名对话框(非模态,等 AI 回复后更新)"""
+        from ui.ai_naming import AINamingDialog
+        dlg = AINamingDialog(parent=self)
+        self._naming_dlg = dlg
+        dlg.finished.connect(self._on_naming_dlg_closed)
+        dlg.show()
+
+    def _on_naming_dlg_closed(self, result_code):
+        """取名对话框关闭 → 如果选了名字就全文替换"""
+        dlg = getattr(self, "_naming_dlg", None)
+        if not dlg:
+            return
+        if result_code == QDialog.Accepted:
+            result = dlg.get_result()
+            if result:
+                self._do_global_rename(result)
+        self._naming_dlg = None
+
+    def _on_ai_naming_response(self, content):
+        """AI 返回名字列表 → 更新对话框"""
+        dlg = getattr(self, "_naming_dlg", None)
+        if dlg and dlg.isVisible():
+            dlg.on_names_received(content)
+
+    def _do_global_rename(self, result):
+        """全文替换角色名"""
+        if not result:
+            return
+        old_name, new_name = result
+        count = 0
+        for ch in self.chapters:
+            content = ch.get("content", "")
+            if old_name in content:
+                ch["content"] = content.replace(old_name, new_name)
+                count += 1
+            title = ch.get("title", "")
+            if old_name in title:
+                ch["title"] = title.replace(old_name, new_name)
+            summary = ch.get("summary", "")
+            if old_name in summary:
+                ch["summary"] = summary.replace(old_name, new_name)
+        # 刷新 UI
+        self._refresh_chapter_list()
+        if 0 <= self.current_chapter_index < len(self.chapters):
+            ch = self.chapters[self.current_chapter_index]
+            self.tab_editor.load_chapter(
+                ch.get("title", ""), ch.get("content", ""))
+        self.tab_generation.log(
+            f"🎭 全文替换:「{old_name}」→「{new_name}」({count} 章受影响)",
+            "success")
 
     def show_dom_diagnostics(self):
         """🔬 诊断当前 AI 网页 DOM:看每个选择器在当前页命中了多少元素"""
