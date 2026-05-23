@@ -64,24 +64,23 @@ class LifespanLoopsPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
 
-        title = QLabel("寿元台账 + 长期伏笔检查 — 修仙连载约束")
+        title = QLabel("寿元台账 — 修仙连载约束")
         title.setStyleSheet(TITLE_STYLE)
         layout.addWidget(title)
 
         intro = QLabel(
-            "针对修仙 / 倒计时型连载的两类硬约束：\n"
+            "针对修仙 / 倒计时型连载的硬约束：\n"
             "  · 寿元台账：每章自动累加折寿，注入下一章 prompt，剩余触底自动告警。\n"
-            "  · 长期伏笔检查：超过设定章数未触及的伏笔自动报红，避免坑越挖越多。\n"
+            "  · 长期伏笔检查已移到独立Tab「🪤 伏笔检查」。\n"
             "  默认全关，对普通项目零感知；开启后请记得【保存配置】并保存项目。"
         )
         intro.setStyleSheet(INTRO_STYLE)
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        # ---- 上半：寿元台账 ----
+        # ---- 寿元台账 ----
         layout.addWidget(self._build_lifespan_box())
-        # ---- 下半：长期伏笔检查 ----
-        layout.addWidget(self._build_loops_box(), 1)
+        layout.addStretch(1)
 
         # 保存
         save_row = QHBoxLayout()
