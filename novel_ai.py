@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.15.9"
+APP_VERSION = "v2.16.0"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -9900,22 +9900,72 @@ class MainWindow(QMainWindow):
     # ── AI 智能取名 ──
 
     def _open_ai_naming(self):
-        """打开 AI 取名对话框 — 自动识别所有角色"""
+        """打开 AI 取名对话框 — 从角色库+大纲+正文识别所有角色"""
         from ui.ai_naming import AINamingDialog
-        # 收集所有角色
-        char_list = []  # [(name, role), ...]
+        import re as _re
+        from collections import Counter
+
+        char_set = {}  # name → role
         auto_name = ""
+
+        # 1. 角色库(最可靠)
         try:
             tbl = self.tab_charlib.tbl_chars
             for r in range(tbl.rowCount()):
                 name = (tbl.item(r, 0).text() if tbl.item(r, 0) else "").strip()
                 role = (tbl.item(r, 1).text() if tbl.item(r, 1) else "").strip()
                 if name:
-                    char_list.append((name, role or "配角"))
+                    char_set[name] = role or "配角"
                     if not auto_name and ("主角" in role or "男主" in role or "女主" in role):
                         auto_name = name
         except Exception:
             pass
+
+        # 2. 大纲文本提取(找高频中文人名)
+        outline_text = ""
+        try:
+            for edit in [
+                self.tab_outline.seed_edit,
+                self.tab_outline.worldview_edit,
+                self.tab_outline.structure_edit,
+                self.tab_outline.chapter_outline_edit,
+            ]:
+                outline_text += edit.toPlainText() + "\n"
+        except Exception:
+            pass
+
+        # 3. 正文前5章也扫一遍
+        for ch in self.chapters[:5]:
+            outline_text += (ch.get("content") or "") + "\n"
+
+        # 提取高频2-3字中文人名(出现≥3次)
+        if outline_text:
+            # 匹配 2-3个汉字 的组合
+            candidates = _re.findall(r'[\u4e00-\u9fff]{2,3}', outline_text)
+            freq = Counter(candidates)
+            # 排除常用词
+            _stop = {"但是", "因为", "所以", "如果", "可以", "已经", "什么", "没有",
+                     "这个", "那个", "他们", "我们", "自己", "不是", "就是", "还是",
+                     "一个", "出来", "进去", "时候", "知道", "觉得", "开始", "然后",
+                     "现在", "这样", "那样", "怎么", "为什么", "突然", "终于", "于是",
+                     "心里", "眼中", "手中", "身上", "面前", "身边", "之间", "之中",
+                     "目光", "声音", "表情", "动作", "世界", "地方", "问题", "事情"}
+            for word, cnt in freq.most_common(50):
+                if cnt >= 3 and word not in _stop and word not in char_set:
+                    # 简单判断:首字是常见姓氏 → 更可能是人名
+                    _surnames = set("赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张"
+                                    "孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎"
+                                    "鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉岑薛雷贺倪汤"
+                                    "滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄穆"
+                                    "萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒"
+                                    "屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭林")
+                    if word[0] in _surnames:
+                        char_set[word] = "大纲提取"
+
+        char_list = [(name, role) for name, role in char_set.items()]
+        # 角色库的排前面
+        char_list.sort(key=lambda x: (0 if x[1] not in ("大纲提取",) else 1, x[0]))
+
         dlg = AINamingDialog(
             old_name=auto_name, char_list=char_list, parent=self)
         self._naming_dlg = dlg
