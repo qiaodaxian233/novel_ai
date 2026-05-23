@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.20.4"
+APP_VERSION = "v2.20.5"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -829,9 +829,12 @@ class MainWindow(QMainWindow):
         self._tab_chars.addTab(self.tab_skills, "技能库")
         tab_list.append((self._tab_chars, "🎭 角色系统"))
 
-        # ── 🪤 伏笔检查(独立Tab,方便查看) ──
+        # ── 🪤 伏笔检查(独立Tab,大界面) ──
+        from ui.foreshadow_tab import ForeshadowTab
+        self.tab_foreshadow = ForeshadowTab(mw=self)
         if self.tab_lifespan is not None:
-            tab_list.append((self.tab_lifespan, "🪤 伏笔检查"))
+            tab_list.append((self.tab_lifespan, "寿元台账"))
+        tab_list.append((self.tab_foreshadow, "🪤 伏笔检查"))
         tab_list.append((self._tab_chars, "🎭 角色系统"))
 
         # ── ⚙️ 生成引擎(子Tab: 生成控制 + 工作流) ──
