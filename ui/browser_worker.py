@@ -867,6 +867,18 @@ class BrowserWorker(QObject):
         task_id = task.get("task_id", "")
         target_url = task.get("url")
 
+        # ── 智能冷却:防止发送过于频繁被限流 ──
+        _min_gap = 5.0  # 最小发送间隔(秒)
+        _now = time.time()
+        _last = getattr(self, "_last_send_time", 0)
+        _gap = _now - _last
+        if _gap < _min_gap:
+            _wait = _min_gap - _gap
+            self.log_signal.emit(
+                f"⏳ 冷却 {_wait:.1f}秒(防限流)...", "info")
+            time.sleep(_wait)
+        self._last_send_time = time.time()
+
         if target_url and target_url not in self._current_url():
             self._goto(target_url)
             time.sleep(1.5)
