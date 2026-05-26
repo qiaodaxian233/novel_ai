@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.23.0"
+APP_VERSION = "v2.23.1"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -596,6 +596,13 @@ class MainWindow(QMainWindow):
         # v2.23.0 BUG-086: 番茄榜单扫描完成 → 主进程拼增强 prompt 发 AI
         try:
             self.worker.rank_scraped.connect(self._on_fanqie_rank_scraped)
+        except Exception:
+            pass
+
+        # v2.23.1: 番茄全榜扫描进度 + 完成信号
+        try:
+            self.worker.rank_progress.connect(self._on_v231_rank_progress)
+            self.worker.rank_all_scraped.connect(self._on_v231_all_ranks_scraped)
         except Exception:
             pass
 
@@ -8838,17 +8845,209 @@ class MainWindow(QMainWindow):
         if not genres:
             QMessageBox.warning(self, "提示", "请至少选一个题材"); return
         platform = self.tab_settings.get_platform()
-        # v2.23.0 BUG-086: 扫榜增强灵感
-        # 新流程:平台是"番茄小说"+ 浏览器就绪 → 先扫榜抓真实题材趋势 → 拼增强 prompt
-        # 否则 → fallback 旧通用 prompt(行为不变)
-        # 30 分钟缓存复用,避免每次开新页面
-        if (platform == "番茄小说" and self.worker.is_ready()
-                and self._gen_inspiration_try_scrape(genres, platform)):
-            # 已经触发扫榜任务,await rank_scraped 信号回调
-            # 回调里再发 AI prompt
-            return
-        # Fallback:旧通用 prompt
+        # v2.23.1: 三层灵感增强(优先全榜 → 单榜 → 通用)
+        # 1. 番茄 + 浏览器就绪 → 优先用 v2.23.1 全榜扫描(74 榜矩阵)
+        # 2. 全榜失败 / 不可用 → fallback 到 v2.23.0 单榜扫描
+        # 3. 单榜也失败 → fallback 到旧通用 prompt
+        # 全榜缓存命中(24h)直接复用,不再扫
+        if platform == "番茄小说" and self.worker.is_ready():
+            if self._gen_inspiration_try_v231_full_scrape(genres, platform):
+                return
+            if self._gen_inspiration_try_scrape(genres, platform):
+                return
         self._gen_inspiration_send_fallback(genres, platform)
+
+    def _gen_inspiration_try_v231_full_scrape(self, genres, platform):
+        """
+        v2.23.1: 尝试全榜扫描(74 榜矩阵)
+
+        返回 True 表示已触发扫榜任务 / 缓存命中已发 AI;False 表示不可用,让上层 fallback。
+        """
+        try:
+            from core.fanqie_rank_scraper import (
+                build_v231_full_rank_prompt, V231_CACHE_TTL_SEC)
+        except Exception as e:
+            self.tab_generation.log(
+                f"⚠ v2.23.1 全榜模块导入失败:{e},尝试 v2.23.0 单榜", "warn")
+            return False
+
+        # v2.23.1 stats 缓存(挂 self 上)
+        if not hasattr(self, "_v231_rank_stats_cache"):
+            self._v231_rank_stats_cache = {"stats": None, "scraped_at": 0.0}
+
+        import time as _time
+        cache_entry = self._v231_rank_stats_cache
+        age = _time.time() - cache_entry.get("scraped_at", 0)
+        if cache_entry.get("stats") and age < V231_CACHE_TTL_SEC:
+            stats = cache_entry["stats"]
+            self.tab_generation.log(
+                f"💡 v2.23.1 全榜缓存命中({stats.get('total_books', 0)} 本,"
+                f"{int(age // 60)} 分钟前扫的),直接用", "info")
+            self._gen_inspiration_send_with_v231_stats(stats, genres, platform)
+            return True
+
+        self.tab_generation.log(
+            f"💡 v2.23.1 准备扫描番茄全榜(74 个榜单 × Top10,预计 2-3 分钟)...", "info")
+
+        self._pending_v231_inspiration_ctx = {
+            "genres": list(genres),
+            "platform": platform,
+        }
+
+        self.worker.reset_scan_cancel()
+        self._show_v231_scan_progress_dialog()
+        self.worker.submit({
+            "action": "scrape_fanqie_all_ranks",
+            "task_id": "fanqie_all_ranks_scrape",
+        })
+        return True
+
+    def _show_v231_scan_progress_dialog(self):
+        """
+        v2.23.1: 弹一个非模态进度对话框,显示当前扫描进度
+
+        包含:进度条(0-74)/ 当前榜单标签 + 抓到多少本 /
+        "用部分数据生成"按钮 → 调 worker.cancel_scan() 提前结束 /
+        "取消"按钮 → 调 worker.cancel_scan() + 设标志让回调走 fallback
+        """
+        from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QLabel,
+                                      QProgressBar, QPushButton, QHBoxLayout)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("番茄全榜扫描中")
+        dlg.resize(440, 180)
+        dlg.setModal(False)
+
+        v = QVBoxLayout(dlg)
+        title = QLabel("正在扫描番茄小说全部 74 个分类榜单...")
+        v.addWidget(title)
+
+        bar = QProgressBar()
+        bar.setRange(0, 74)
+        bar.setValue(0)
+        v.addWidget(bar)
+
+        status = QLabel("准备开始...")
+        status.setWordWrap(True)
+        v.addWidget(status)
+
+        hint = QLabel("提示:全部扫完需 2-3 分钟。点'用部分数据生成'可提前结束。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #888;")
+        v.addWidget(hint)
+
+        btn_row = QHBoxLayout()
+        btn_partial = QPushButton("用部分数据生成")
+        btn_cancel = QPushButton("取消")
+        btn_row.addWidget(btn_partial)
+        btn_row.addStretch(1)
+        btn_row.addWidget(btn_cancel)
+        v.addLayout(btn_row)
+
+        def on_partial():
+            self.worker.cancel_scan()
+            self.tab_generation.log("💡 用户选择用部分数据生成", "info")
+            btn_partial.setEnabled(False)
+            btn_partial.setText("提前结束中...")
+
+        def on_cancel():
+            self.worker.cancel_scan()
+            self._v231_scan_cancelled_full = True
+            self.tab_generation.log("💡 用户取消了全榜扫描", "info")
+            dlg.close()
+
+        btn_partial.clicked.connect(on_partial)
+        btn_cancel.clicked.connect(on_cancel)
+
+        self._v231_scan_dialog = dlg
+        self._v231_scan_dialog_widgets = {
+            "bar": bar, "status": status,
+            "btn_partial": btn_partial, "btn_cancel": btn_cancel,
+        }
+        self._v231_scan_cancelled_full = False
+        dlg.show()
+
+    def _on_v231_rank_progress(self, task_id, cur, total, label, n_books):
+        """v2.23.1: worker emit rank_progress 时更新对话框"""
+        if task_id != "fanqie_all_ranks_scrape":
+            return
+        dlg = getattr(self, "_v231_scan_dialog", None)
+        if not dlg or not dlg.isVisible():
+            return
+        widgets = getattr(self, "_v231_scan_dialog_widgets", {})
+        bar = widgets.get("bar")
+        status = widgets.get("status")
+        if bar:
+            bar.setValue(cur)
+        if status:
+            status.setText(f"扫描 {cur}/{total}:{label} → 抓到 {n_books} 本")
+
+    def _on_v231_all_ranks_scraped(self, task_id, stats):
+        """
+        v2.23.1: worker 全榜扫完回调
+
+        - stats 为空 / total_books=0 → fallback 到 v2.23.0 单榜 / 通用
+        - stats 正常 → 缓存 + 拼 prompt 发 AI
+        - 用户取消(_v231_scan_cancelled_full=True)→ 走通用 fallback
+        """
+        if task_id != "fanqie_all_ranks_scrape":
+            return
+
+        dlg = getattr(self, "_v231_scan_dialog", None)
+        if dlg:
+            try:
+                dlg.close()
+            except Exception:
+                pass
+        self._v231_scan_dialog = None
+
+        ctx = getattr(self, "_pending_v231_inspiration_ctx", None)
+        if not ctx:
+            return
+        self._pending_v231_inspiration_ctx = None
+        genres = ctx.get("genres", [])
+        platform = ctx.get("platform", "番茄小说")
+
+        if getattr(self, "_v231_scan_cancelled_full", False):
+            self._v231_scan_cancelled_full = False
+            self.tab_generation.log("💡 全榜扫描取消,fallback 通用 prompt", "warn")
+            self._gen_inspiration_send_fallback(genres, platform)
+            return
+
+        if not stats or stats.get("total_books", 0) == 0:
+            self.tab_generation.log(
+                "⚠ v2.23.1 全榜扫描结果为空,fallback 到 v2.23.0 单榜", "warn")
+            if self._gen_inspiration_try_scrape(genres, platform):
+                return
+            self._gen_inspiration_send_fallback(genres, platform)
+            return
+
+        # 扫成功,缓存
+        import time as _time
+        self._v231_rank_stats_cache = {
+            "stats": stats,
+            "scraped_at": _time.time(),
+        }
+
+        self.tab_generation.log(
+            f"💡 v2.23.1 全榜扫描成功:{stats.get('total_books', 0)} 本 "
+            f"(去重 {stats.get('unique_books', 0)} 本) → 拼增强 prompt", "info")
+        self._gen_inspiration_send_with_v231_stats(stats, genres, platform)
+
+    def _gen_inspiration_send_with_v231_stats(self, stats, genres, platform):
+        """v2.23.1: 用 stats 拼 prompt 发 AI"""
+        try:
+            from core.fanqie_rank_scraper import build_v231_full_rank_prompt
+        except Exception:
+            self._gen_inspiration_send_fallback(genres, platform)
+            return
+        base_prompt = PROMPTS["creative_inspiration"].format(
+            genre="/".join(genres), platform=platform)
+        prompt = build_v231_full_rank_prompt(stats, genres, base_prompt)
+        if not prompt:
+            self._gen_inspiration_send_fallback(genres, platform)
+            return
+        self._send_to_ai(prompt, "创意灵感", target="inspiration")
 
     def _gen_inspiration_send_fallback(self, genres, platform):
         """v2.23.0 BUG-086: fallback 路径 — 走旧通用 prompt"""

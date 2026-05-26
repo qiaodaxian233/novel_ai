@@ -363,7 +363,8 @@ def test_X4_run_guards_empty_tree(src):
 
 
 def test_X5_version_bumped(src):
-    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', src)
+    assert m, "找不到 APP_VERSION"
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 85), \
         f"v1.85 写作回流不应被低版本退回,当前 v{major}.{minor}"

@@ -375,8 +375,10 @@ def test_bug086_hook_relax_has_log():
 # ============================================================
 
 def test_bug086_app_version_v2_23_0():
+    """v2.23.0 起 APP_VERSION 应是 v2.23.X(允许 patch 升级)"""
     code = _read('novel_ai.py')
-    assert re.search(r'APP_VERSION\s*=\s*["\']v2\.23\.0["\']', code)
+    assert re.search(r'APP_VERSION\s*=\s*["\']v2\.23(\.\d+)?["\']', code), \
+        "APP_VERSION 应是 v2.23.X(X 为任意 patch 号)"
 
 
 if __name__ == "__main__":

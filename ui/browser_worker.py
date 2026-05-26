@@ -91,6 +91,14 @@ class BrowserWorker(QObject):
     # (task_id, list[dict]) — books 列表(已解析,可直接传给 core.fanqie_rank_scraper)
     # books 为空 = 扫榜失败 / 扫到 0 条,主进程要 fallback 到旧通用 prompt
     rank_scraped = pyqtSignal(str, list)          # task_id, books_list
+    # v2.23.1: 番茄全榜扫描信号
+    # rank_progress: 每扫完一个榜单 emit (task_id, current, total, label, books_count)
+    #   主进程用来更新进度对话框,用户看见"扫描 5/74:男频阅读榜·西方奇幻 → 10 本"
+    # rank_all_scraped: 全部扫完后 emit (task_id, stats_dict)
+    #   stats_dict 是 aggregate_v231_stats 输出,包含整个榜单矩阵的聚合统计
+    #   stats_dict["total_books"] == 0 → 扫榜全失败,主进程 fallback
+    rank_progress = pyqtSignal(str, int, int, str, int)   # task_id, cur, total, label, n_books
+    rank_all_scraped = pyqtSignal(str, dict)              # task_id, stats_dict
 
     DEBUG_PORT = 9222
 
@@ -109,6 +117,9 @@ class BrowserWorker(QObject):
         self.max_wait = 240  # 单次最长等待 4 分钟
         # DeepSeek 深度思考模式(主线程根据 UI 设置)
         self._deep_think_enabled = False
+        # v2.23.1: 扫榜取消事件,用户在进度对话框点"用部分数据生成"时 set,
+        # _scrape_fanqie_all_ranks 循环里每榜检查,触发就提前 emit 结果退出
+        self._scan_cancel = threading.Event()
 
     # ============ 主线程调用接口 ============
     def start(self, channel=None):
@@ -139,6 +150,19 @@ class BrowserWorker(QObject):
 
     def is_ready(self):
         return self._browser_ready.is_set()
+
+    def cancel_scan(self):
+        """v2.23.1: 主进程调用,触发扫榜循环提前退出(用户点'用部分数据生成')
+
+        线程安全:_scan_cancel 是 threading.Event,_scrape_fanqie_all_ranks 在
+        循环里轮询 .is_set()。调用此方法后,扫榜循环会在下一榜开始前退出,
+        并 emit 当前已扫到的数据(不是空)。
+        """
+        self._scan_cancel.set()
+
+    def reset_scan_cancel(self):
+        """v2.23.1: 主进程调用,在开始新扫榜前清掉取消标志"""
+        self._scan_cancel.clear()
 
     # ============ Chrome 探测与启动辅助 ============
     @staticmethod
@@ -541,10 +565,18 @@ class BrowserWorker(QObject):
                 self.response_received.emit(
                     task.get("task_id", ""), self._grab_last_response(prof))
             elif action == "scrape_fanqie_rank":
-                # v2.23.0 BUG-086: 番茄榜单扫描
+                # v2.23.0 BUG-086: 番茄单榜扫描(保留兼容)
                 # 流程:navigate → 等懒加载 → 多重 selector 抓取 → emit rank_scraped
                 # 失败兜底:任何异常 → emit 空列表,主进程会 fallback 到旧 prompt
                 self._scrape_fanqie_rank(task)
+            elif action == "scrape_fanqie_all_ranks":
+                # v2.23.1: 番茄全榜矩阵扫描(74 榜单 × Top10)
+                # 流程:循环 74 个分类榜单 URL → 每榜 navigate + 正则抓 book_id +
+                #       emit rank_progress → 全部完成 emit rank_all_scraped(stats)
+                # 取消:用户点"用部分数据生成"→ 主进程 cancel_scan() →
+                #       循环检测 _scan_cancel,提前退出 emit 部分结果
+                # 失败兜底:任何榜失败跳过继续下一榜,全失败 emit empty stats
+                self._scrape_fanqie_all_ranks(task)
             self.status_signal.emit("idle")
         except Exception as e:
             self.log_signal.emit(f"任务执行失败:{e}", "error")
@@ -679,6 +711,126 @@ class BrowserWorker(QObject):
             self.log_signal.emit(
                 f"⚠ 扫榜异常:{e},fallback 到旧灵感 prompt", "warn")
             self.rank_scraped.emit(task_id, [])
+
+    def _scrape_fanqie_all_ranks(self, task):
+        """
+        v2.23.1: 番茄全榜矩阵扫描(74 榜单 × Top10)
+
+        流程:
+          1. 加载 74 个分类榜单 URL 列表(从 fanqie_rank_scraper.get_all_rank_urls())
+          2. 循环每个 URL:
+             a. 检查 _scan_cancel,触发就提前退出(早退机制)
+             b. navigate 到该榜单
+             c. 等加载 + 滚动让懒加载内容出现
+             d. 抓 page_source HTML,调 parse_rank_page_minimal 解析
+             e. emit rank_progress(cur, total, label, n_books)
+          3. 全部扫完后调 aggregate_v231_stats 聚合
+          4. emit rank_all_scraped(stats_dict)
+
+        失败兜底:任何单榜失败 → 该榜 books=[] 但继续下一榜。全失败 → stats 为空。
+
+        重要:用 self.driver.page_source 拿 HTML(不是 execute_script),
+        因为榜单页有字体反爬,parse_rank_page_minimal 用正则只抽
+        book_id + 在读数,这两个字段在 HTML 里是干净的(book_id 在 URL 里,数字也是)。
+        """
+        task_id = task.get("task_id", "fanqie_all_ranks")
+
+        try:
+            from core.fanqie_rank_scraper import (
+                get_all_rank_urls, parse_rank_page_minimal, aggregate_v231_stats,
+            )
+        except Exception as e:
+            self.log_signal.emit(
+                f"⚠ 全榜扫榜模块导入失败:{e},fallback 到旧灵感 prompt", "warn")
+            self.rank_all_scraped.emit(task_id, {})
+            return
+
+        if not self._is_alive():
+            self.log_signal.emit("⚠ 浏览器未就绪,无法扫全榜", "warn")
+            self.rank_all_scraped.emit(task_id, {})
+            return
+
+        all_urls = get_all_rank_urls()
+        total = len(all_urls)
+        self.log_signal.emit(
+            f"📊 v2.23.1 全榜扫描开始:共 {total} 个分类榜单 × Top10 = "
+            f"{total * 10} 本预期", "info")
+
+        scraped = []
+        scanned_ok = 0
+        scanned_fail = 0
+
+        for i, board in enumerate(all_urls, 1):
+            # 取消检查:用户在进度对话框点了"用部分数据生成"
+            if self._scan_cancel.is_set():
+                self.log_signal.emit(
+                    f"📊 扫榜已被用户取消(进度 {i - 1}/{total}),"
+                    f"用部分数据(已扫 {len(scraped)} 榜)", "info")
+                break
+
+            url = board["url"]
+            label = board["label"]
+            books = []
+            try:
+                self._goto(url)
+                # 等加载;比 v2.23.0 单榜 3.5s 短一些(74 榜要扫,每榜慢就要 4 分钟)
+                time.sleep(2.0)
+                try:
+                    self.driver.execute_script(
+                        "window.scrollBy(0, window.innerHeight * 0.8);")
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+                # 抓 page_source(纯文本,字体反爬绕不开,但 parse_rank_page_minimal
+                # 只抽 book_id + 在读数,这两个字段在 HTML 里是干净的)
+                html = ""
+                try:
+                    html = self.driver.page_source or ""
+                except Exception:
+                    html = ""
+
+                books = parse_rank_page_minimal(html, max_books=10)
+                if books:
+                    scanned_ok += 1
+                else:
+                    scanned_fail += 1
+
+            except Exception as e:
+                scanned_fail += 1
+                self.log_signal.emit(
+                    f"⚠ 扫榜 [{label}] 失败({e}),跳过", "warn")
+                books = []
+
+            scraped.append({
+                "label": label,
+                "gender": board["gender"],
+                "type": board["type"],
+                "category": board["category"],
+                "cat_id": board["cat_id"],
+                "books": books,
+            })
+
+            self.rank_progress.emit(task_id, i, total, label, len(books))
+
+            # 每 10 个榜单打一条进度日志(避免刷屏)
+            if i % 10 == 0 or i == total:
+                self.log_signal.emit(
+                    f"📊 扫榜进度 {i}/{total}(成功 {scanned_ok}, 失败 {scanned_fail})", "info")
+
+        # 聚合统计
+        stats = aggregate_v231_stats(scraped) if scraped else {}
+        if stats:
+            stats["scanned_ok"] = scanned_ok
+            stats["scanned_fail"] = scanned_fail
+            stats["cancelled"] = self._scan_cancel.is_set()
+
+        self.log_signal.emit(
+            f"📊 全榜扫描完成:共扫 {len(scraped)} 榜(成功 {scanned_ok}/失败 {scanned_fail}),"
+            f"得到 {stats.get('total_books', 0)} 本(去重后 {stats.get('unique_books', 0)} 本)",
+            "info")
+
+        self.rank_all_scraped.emit(task_id, stats)
 
     def _goto(self, url):
         if not self._is_alive():

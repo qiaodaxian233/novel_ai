@@ -416,3 +416,271 @@ def parse_scraped_books(raw_data: List[Dict]) -> List[Book]:
         if len(out) >= SCRAPE_TARGET_TOPK:
             break
     return out
+
+
+# ============================================================
+# v2.23.1: 全榜矩阵扫描(MVP)
+# ============================================================
+# v2.23.0 只扫单一榜单 URL,v2.23.1 扩成 74 榜单矩阵(男频 38 + 女频 36)。
+#
+# 关键发现(2026-05-26 实测):
+# - 榜单页 /rank/{g}_{t}_{cat_id} 用了字体反爬,直接抓 HTML 文本拿到的
+#   书名/简介/标签都是混淆乱码,无法用。
+# - 但 URL 里的 book_id (/page/{book_id}) 和 cat_id 是干净的,
+#   "在读:XX万" 字段也是干净的(数字 + "万")。
+# - 详情页 /page/{book_id} 文字干净,但 740 本逐一抓详情会需要 18 分钟。
+#
+# MVP 策略(v2.23.1):
+# - 只扫 74 榜单,每榜抓 Top10 的 book_id + 在读数 + 题材(URL 派生)
+# - 不抓详情页 (留给 v2.23.2)
+# - prompt 喂 AI 用 3 个反爬无关的统计:
+#     1) 74 个分类各自 Top10 的题材分布(URL 派生,完全可靠)
+#     2) 每个分类的在读数中位数(数字,完全可靠)
+#     3) 全榜唯一书数(去重后,反映"榜单饱和度")
+# - 24 小时缓存
+# - 早退机制:用户在进度对话框点"用部分数据生成"提前结束扫描
+
+V231_RANK_BASE = "https://fanqienovel.com/rank"
+
+# v2.23.1 MVP 缓存有效期(24 小时,番茄下午 3 点更新)
+V231_CACHE_TTL_SEC = 24 * 3600
+
+# 真实 cat_id 映射(2026-05-26 从 https://fanqienovel.com/rank?enter_from=menu 实测抓取)
+# 注意:cat_id 是非连续的真实 ID,不是 1-19 顺序号
+V231_MALE_CATEGORIES = [
+    ("西方奇幻", "1141"), ("东方仙侠", "1140"), ("科幻末世", "8"),
+    ("都市日常", "261"), ("都市修真", "124"), ("都市高武", "1014"),
+    ("历史古代", "273"), ("战神赘婿", "27"), ("都市种田", "263"),
+    ("传统玄幻", "258"), ("历史脑洞", "272"), ("悬疑脑洞", "539"),
+    ("都市脑洞", "262"), ("玄幻脑洞", "257"), ("悬疑灵异", "751"),
+    ("抗战谍战", "504"), ("游戏体育", "746"), ("动漫衍生", "718"),
+    ("男频衍生", "1016"),
+]
+
+V231_FEMALE_CATEGORIES = [
+    ("古风世情", "1139"), ("科幻末世", "8"), ("游戏体育", "746"),
+    ("女频衍生", "1015"), ("玄幻言情", "248"), ("种田", "23"),
+    ("年代", "79"), ("现言脑洞", "267"), ("宫斗宅斗", "246"),
+    ("悬疑脑洞", "539"), ("古言脑洞", "253"), ("快穿", "24"),
+    ("青春甜宠", "749"), ("星光璀璨", "745"), ("女频悬疑", "747"),
+    ("职场婚恋", "750"), ("豪门总裁", "748"), ("民国言情", "1017"),
+]
+
+
+def get_all_rank_urls() -> List[Dict]:
+    """
+    返回所有 74 个榜单的 URL 列表
+
+    每个元素:{
+        "url": "https://fanqienovel.com/rank/1_2_1141",
+        "label": "男频阅读榜·西方奇幻",
+        "gender": "男频",
+        "type": "阅读榜",
+        "category": "西方奇幻",
+        "cat_id": "1141",
+    }
+
+    顺序:男频阅读榜 19 → 男频新书榜 19 → 女频阅读榜 18 → 女频新书榜 18
+    总数:74(男频 38 + 女频 36)
+    """
+    out = []
+    for type_label, type_id in [("阅读榜", "2"), ("新书榜", "1")]:
+        for cat_name, cat_id in V231_MALE_CATEGORIES:
+            out.append({
+                "url": f"{V231_RANK_BASE}/1_{type_id}_{cat_id}",
+                "label": f"男频{type_label}·{cat_name}",
+                "gender": "男频", "type": type_label,
+                "category": cat_name, "cat_id": cat_id,
+            })
+    for type_label, type_id in [("阅读榜", "2"), ("新书榜", "1")]:
+        for cat_name, cat_id in V231_FEMALE_CATEGORIES:
+            out.append({
+                "url": f"{V231_RANK_BASE}/0_{type_id}_{cat_id}",
+                "label": f"女频{type_label}·{cat_name}",
+                "gender": "女频", "type": type_label,
+                "category": cat_name, "cat_id": cat_id,
+            })
+    return out
+
+
+def parse_rank_page_minimal(html: str, max_books: int = 10) -> List[Dict]:
+    """
+    MVP 解析:只从榜单页提取**反爬无关字段**
+
+    返回每本书的 dict,字段:
+    - book_id: 详情页 ID(URL 里的数字,完全干净)
+    - read_count_raw: 在读数原始字符串(例如 "66.4万"),完全干净
+    - read_count_num: 解析成数字(单位:本),用于统计
+
+    不抓:书名、作者、简介、标签(榜单页这些全是字体反爬乱码)
+    """
+    if not html:
+        return []
+
+    out = []
+    chunks = re.split(r"#\s*0?\d{1,2}\s", html)
+    if len(chunks) <= 1:
+        chunks = [html]
+
+    for chunk in chunks[1:max_books + 1]:
+        m_id = re.search(r"/page/(\d{10,})", chunk)
+        if not m_id:
+            continue
+        book_id = m_id.group(1)
+
+        m_read = re.search(r"(\d+(?:\.\d+)?)\s*万", chunk)
+        read_raw = ""
+        read_num = 0
+        if m_read:
+            read_raw = m_read.group(0)
+            try:
+                read_num = int(float(m_read.group(1)) * 10000)
+            except (ValueError, TypeError):
+                read_num = 0
+
+        out.append({
+            "book_id": book_id,
+            "read_count_raw": read_raw,
+            "read_count_num": read_num,
+        })
+
+    return out
+
+
+def aggregate_v231_stats(scraped: List[Dict]) -> Dict:
+    """
+    把扫到的 74 榜数据聚合成 prompt 用的统计字典
+
+    输入 scraped 格式:
+        [
+          {"label": "男频阅读榜·西方奇幻", "gender": "男频",
+           "type": "阅读榜", "category": "西方奇幻",
+           "books": [{"book_id": "...", "read_count_num": 664000}, ...]},
+          ...
+        ]
+    """
+    stats = {
+        "total_boards_scanned": len(scraped),
+        "total_books": 0,
+        "unique_books": 0,
+        "by_gender": {"男频": {"boards": 0, "books": 0}, "女频": {"boards": 0, "books": 0}},
+        "category_distribution": {},
+        "hot_categories_male": [],
+        "hot_categories_female": [],
+    }
+
+    all_book_ids = set()
+    male_cat_median = {}
+    female_cat_median = {}
+
+    for board in scraped:
+        books = board.get("books") or []
+        gender = board.get("gender", "")
+        cat = board.get("category", "")
+        type_label = board.get("type", "")
+        label = board.get("label", "")
+
+        stats["total_books"] += len(books)
+        if gender in stats["by_gender"]:
+            stats["by_gender"][gender]["boards"] += 1
+            stats["by_gender"][gender]["books"] += len(books)
+
+        for b in books:
+            bid = b.get("book_id", "")
+            if bid:
+                all_book_ids.add(bid)
+
+        reads = sorted([b.get("read_count_num", 0) for b in books if b.get("read_count_num", 0) > 0])
+        median_read = reads[len(reads) // 2] if reads else 0
+        top_read = max(reads) if reads else 0
+
+        stats["category_distribution"][label] = {
+            "count": len(books),
+            "median_read": median_read,
+            "top_read": top_read,
+        }
+
+        if type_label == "阅读榜" and median_read > 0:
+            if gender == "男频":
+                male_cat_median.setdefault(cat, []).append(median_read)
+            elif gender == "女频":
+                female_cat_median.setdefault(cat, []).append(median_read)
+
+    stats["unique_books"] = len(all_book_ids)
+
+    def _flatten(d):
+        out = []
+        for cat, reads in d.items():
+            avg = sum(reads) // len(reads) if reads else 0
+            out.append((cat, avg))
+        return sorted(out, key=lambda x: -x[1])
+
+    stats["hot_categories_male"] = _flatten(male_cat_median)
+    stats["hot_categories_female"] = _flatten(female_cat_median)
+
+    return stats
+
+
+def build_v231_full_rank_prompt(stats: Dict, user_genres: List[str],
+                                 base_prompt: str = "") -> str:
+    """
+    v2.23.1 增强 prompt 拼装(基于全榜统计)
+
+    - 输入是聚合统计 stats(不是 Book 列表)
+    - 数据更"宏观":告诉 AI 整个番茄当前的题材热度图
+    - 仍然遵守:**绝不传具体书名/作者/简介**,只传分类 + 数字
+    """
+    if not stats or stats.get("total_books", 0) == 0:
+        return base_prompt or ""
+
+    parts = []
+    parts.append(f"【番茄小说全榜真实数据(扫描 {stats.get('total_boards_scanned', 0)} 个榜单·下午 3 点更新)】")
+    parts.append("")
+
+    total = stats.get("total_books", 0)
+    unique = stats.get("unique_books", 0)
+    parts.append(f"📊 总样本:{total} 本(去重后 {unique} 本独立作品)")
+    by_g = stats.get("by_gender", {})
+    parts.append(f"   男频 {by_g.get('男频', {}).get('boards', 0)} 榜 = {by_g.get('男频', {}).get('books', 0)} 本")
+    parts.append(f"   女频 {by_g.get('女频', {}).get('boards', 0)} 榜 = {by_g.get('女频', {}).get('books', 0)} 本")
+    parts.append("")
+
+    male_hot = stats.get("hot_categories_male", [])[:10]
+    if male_hot:
+        parts.append("🔥 男频题材热度 Top10(按 Top10 平均在读数):")
+        for i, (cat, avg) in enumerate(male_hot, 1):
+            wan = avg // 10000
+            parts.append(f"  {i}. {cat}({wan} 万在读)")
+        parts.append("")
+
+    female_hot = stats.get("hot_categories_female", [])[:10]
+    if female_hot:
+        parts.append("💃 女频题材热度 Top10(按 Top10 平均在读数):")
+        for i, (cat, avg) in enumerate(female_hot, 1):
+            wan = avg // 10000
+            parts.append(f"  {i}. {cat}({wan} 万在读)")
+        parts.append("")
+
+    if user_genres:
+        parts.append(f"✏️ 用户选择题材:{' / '.join(user_genres)}")
+        matched_ranks = []
+        for g in user_genres:
+            for cat, avg in male_hot + female_hot:
+                if g in cat or cat in g:
+                    matched_ranks.append(f"{g}→{cat}({avg // 10000}万)")
+                    break
+        if matched_ranks:
+            parts.append(f"   匹配榜单题材:{' / '.join(matched_ranks)}")
+        parts.append("")
+
+    parts.append("【硬性约束】")
+    parts.append("1. 你必须基于上述真实榜单题材分布出 5 个差异化创意")
+    parts.append("2. 绝不直接复制书名或情节(数据来源是公开榜单,不是让你抄)")
+    parts.append("3. 每个创意要给:【题材组合】【主角设定】【核心钩子】【差异化卖点】四要素")
+    parts.append("4. 优先在用户选择题材里出创意,但可以借鉴其它热门题材的钩子手法")
+    parts.append("")
+    parts.append("---")
+    parts.append("")
+    parts.append(base_prompt or "请基于以上榜单数据,生成 5 个差异化的小说创意。")
+
+    return "\n".join(parts)
