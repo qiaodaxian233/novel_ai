@@ -342,13 +342,20 @@ class MainWindow(QMainWindow):
             pass
         if _scale > 1.0:
             import re as _re
+            # v2.23.4: 用主题系统代替硬编码 STYLESHEET
+            _cur_theme = ThemeManager.current()
+            ThemeManager.apply(_QA.instance(), _cur_theme)
+            # 再做 font-size 缩放
+            _cur_qss = _QA.instance().styleSheet()
             def _sz(m):
                 n = int(m.group(1))
                 return f"font-size: {int(round(n * _scale))}px"
-            scaled_qss = _re.sub(r'font-size:\s*(\d+)px', _sz, STYLESHEET)
-            self.setStyleSheet(scaled_qss)
+            scaled_qss = _re.sub(r'font-size:\s*(\d+)px', _sz, _cur_qss)
+            _QA.instance().setStyleSheet(scaled_qss)
         else:
-            self.setStyleSheet(STYLESHEET)
+            # v2.23.4: 启动时恢复用户上次选择的主题
+            _cur_theme = ThemeManager.current()
+            ThemeManager.apply(_QA.instance(), _cur_theme)
 
         # 恢复上次窗口大小和位置
         from PyQt5.QtCore import QSettings
