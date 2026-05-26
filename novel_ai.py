@@ -916,14 +916,14 @@ class MainWindow(QMainWindow):
 
         self._nav_steps = []
         steps = [
-            ("1", "基础设定", "题材/风格/设定", 0),
-            ("2", "世界构建", "世界观/势力/地图", 1),
-            ("3", "角色设定", "角色/关系/命运线", 3),
-            ("4", "大纲规划", "故事线/主线/支线", 1),
-            ("5", "章节创作", "章节/内容/写作", -1),  # 特殊:切到生成引擎
-            ("6", "AI 工具箱", "伏笔/质检/角色等", -2),  # 特殊:切到伏笔检查
+            ("1", "基础设定", "题材/风格/设定", "创作设置"),
+            ("2", "世界构建", "世界观/势力/地图", "世界构建"),
+            ("3", "角色设定", "角色/关系/命运线", "角色系统"),
+            ("4", "大纲规划", "故事线/主线/支线", "世界构建"),
+            ("5", "章节创作", "章节/内容/写作", "生成引擎"),
+            ("6", "AI 工具箱", "AI 修改/质检/工具", "AI 工具箱"),
         ]
-        for num, name, desc, tab_idx in steps:
+        for num, name, desc, tab_keyword in steps:
             step_btn = QPushButton(f"  {num}   {name}")
             step_btn.setToolTip(desc)
             step_btn.setCursor(Qt.PointingHandCursor)
@@ -935,8 +935,8 @@ class MainWindow(QMainWindow):
                 }
                 QPushButton:hover { background: #eef5ff; color: #4a9eff; }
             """)
-            _idx = tab_idx
-            step_btn.clicked.connect(lambda checked, i=_idx: self._on_nav_step(i))
+            _kw = tab_keyword
+            step_btn.clicked.connect(lambda checked, k=_kw: self._on_nav_step_by_name(k))
             ll.addWidget(step_btn)
             self._nav_steps.append(step_btn)
 
@@ -1058,19 +1058,18 @@ class MainWindow(QMainWindow):
         self._tab_world.addTab(self.tab_canon, "Canon 设定")
         tab_list.append((self._tab_world, "📝 世界构建"))
 
-        # ── 🎭 角色系统(子Tab: 角色与世界 + 技能库) ──
+        # ── 🎭 角色系统(子Tab: 角色与世界 + 技能库 + 伏笔检查) ──
         self._tab_chars = _SubTW()
         self._tab_chars.addTab(self.tab_charlib, "角色与世界")
         self._tab_chars.addTab(self.tab_skills, "技能库")
-        tab_list.append((self._tab_chars, "🎭 角色系统"))
-
-        # ── 🪤 伏笔检查(独立Tab,大界面) ──
+        # v2.23.4: 伏笔检查从独立 Tab 移入角色系统
         from ui.foreshadow_tab import ForeshadowTab
         self.tab_foreshadow = ForeshadowTab(mw=self)
+        self._tab_chars.addTab(self.tab_foreshadow, "🪤 伏笔检查")
+        tab_list.append((self._tab_chars, "🎭 角色系统"))
+
         if self.tab_lifespan is not None:
             tab_list.append((self.tab_lifespan, "寿元台账"))
-        tab_list.append((self.tab_foreshadow, "🪤 伏笔检查"))
-        tab_list.append((self._tab_chars, "🎭 角色系统"))
 
         # ── ⚙️ 生成引擎(子Tab: 生成控制 + 工作流) ──
         self._tab_engine = _SubTW()
@@ -1082,6 +1081,14 @@ class MainWindow(QMainWindow):
             (self.tab_editor, "章节编辑器"),
             (self.tab_book_splitter, "📚 拆书学习"),
         ]
+
+        # ── 🛠 AI 工具箱(v2.23.4: 直接用 AI 修改章节) ──
+        from ui.ai_toolbox_tab import AIToolboxTab
+        self.tab_ai_toolbox = AIToolboxTab(mw=self)
+        self.tab_ai_toolbox.request_ai_modify.connect(
+            self._on_ai_toolbox_modify)
+        tab_list.append((self.tab_ai_toolbox, "🛠 AI 工具箱"))
+
         # ── 📊 番茄榜单(v2.23.4) ──
         from ui.fanqie_rank_tab import FanqieRankTab
         self.tab_fanqie_rank = FanqieRankTab(mw=self)
@@ -1682,22 +1689,20 @@ class MainWindow(QMainWindow):
 
     # ──── v2.23.4: 左侧导航栏辅助方法 ────
 
-    def _on_nav_step(self, tab_idx):
-        """创作流程步骤点击 → 切到对应 Tab"""
+    def _on_nav_step_by_name(self, keyword):
+        """创作流程步骤点击 → 按 Tab 名称关键词匹配切换"""
         try:
-            if tab_idx == -1:
-                # 章节创作 → 生成引擎
-                for i in range(self.tabs.count()):
-                    if "生成引擎" in self.tabs.tabText(i):
-                        self.tabs.setCurrentIndex(i)
-                        return
-            elif tab_idx == -2:
-                # AI 工具箱 → 伏笔检查
-                for i in range(self.tabs.count()):
-                    if "伏笔" in self.tabs.tabText(i):
-                        self.tabs.setCurrentIndex(i)
-                        return
-            elif 0 <= tab_idx < self.tabs.count():
+            for i in range(self.tabs.count()):
+                if keyword in self.tabs.tabText(i):
+                    self.tabs.setCurrentIndex(i)
+                    return
+        except Exception:
+            pass
+
+    def _on_nav_step(self, tab_idx):
+        """创作流程步骤点击 → 切到对应 Tab(兼容旧索引方式)"""
+        try:
+            if 0 <= tab_idx < self.tabs.count():
                 self.tabs.setCurrentIndex(tab_idx)
         except Exception:
             pass
@@ -2305,6 +2310,12 @@ class MainWindow(QMainWindow):
             self._on_ab_compare_response(content)
         elif target == "ai_naming":
             self._on_ai_naming_response(content)
+        elif target == "ai_toolbox":
+            # v2.23.4: AI 工具箱修改结果回传
+            try:
+                self.tab_ai_toolbox.on_ai_result(content)
+            except Exception:
+                pass
         elif target == "conv_restore":
             # 记忆恢复确认回复 — 只记日志
             self.tab_generation.log(
@@ -9568,6 +9579,28 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _on_ai_toolbox_modify(self, ch_idx, prompt):
+        """
+        v2.23.4: AI 工具箱请求修改章节
+
+        ch_idx: 章节索引
+        prompt: 完整 prompt(含原文 + 指令)
+        """
+        try:
+            self.tab_generation.log(
+                f"🛠 AI 工具箱:发送第 {ch_idx+1} 章到 AI 修改...", "info")
+            # 用 _send_to_ai 发送,target 设为 "ai_toolbox" 以便回调区分
+            self._send_to_ai(
+                prompt, f"AI工具箱修改第{ch_idx+1}章",
+                target="ai_toolbox")
+        except Exception as e:
+            self.tab_generation.log(
+                f"⚠ AI 工具箱发送失败:{e}", "warn")
+            try:
+                self.tab_ai_toolbox.on_ai_result("")
+            except Exception:
+                pass
+
     def _on_fanqie_retry_details(self, failed_list):
         """
         用户在番茄榜单 Tab 点了'补抓失败详情'
@@ -12126,8 +12159,6 @@ class MainWindow(QMainWindow):
             "<li>自定义题材/时代/金手指/主角人设 + 折叠链</li>"
             "<li>设置菜单 → 🔍 界面字体大小(支持 4K HiDPI 手动放大)</li>"
             "</ul>"
-            "<p><i>提示:本程序为 UI 仿制 + 核心逻辑实现示例,用于学习交流。"
-            "各 AI 网页 DOM 不同,自动化提交/采集需根据实际 DOM 微调。</i></p>"
         )
 
 
