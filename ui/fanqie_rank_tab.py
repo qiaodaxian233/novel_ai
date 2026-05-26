@@ -98,14 +98,20 @@ class FanqieRankTab(QWidget):
 
         lay.addLayout(top_row)
 
-        # ── 提示 ──
-        hint = QLabel(
-            "展示番茄小说全榜扫描结果(74 个分类 × Top10)。"
-            "程序启动后 30 秒自动后台扫描,24 小时缓存。"
-            "详情会后台逐本抓取,7 天缓存。")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color:#666; font-size:12px; padding-bottom:4px;")
-        lay.addWidget(hint)
+        # ── 设置行 ──
+        from PyQt5.QtWidgets import QCheckBox
+        from PyQt5.QtCore import QSettings
+        cfg_row = QHBoxLayout()
+        self.chk_auto_scan = QCheckBox("启动时自动扫榜(30 秒后)")
+        self.chk_auto_scan.setStyleSheet("font-size:12px;")
+        # 从 QSettings 加载(默认开启)
+        _auto = QSettings("NovelAI", "UI").value(
+            "fanqie_auto_scan", True, type=bool)
+        self.chk_auto_scan.setChecked(_auto)
+        self.chk_auto_scan.toggled.connect(self._on_auto_scan_toggled)
+        cfg_row.addWidget(self.chk_auto_scan)
+        cfg_row.addStretch()
+        lay.addLayout(cfg_row)
 
         # ── 中间:男频 / 女频 热度(左右分栏) ──
         splitter = QSplitter(Qt.Horizontal)
@@ -569,6 +575,18 @@ class FanqieRankTab(QWidget):
     def _reenable_retry(self):
         self.btn_retry_detail.setEnabled(True)
         self.btn_retry_detail.setText("🔁 补抓失败详情")
+
+    def _on_auto_scan_toggled(self, checked):
+        """保存自动扫榜设置"""
+        from PyQt5.QtCore import QSettings
+        QSettings("NovelAI", "UI").setValue("fanqie_auto_scan", checked)
+
+    @staticmethod
+    def is_auto_scan_enabled() -> bool:
+        """静态方法:主进程调用,判断是否启用自动扫榜"""
+        from PyQt5.QtCore import QSettings
+        return QSettings("NovelAI", "UI").value(
+            "fanqie_auto_scan", True, type=bool)
 
     def _get_failed_book_ids(self):
         """

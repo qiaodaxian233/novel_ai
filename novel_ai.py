@@ -9200,15 +9200,11 @@ class MainWindow(QMainWindow):
             "stats": stats,
         })
 
-    def _v233_bg_auto_scrape(self):
+    def _v233_bg_auto_scrape(self, force=False):
         """
         v2.23.3: 程序启动 30 秒后自动触发(QTimer.singleShot 30s 调过来)
 
-        条件:
-          - 浏览器就绪
-          - v2.23.1 stats 缓存不在 24h 内(没扫过 / 过期)
-          → 触发后台扫榜 + 详情(走 _gen_inspiration_try_v231_full_scrape 同样流程
-            但不弹进度对话框,因为是后台)
+        force=True: 用户手动触发,跳过自动扫榜开关检查
         """
         try:
             # v2.23.4: 防重复扫榜锁
@@ -9216,6 +9212,15 @@ class MainWindow(QMainWindow):
                 self.tab_generation.log(
                     "📚 已有扫榜任务在跑,跳过重复触发", "info")
                 return
+
+            # v2.23.4: 用户关闭了自动扫榜(手动触发不受影响)
+            if not force:
+                try:
+                    from ui.fanqie_rank_tab import FanqieRankTab
+                    if not FanqieRankTab.is_auto_scan_enabled():
+                        return
+                except Exception:
+                    pass
 
             if not self.worker.is_ready():
                 self.tab_generation.log(
@@ -9328,7 +9333,7 @@ class MainWindow(QMainWindow):
                 "📊 用户手动触发番茄全榜刷新扫描...", "info")
             # 手动触发时清掉 24h 缓存(强制重扫)
             self._v231_rank_stats_cache = {"stats": None, "scraped_at": 0.0}
-            self._v233_bg_auto_scrape()  # 复用后台扫榜方法
+            self._v233_bg_auto_scrape(force=True)  # 手动触发,跳过自动开关检查
         except Exception as e:
             self.tab_generation.log(
                 f"⚠ 手动扫榜触发失败:{e}", "warn")
