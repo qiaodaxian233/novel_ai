@@ -8926,6 +8926,7 @@ class MainWindow(QMainWindow):
 
         self.worker.reset_scan_cancel()
         self._show_v231_scan_progress_dialog()
+        self._fanqie_scanning = True  # v2.23.4: 锁
         self.worker.submit({
             "action": "scrape_fanqie_all_ranks",
             "task_id": "fanqie_all_ranks_scrape",
@@ -9022,6 +9023,8 @@ class MainWindow(QMainWindow):
         """
         if task_id != "fanqie_all_ranks_scrape":
             return
+
+        self._fanqie_scanning = False  # v2.23.4: 解锁
 
         dlg = getattr(self, "_v231_scan_dialog", None)
         if dlg:
@@ -9206,6 +9209,12 @@ class MainWindow(QMainWindow):
             但不弹进度对话框,因为是后台)
         """
         try:
+            # v2.23.4: 防重复扫榜锁
+            if getattr(self, "_fanqie_scanning", False):
+                self.tab_generation.log(
+                    "📚 已有扫榜任务在跑,跳过重复触发", "info")
+                return
+
             if not self.worker.is_ready():
                 self.tab_generation.log(
                     "📚 v2.23.3 启动 30s 后台抓取:浏览器未就绪,跳过", "info")
@@ -9238,6 +9247,7 @@ class MainWindow(QMainWindow):
             self.worker.reset_scan_cancel()
             self._v231_scan_dialog = None
             self._v231_scan_cancelled_full = False
+            self._fanqie_scanning = True  # v2.23.4: 锁
             self.worker.submit({
                 "action": "scrape_fanqie_all_ranks",
                 "task_id": "fanqie_all_ranks_scrape",
@@ -9274,6 +9284,8 @@ class MainWindow(QMainWindow):
         """转发扫榜进度到 Tab"""
         try:
             self.tab_fanqie_rank.update_scan_progress(cur, total, label, n_books)
+            self.tab_fanqie_rank.btn_rescan.setEnabled(False)
+            self.tab_fanqie_rank.btn_rescan.setText("扫描中...")
         except Exception:
             pass
 
@@ -9282,8 +9294,9 @@ class MainWindow(QMainWindow):
         try:
             import time as _t
             self.tab_fanqie_rank.update_stats(stats, _t.time())
-            # 同时从磁盘加载详情(可能之前抓过)
             self.tab_fanqie_rank.load_details_from_disk()
+            self.tab_fanqie_rank.btn_rescan.setEnabled(True)
+            self.tab_fanqie_rank.btn_rescan.setText("🔄 刷新扫榜")
         except Exception:
             pass
 
@@ -9304,8 +9317,15 @@ class MainWindow(QMainWindow):
     def _on_fanqie_rank_rescan(self):
         """用户在番茄榜单 Tab 点了'刷新扫榜'"""
         try:
+            # v2.23.4: 防重复
+            if getattr(self, "_fanqie_scanning", False):
+                self.tab_generation.log(
+                    "📊 已有扫榜任务在跑,等完成后再刷新", "info")
+                return
             self.tab_generation.log(
                 "📊 用户手动触发番茄全榜刷新扫描...", "info")
+            # 手动触发时清掉 24h 缓存(强制重扫)
+            self._v231_rank_stats_cache = {"stats": None, "scraped_at": 0.0}
             self._v233_bg_auto_scrape()  # 复用后台扫榜方法
         except Exception as e:
             self.tab_generation.log(

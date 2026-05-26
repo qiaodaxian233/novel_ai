@@ -155,3 +155,12 @@ def test_13_rank_snapshot_loading():
     assert "read_count_num" in src
     assert "read_count_raw" in src
     assert "read_display" in src
+
+
+def test_14_scanning_guard_exists():
+    """防重复扫榜锁存在"""
+    src = open("novel_ai.py", encoding="utf-8").read()
+    assert "_fanqie_scanning" in src
+    # 至少 5 处:2 个 guard check + 2 个 set True + 1 个 set False
+    count = src.count("_fanqie_scanning")
+    assert count >= 5, f"_fanqie_scanning 只出现 {count} 次,需 >= 5"
