@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.21.3"
+APP_VERSION = "v2.21.4"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -57,6 +57,34 @@ DEFENSE_FINGERPRINTS = {
     # BUG-073:QSettings None 兜底(Linux 无存档时 isinstance 检测)
     # 注:模式选 `or []` + `isinstance` 联合(更难因重构消失)
     "BUG-073": ["s.value(", "or []"],
+}
+
+# ──────────────────────────────────────────────────────────────────
+# v2.21.4 双 AI 分工:可路由到副 AI 的"数据/分析型"任务
+# ──────────────────────────────────────────────────────────────────
+# 主 AI (DeepSeek):写正文/优化/创意/对话/取名 — 需要叙事力
+# 副 AI (Qwen):    抽取/稽核/数据 — 需要结构化输出能力
+#
+# 列在这里的 target 在用户启用"副 AI"时会自动路由到副 AI URL,
+# 走另一个浏览器标签页。其他 target(写作类)继续走主 AI。
+# ──────────────────────────────────────────────────────────────────
+SECONDARY_AI_TARGETS = {
+    # —— 抽取类 ——
+    "canon_extract", "canon_audit",
+    "character_extract", "long_term_extract",
+    "chapter_summary",
+    "chapter_to_plot_node",
+    "import_extract", "book_chapter_analysis",
+    # —— 稽核/打分类 ——
+    "critique_rhythm", "critique_character", "style_audit",
+    "arc_advance_check", "relation_change_check",
+    "foreshadow_check", "foreshadow_reeval",
+    "promise_check", "promise_reeval",
+    "info_check", "info_disclose_check",
+    # —— 简单分析 ——
+    "dialogue_critic", "laodao_critique",
+    "pangu_qcheck", "pangu_mode",
+    "skill_run",
 }
 
 import sys
@@ -1680,7 +1708,28 @@ class MainWindow(QMainWindow):
         # 应用人类延迟
         type_delay = 30 if self.tab_settings.delay_check.isChecked() else 5
         # 投递任务
-        url = self.tab_generation.url_input.text().strip()
+        # v2.21.4 双 AI 分工:数据任务路由到副 AI URL(走另一个浏览器标签页)
+        url = self.tab_generation.url_input.text().strip()  # 默认走主 AI
+        try:
+            aux_enabled = (hasattr(self.tab_generation, "chk_aux_ai")
+                           and self.tab_generation.chk_aux_ai.isChecked())
+            if aux_enabled and target in SECONDARY_AI_TARGETS:
+                aux_url = self.tab_generation.aux_url_input.text().strip()
+                if aux_url:
+                    url = aux_url
+                    aux_site = self.tab_generation.aux_site_combo.currentText()
+                    self.tab_generation.log(
+                        f"  🤝 路由到副 AI: {aux_site} ({label})", "info")
+                    # 状态指示变蓝
+                    try:
+                        self.tab_generation.aux_status_label.setStyleSheet(
+                            "color:#1976d2; font-size:14px;")
+                        self.tab_generation.aux_status_label.setToolTip(
+                            f"● 副 AI 工作中: {label}")
+                    except Exception:
+                        pass
+        except Exception as _e_aux:
+            print(f"[副 AI 路由] 失败,降级到主 AI: {_e_aux}", flush=True)
         # 读取附件模式开关
         allow_att = self.tab_generation.use_attachment.isChecked() if hasattr(self.tab_generation, 'use_attachment') else True
         self.worker.submit({
@@ -1756,6 +1805,16 @@ class MainWindow(QMainWindow):
 
         # 任务监控:标记完成
         self._update_task_monitor(task_id, f"✅ 收到{len(content)}字")
+        # v2.21.4:副 AI 状态指示恢复绿色(从工作中蓝色)
+        try:
+            if (hasattr(self.tab_generation, "chk_aux_ai")
+                and self.tab_generation.chk_aux_ai.isChecked()):
+                self.tab_generation.aux_status_label.setStyleSheet(
+                    "color:#27ae60; font-size:14px;")
+                self.tab_generation.aux_status_label.setToolTip(
+                    f"● 副 AI 已启用 ({self.tab_generation.aux_site_combo.currentText()})")
+        except Exception:
+            pass
         # 从 pending 超时计时器中移除
         self._pending_task_targets.get(task_id, {}).pop("_retry_0byte", None)
         # ── BUG-077 直接回调(备用路径,根因已在 workflow_pipeline.py 修复) ──
@@ -9258,6 +9317,12 @@ class MainWindow(QMainWindow):
             if 0 <= self.current_chapter_index < len(self.chapters):
                 self.chapters[self.current_chapter_index]["title"] = self.tab_editor.title_input.text()
                 self.chapters[self.current_chapter_index]["content"] = self.tab_editor.content_edit.toPlainText()
+            # v2.21.4 BUG-080:保存前先把伏笔 Tab 的 UI 同步到 mw.open_loops
+            try:
+                if hasattr(self, "tab_foreshadow") and hasattr(self.tab_foreshadow, "sync_to_mw"):
+                    self.tab_foreshadow.sync_to_mw()
+            except Exception:
+                pass
             # v1.30:autosave 默认也走文件夹格式(autosave/ 子文件夹)
             save_path = self.current_project_file or str(self.project_dir / "autosave")
             s = self.tab_settings
@@ -9289,6 +9354,10 @@ class MainWindow(QMainWindow):
                     self.tab_lifespan.serialize_for_save()
                     if (LIFESPAN_LOOPS_AVAILABLE and self.tab_lifespan is not None)
                     else {}
+                ),
+                # v2.21.4 BUG-080:伏笔 Tab 数据要保存(之前完全没存,重启就丢)
+                "open_loops": (
+                    getattr(self, "open_loops", {}) or {}
                 ),
                 "advanced": {
                     "genres": s.get_selected_genres(),
@@ -9741,6 +9810,22 @@ class MainWindow(QMainWindow):
         except Exception as _e:
             print(f"[_reset] lifespan 清空异常: {_e}", flush=True)
 
+        # 10.5 v2.21.4 BUG-080:伏笔 Tab(独立 Tab) — mw.open_loops + UI
+        try:
+            self.open_loops = {}
+            if hasattr(self, "tab_foreshadow"):
+                _ft = self.tab_foreshadow
+                if hasattr(_ft, "table"):
+                    _ft.table.setRowCount(0)
+                if hasattr(_ft, "chk_enabled"):
+                    _ft.chk_enabled.setChecked(False)
+                if hasattr(_ft, "spin_warn"):
+                    _ft.spin_warn.setValue(80)
+                if hasattr(_ft, "spin_critical"):
+                    _ft.spin_critical.setValue(150)
+        except Exception as _e:
+            print(f"[_reset] open_loops 清空异常: {_e}", flush=True)
+
         # 11. 刷新章节列表 UI
         try:
             self._refresh_chapter_list()
@@ -9809,6 +9894,15 @@ class MainWindow(QMainWindow):
         if (LIFESPAN_LOOPS_AVAILABLE and self.tab_lifespan is not None
                 and d.get("lifespan_loops")):
             self.tab_lifespan.load_from_dict(d["lifespan_loops"])
+        # v2.21.4 BUG-080:还原伏笔 Tab 数据(之前完全没读,导致重启丢失)
+        try:
+            ol = d.get("open_loops")
+            if ol:
+                self.open_loops = ol
+                if hasattr(self, "tab_foreshadow") and hasattr(self.tab_foreshadow, "sync_from_mw"):
+                    self.tab_foreshadow.sync_from_mw()
+        except Exception as _e:
+            print(f"[加载] open_loops 还原失败: {_e}", flush=True)
         self.current_chapter_index = -1
         self._refresh_chapter_list()
         # v1.41: 刷新项目主页
@@ -9864,6 +9958,12 @@ class MainWindow(QMainWindow):
         if 0 <= self.current_chapter_index < len(self.chapters):
             self.chapters[self.current_chapter_index]["title"] = self.tab_editor.title_input.text()
             self.chapters[self.current_chapter_index]["content"] = self.tab_editor.content_edit.toPlainText()
+        # v2.21.4 BUG-080:保存前先把伏笔 Tab 的 UI 同步到 mw.open_loops
+        try:
+            if hasattr(self, "tab_foreshadow") and hasattr(self.tab_foreshadow, "sync_to_mw"):
+                self.tab_foreshadow.sync_to_mw()
+        except Exception:
+            pass
         if not self.current_project_file:
             # 用户没指定路径 → 默认 <project_dir>/<书名>/(文件夹)
             title = self.tab_settings.get_title() or "未命名项目"
@@ -9920,6 +10020,10 @@ class MainWindow(QMainWindow):
                 self.tab_lifespan.serialize_for_save()
                 if (LIFESPAN_LOOPS_AVAILABLE and self.tab_lifespan is not None)
                 else {}
+            ),
+            # v2.21.4 BUG-080:伏笔 Tab 数据(之前完全没存,重启就丢)
+            "open_loops": (
+                getattr(self, "open_loops", {}) or {}
             ),
             # 高级设定
             "advanced": {

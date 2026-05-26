@@ -13,6 +13,7 @@ AI_URLS = {
     "豆包":     "https://www.doubao.com/chat/",
     "Gemini":   "https://gemini.google.com/",
     "DeepSeek": "https://chat.deepseek.com/",
+    "Qwen":     "https://chat.qwen.ai/",
     "元宝":     "https://yuanbao.tencent.com/",
     "小米AI":   "https://www.xiaomi.com/",
 }

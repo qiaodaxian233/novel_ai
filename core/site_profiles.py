@@ -126,6 +126,45 @@ SITE_PROFILES = {
         "response": '[class*="agent-chat"], [class*="markdown"]',
         "stop_btn": 'button[class*="stop"]',
     },
+    "chat.qwen.ai": {
+        # v2.21.4:Qwen(通义千问)— 适合做"角色与世界抽取"等结构化任务
+        # 选择器基于用户提供的真实 DOM 结构(2026-05):
+        #   - textarea.message-input-textarea (输入框)
+        #   - button.send-button (发送按钮,在 .chat-prompt-send-button 内)
+        #   - .response-message-content (AI 回复区)
+        #   - .qwen-markdown (回复 markdown 容器)
+        "name": "Qwen",
+        "input": (
+            'textarea.message-input-textarea, '
+            'textarea[placeholder*="帮您"], '
+            'textarea, '
+            'div[contenteditable="true"]'
+        ),
+        "send_btn": (
+            '.chat-prompt-send-button button.send-button, '
+            'button.send-button, '
+            'button[aria-label*="发送"], '
+            'button[type="submit"]:not([disabled])'
+        ),
+        # AI 回复:.response-message-content + 嵌套的 .qwen-markdown
+        "response": (
+            '.response-message-content .qwen-markdown, '
+            '.response-message-content, '
+            '.custom-qwen-markdown'
+        ),
+        "_response_fallback": [
+            '.qwen-markdown',
+            '.response-message-content',
+            '.markdown-content',
+            '[class*="message"][class*="assistant"]',
+        ],
+        # 停止按钮:发送中按钮会切到停止图标,但 class 仍含 send-button
+        "stop_btn": (
+            '.chat-prompt-send-button button[aria-label*="停止"], '
+            'button[aria-label*="Stop"], '
+            'button[aria-label*="停止"]'
+        ),
+    },
 
 "_default": {
         "name": "通用",

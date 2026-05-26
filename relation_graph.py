@@ -119,6 +119,28 @@ def _esc(s: Any) -> str:
 
 
 # ── 数据构建:从表格行转 vis-network nodes/edges ────────────
+def _role_layer(role: str) -> int:
+    """v2.21.4:把角色定位映射成"层级"(0=中心,3=外圈),供初始布局分圈用
+    
+    主角/女主放最里圈;反派/导师次之;配角再外;路人最外。
+    这样力布局收敛后视觉结构清晰,不会一锅粥。
+    """
+    r = (role or "").strip()
+    # 主线核心
+    if any(k in r for k in ("主角", "女主", "男主", "MC", "穿越者")):
+        return 0
+    # 主要对手 / 引路人
+    if any(k in r for k in ("反派", "BOSS", "敌人", "对手")):
+        return 1
+    if any(k in r for k in ("导师", "师父", "师傅", "贵人", "队友")):
+        return 1
+    # 重要配角
+    if any(k in r for k in ("配角", "亲人", "家人")):
+        return 2
+    # 路人 / 龙套 / 其他
+    return 3
+
+
 def build_graph_data(
     chars_rows: list[list[str]],
     relations_rows: list[list[str]],
@@ -130,7 +152,22 @@ def build_graph_data(
     返回 {"nodes": [...], "edges": [...]}
     - 角色库里所有角色都成节点
     - 关系表里出现但角色库没有的角色,自动补节点(灰色,标记"未在角色库")
+    
+    v2.21.4 改进:
+      - 节点大小按 degree(连边数)动态调整,主角(关系多)更大更突出
+      - 按 _role_layer 分组,vis-network 按 group 初始分圈布局
+      - tooltip 加显"关系数"
     """
+    # 第 0 步:统计每个角色的连边数(度数)— 用于动态节点大小
+    degree: dict[str, int] = {}
+    for row in relations_rows:
+        cells = [(row[i] if i < len(row) else "") for i in range(4)]
+        a, _rel_type, b, _note = [(c or "").strip() for c in cells]
+        if a:
+            degree[a] = degree.get(a, 0) + 1
+        if b:
+            degree[b] = degree.get(b, 0) + 1
+    
     nodes: list[dict] = []
     seen: set[str] = set()
 
@@ -147,9 +184,14 @@ def build_graph_data(
             continue
         seen.add(name)
         color = _pick_role_color(role)
+        deg = degree.get(name, 0)
+        # 节点大小:基础 18 + 每条关系加 4,封顶 50(避免巨型节点)
+        node_size = min(18 + deg * 4, 50)
+        layer = _role_layer(role)
         # tooltip:多行 HTML(vis-network 9.x 支持 HTMLElement / String)
         tooltip_lines = []
         if role:        tooltip_lines.append(f"<b>定位:</b>{_esc(role)}")
+        if deg:         tooltip_lines.append(f"<b>关系数:</b>{deg}")
         if looks:       tooltip_lines.append(f"<b>外貌:</b>{_esc(looks)}")
         if personality: tooltip_lines.append(f"<b>性格:</b>{_esc(personality)}")
         if motto:       tooltip_lines.append(f"<b>标志:</b>{_esc(motto)}")
@@ -166,7 +208,10 @@ def build_graph_data(
             "font": {"color": color["font"], "size": 16, "face": "Microsoft YaHei, sans-serif"},
             "borderWidth": 2,
             "shape": "dot",
-            "size": 22,
+            "size": node_size,
+            "group": f"layer{layer}",   # v2.21.4:供 vis-network 初始分圈用
+            "_layer": layer,            # 自定义字段(JS 端用于 manual initial position)
+            "_role": role,
         })
 
     # 2. 边 + 关系表里没在角色库的角色,自动补节点
@@ -181,16 +226,20 @@ def build_graph_data(
         for missing in (a, b):
             if missing not in seen:
                 seen.add(missing)
+                deg = degree.get(missing, 0)
                 nodes.append({
                     "id": missing,
                     "label": missing,
-                    "title": "<i>(关系表中出现,但角色库未登记)</i>",
+                    "title": f"<i>(关系表中出现,但角色库未登记)</i><br/><b>关系数:</b>{deg}",
                     "color": {"background": "#ECEFF1", "border": "#B0BEC5"},
                     "font": {"color": "#37474F", "size": 14, "face": "Microsoft YaHei, sans-serif"},
                     "borderWidth": 1,
                     "borderWidthSelected": 2,
                     "shape": "dot",
-                    "size": 16,
+                    "size": min(14 + deg * 3, 40),
+                    "group": "layer3",
+                    "_layer": 3,
+                    "_role": "未登记",
                 })
 
         edge_color = _pick_edge_color(rel_type)
@@ -212,7 +261,14 @@ def build_graph_data(
 
 # ── HTML 模板 ─────────────────────────────────────────────
 def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
-    """生成内嵌 HTML。vendor_url 是 vis-network.min.js 的相对 url"""
+    """生成内嵌 HTML。vendor_url 是 vis-network.min.js 的相对 url
+    
+    v2.21.4 关系图布局重做:
+      ① 按 _layer 字段在 4 个同心圆上铺初始位置 → 强分层,避免一锅粥
+      ② barnesHut 引擎 + 强斥力 + 长 spring,节点真正分散
+      ③ avoidOverlap=1 强制不重叠
+      ④ 顶部加 [重排] [扩散] [缩小] 工具栏,排坏了一键重排
+    """
     data_json = json.dumps({"nodes": nodes, "edges": edges}, ensure_ascii=True)
     return f"""<!DOCTYPE html>
 <html>
@@ -243,10 +299,31 @@ def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
   #legend b {{ display:block; margin-top:4px; color:#555; }}
   #legend .sw {{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }}
   #legend .ln {{ display:inline-block; width:14px; height:2px; margin-right:4px; vertical-align:middle; }}
+  #toolbar {{
+    position:absolute; top:8px; left:8px;
+    background:rgba(255,255,255,0.96); border:1px solid #ccc; border-radius:4px;
+    padding:4px 6px; z-index:1000; user-select:none;
+    box-shadow:0 1px 3px rgba(0,0,0,0.1);
+  }}
+  #toolbar button {{
+    margin:0 2px; padding:3px 10px; border:1px solid #bbb; background:#fff;
+    border-radius:3px; cursor:pointer; font-size:11px; font-family:inherit;
+  }}
+  #toolbar button:hover {{ background:#e3f2fd; border-color:#1976d2; color:#1976d2; }}
+  #toolbar .sep {{ display:inline-block; width:1px; height:14px; background:#ddd; margin:0 4px; vertical-align:middle; }}
+  #stats {{ display:inline-block; color:#888; font-size:10px; margin-left:8px; }}
 </style>
 <script src="{vendor_url}"></script>
 </head>
 <body>
+<div id="toolbar">
+  <button onclick="relayout()" title="按角色层级重新分圈布局(主角居中,配角外圈)">🔄 重排</button>
+  <button onclick="spread()" title="把节点之间推开,减少拥挤">↔ 扩散</button>
+  <button onclick="cluster()" title="把节点拉拢,显示主要关系结构">✕ 紧凑</button>
+  <span class="sep"></span>
+  <button onclick="network && network.fit()" title="缩放到刚好看到所有节点">🔍 全览</button>
+  <span id="stats"></span>
+</div>
 <div id="network"></div>
 <div id="empty" style="display:none;">
   暂无角色或关系数据。<br/>
@@ -266,37 +343,98 @@ def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
   <span><span class="ln" style="background:#FB8C00"></span>血缘</span>
   <span><span class="ln" style="background:#43A047"></span>同盟</span>
   <span><span class="ln" style="background:#B71C1C"></span>宿敌</span>
+  <br/>
+  <b style="font-size:10px;">💡 节点越大,关系越多</b>
 </div>
 <script>
   var data = {data_json};
   var container = document.getElementById('network');
   var empty = document.getElementById('empty');
+  var network = null;
+  
+  // v2.21.4:按 _layer 字段在 4 个同心圆上铺初始位置(主角中心,配角外圈)
+  // 同 layer 内按"度数"再排:度数高的靠近圆心
+  function assignInitialPositions(nodes) {{
+    var layers = {{0: [], 1: [], 2: [], 3: []}};
+    nodes.forEach(function(n) {{
+      var L = (typeof n._layer === 'number') ? n._layer : 3;
+      layers[L].push(n);
+    }});
+    // 每层一个圆环半径(根据节点数自适应)
+    var radii = {{0: 0, 1: 200, 2: 380, 3: 560}};
+    // 主角层(layer0)如果只有 1-2 个,放正中心
+    Object.keys(layers).forEach(function(L) {{
+      var arr = layers[L];
+      var n = arr.length;
+      if (n === 0) return;
+      // 节点多的层,半径自适应放大(避免挤一圈)
+      var r = radii[L];
+      if (n > 8 && L > 0) {{
+        r = radii[L] * (1 + (n - 8) * 0.06);
+      }}
+      arr.forEach(function(node, i) {{
+        if (L === 0 && n === 1) {{
+          // 单主角放原点
+          node.x = 0;
+          node.y = 0;
+        }} else {{
+          var angle = (2 * Math.PI * i) / n;
+          // 错开起始角度让各层不在同一条线上
+          var offset = L * 0.4;
+          node.x = r * Math.cos(angle + offset);
+          node.y = r * Math.sin(angle + offset);
+        }}
+        // 固定初始位置(让物理引擎从这里开始优化,不会全聚到原点)
+        // physics 用 fixed=false 让其继续松弛,但 x/y 提供初值
+      }});
+    }});
+    return layers;
+  }}
+  
   if (!data.nodes.length) {{
     empty.style.display = 'block';
     document.getElementById('legend').style.display = 'none';
+    document.getElementById('toolbar').style.display = 'none';
   }} else {{
+    // 应用初始位置
+    assignInitialPositions(data.nodes);
+    
+    // 统计信息
+    document.getElementById('stats').textContent =
+      '节点 ' + data.nodes.length + ' · 关系 ' + data.edges.length;
+    
     var options = {{
       nodes: {{
         shape: 'dot',
-        scaling: {{ min: 14, max: 28 }},
+        scaling: {{ min: 14, max: 50 }},
         font: {{ size: 16, face: 'Microsoft YaHei, sans-serif' }},
       }},
       edges: {{
-        arrows: 'to',
-        smooth: {{ type: 'continuous' }},
+        arrows: {{ to: {{ enabled: true, scaleFactor: 0.6 }} }},
+        // v2.21.4:dynamic smooth 自动避开节点,边不会从节点中间穿
+        smooth: {{ enabled: true, type: 'dynamic', roundness: 0.5 }},
         font: {{ align: 'middle' }},
       }},
       physics: {{
         enabled: true,
-        solver: 'forceAtlas2Based',
-        forceAtlas2Based: {{
-          gravitationalConstant: -45,
-          centralGravity: 0.06,
-          springLength: 110,
-          springConstant: 0.10,
-          damping: 0.55,
+        // v2.21.4:换 barnesHut 引擎,比 forceAtlas2Based 更适合分层分散布局
+        solver: 'barnesHut',
+        barnesHut: {{
+          gravitationalConstant: -12000,  // 强斥力(原 -45 弱爆了)
+          centralGravity: 0.15,           // 适度向心(防止飞散)
+          springLength: 180,              // 长 spring(原 110 太短挤一起)
+          springConstant: 0.04,           // 弱弹簧(让斥力主导)
+          damping: 0.6,                   // 较高阻尼,快速稳定
+          avoidOverlap: 1,                // 0..1,1=绝不重叠 — 关键!
         }},
-        stabilization: {{ iterations: 250, fit: true }},
+        maxVelocity: 50,
+        minVelocity: 0.3,
+        stabilization: {{
+          enabled: true,
+          iterations: 300,
+          updateInterval: 25,
+          fit: true,
+        }},
       }},
       interaction: {{
         hover: true,
@@ -307,6 +445,7 @@ def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
         navigationButtons: false,
       }},
     }};
+    
     // vis-network 把 string title 当纯文本显示,需转 DOM Element 才渲染 HTML
     data.nodes.forEach(function(n) {{
       if (typeof n.title === 'string') {{
@@ -323,12 +462,15 @@ def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
         e.title = el;
       }}
     }});
-    var network = new vis.Network(container, data, options);
+    
+    network = new vis.Network(container, data, options);
+    
     // 稳定后:关物理 + 显式 fit 一次,保证节点居中铺满
     network.once('stabilizationIterationsDone', function () {{
       network.setOptions({{ physics: {{ enabled: false }} }});
       network.fit({{ animation: false }});
     }});
+    
     // QWebEngineView 尺寸变化时(用户拉宽窗口/切 Tab 等),重新 fit
     var _fitTimer = null;
     window.addEventListener('resize', function () {{
@@ -337,6 +479,66 @@ def _build_html(nodes: list[dict], edges: list[dict], vendor_url: str) -> str:
         try {{ network.redraw(); network.fit({{ animation: false }}); }} catch (e) {{}}
       }}, 120);
     }});
+  }}
+  
+  // ── 工具栏函数 ──────────────────────────────
+  // 🔄 重排:按 layer 重新分圈,跑物理引擎重新收敛
+  function relayout() {{
+    if (!network) return;
+    // 重新计算初始位置
+    var nodesArr = data.nodes.map(function(n) {{ return n; }});
+    assignInitialPositions(nodesArr);
+    var updates = nodesArr.map(function(n) {{
+      return {{ id: n.id, x: n.x, y: n.y }};
+    }});
+    // 用 nodes.update 强制设位置
+    network.body.data.nodes.update(updates);
+    // 重开物理,跑 300 次再关
+    network.setOptions({{ physics: {{ enabled: true }} }});
+    setTimeout(function() {{
+      try {{
+        network.setOptions({{ physics: {{ enabled: false }} }});
+        network.fit({{ animation: {{ duration: 600 }} }});
+      }} catch (e) {{}}
+    }}, 2500);
+  }}
+  
+  // ↔ 扩散:把所有节点位置 ×1.4,然后跑物理让它重新平衡
+  function spread() {{
+    if (!network) return;
+    var positions = network.getPositions();
+    var updates = [];
+    Object.keys(positions).forEach(function(id) {{
+      var p = positions[id];
+      updates.push({{ id: id, x: p.x * 1.4, y: p.y * 1.4 }});
+    }});
+    network.body.data.nodes.update(updates);
+    network.setOptions({{ physics: {{ enabled: true }} }});
+    setTimeout(function() {{
+      try {{
+        network.setOptions({{ physics: {{ enabled: false }} }});
+        network.fit({{ animation: {{ duration: 400 }} }});
+      }} catch (e) {{}}
+    }}, 1500);
+  }}
+  
+  // ✕ 紧凑:节点位置 ×0.7
+  function cluster() {{
+    if (!network) return;
+    var positions = network.getPositions();
+    var updates = [];
+    Object.keys(positions).forEach(function(id) {{
+      var p = positions[id];
+      updates.push({{ id: id, x: p.x * 0.7, y: p.y * 0.7 }});
+    }});
+    network.body.data.nodes.update(updates);
+    network.setOptions({{ physics: {{ enabled: true }} }});
+    setTimeout(function() {{
+      try {{
+        network.setOptions({{ physics: {{ enabled: false }} }});
+        network.fit({{ animation: {{ duration: 400 }} }});
+      }} catch (e) {{}}
+    }}, 1500);
   }}
 </script>
 </body>

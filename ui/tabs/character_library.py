@@ -3006,15 +3006,20 @@ class CharacterLibrary(QWidget):
                 mentioned_names = set(mentioned_names)
             mentioned_names.add(pov_character)
 
-        # 1. 主角当前状态
-        hs = (
-            f"年龄 {self.hero_age.text()}, "
-            f"修为 {self.hero_realm.text()}, "
-            f"位置 {self.hero_location.text()}, "
-            f"势力 {self.hero_faction.text()}, "
-            f"心境 {self.hero_mood.text()}"
-        )
-        parts.append(f"【主角当前状态】\n{hs}")
+        # 1. 主角当前状态 — v2.21.4 BUG-079:全空字段不注入(否则新项目刚开局会注入 "修为 , 位置 , ...")
+        _hs_parts = []
+        _age = self.hero_age.text().strip()
+        _realm = self.hero_realm.text().strip()
+        _loc = self.hero_location.text().strip()
+        _fac = self.hero_faction.text().strip()
+        _mood = self.hero_mood.text().strip()
+        if _age:    _hs_parts.append(f"年龄 {_age}")
+        if _realm:  _hs_parts.append(f"身份/境界 {_realm}")
+        if _loc:    _hs_parts.append(f"位置 {_loc}")
+        if _fac:    _hs_parts.append(f"势力 {_fac}")
+        if _mood:   _hs_parts.append(f"心境 {_mood}")
+        if _hs_parts:
+            parts.append("【主角当前状态】\n" + ", ".join(_hs_parts))
         
         # 2. 角色档案(只取主角+前5个配角,避免提示词过长)
         chars = []

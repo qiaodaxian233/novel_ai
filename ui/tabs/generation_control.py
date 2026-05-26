@@ -109,6 +109,69 @@ class GenerationControl(QWidget):
         b2.addWidget(self.btn_go); b2.addWidget(self.btn_grab)
         blay.addLayout(b2)
 
+        # ── v2.21.4:🤝 双 AI 分工(副 AI 处理数据/抽取任务) ──
+        # 主 AI(DeepSeek)写正文,副 AI(Qwen)抽取/稽核,两个浏览器标签页自动切换
+        b3 = QHBoxLayout()
+        from PyQt5.QtCore import QSettings as _QS_aux
+        _aux_settings = _QS_aux("NovelAI", "AuxAI")
+        self.chk_aux_ai = QCheckBox("🤝 启用副 AI(数据任务)")
+        self.chk_aux_ai.setChecked(_aux_settings.value("enabled", False, type=bool))
+        self.chk_aux_ai.setToolTip(
+            "启用后:\n"
+            "  • 主 AI(如 DeepSeek)负责写章节正文/优化/创意/取名\n"
+            "  • 副 AI(如 Qwen)负责角色抽取/Canon 稽核/节奏打分/摘要等数据任务\n"
+            "  • 两个 AI 各开一个浏览器标签页,自动切换\n"
+            "\n"
+            "好处:\n"
+            "  ✓ 主 AI 不被打断,对话上下文干净\n"
+            "  ✓ 数据任务并行处理,效率更高\n"
+            "  ✓ 充分利用不同 AI 的擅长领域\n"
+            "\n"
+            "需要先在两个 AI 网站分别登录(同一个 Chrome 用户数据目录,登录一次永久)。")
+        b3.addWidget(self.chk_aux_ai)
+        b3.addWidget(QLabel("副 AI:"))
+        self.aux_site_combo = QComboBox()
+        self.aux_site_combo.addItems(list(AI_URLS.keys()))
+        _saved_aux = _aux_settings.value("site", "Qwen", type=str)
+        self.aux_site_combo.setCurrentText(_saved_aux if _saved_aux in AI_URLS else "Qwen")
+        self.aux_site_combo.setToolTip("副 AI 站点。推荐 Qwen — 结构化输出/JSON 能力强")
+        b3.addWidget(self.aux_site_combo)
+        b3.addWidget(QLabel("URL:"))
+        _saved_aux_url = _aux_settings.value("url", AI_URLS.get("Qwen", ""), type=str)
+        self.aux_url_input = QLineEdit(_saved_aux_url)
+        b3.addWidget(self.aux_url_input, 1)
+        # 状态指示
+        self.aux_status_label = QLabel("●")
+        self.aux_status_label.setStyleSheet("color:#aaa; font-size:14px;")
+        self.aux_status_label.setToolTip("● 灰 = 未启用 | ● 绿 = 已启用 | ● 蓝 = 副 AI 正在工作")
+        b3.addWidget(self.aux_status_label)
+        blay.addLayout(b3)
+
+        # 副 AI 设置变化时持久化
+        def _save_aux_settings():
+            _aux_settings.setValue("enabled", self.chk_aux_ai.isChecked())
+            _aux_settings.setValue("site", self.aux_site_combo.currentText())
+            _aux_settings.setValue("url", self.aux_url_input.text().strip())
+            # 更新状态指示
+            if self.chk_aux_ai.isChecked():
+                self.aux_status_label.setStyleSheet("color:#27ae60; font-size:14px;")
+                self.aux_status_label.setToolTip(f"● 副 AI 已启用 ({self.aux_site_combo.currentText()})")
+            else:
+                self.aux_status_label.setStyleSheet("color:#aaa; font-size:14px;")
+                self.aux_status_label.setToolTip("● 副 AI 未启用")
+
+        # 站点切换时自动填 URL
+        def _on_aux_site_changed(name):
+            if name in AI_URLS:
+                self.aux_url_input.setText(AI_URLS[name])
+            _save_aux_settings()
+
+        self.chk_aux_ai.stateChanged.connect(lambda _: _save_aux_settings())
+        self.aux_site_combo.currentTextChanged.connect(_on_aux_site_changed)
+        self.aux_url_input.editingFinished.connect(_save_aux_settings)
+        # 启动时刷新一次状态指示
+        _save_aux_settings()
+
         self.status_label = QLabel("状态:未启动")
         self.status_label.setStyleSheet(
             "padding:4px 10px; background:#eee; border-radius:3px; color:#666;")
