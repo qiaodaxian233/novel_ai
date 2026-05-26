@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.22.2"
+APP_VERSION = "v2.22.3"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -584,6 +584,15 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # v2.22.3 BUG-085: 任务"思考中"状态 → 主进程,给"卡死提醒"加思考期闸门
+        # (Qwen 思考阶段 0 字节 0-90 秒是合法的,不该弹窗。worker 检测到
+        # thinking_indicator 命中时 emit True,主进程 _check_timeout 看到
+        # thinking=True 就延期 60 秒再查)
+        try:
+            self.worker.task_thinking.connect(self._on_task_thinking)
+        except Exception:
+            pass
+
     def _on_task_progress(self, task_id, char_count):
         """
         v2.22.2 BUG-083:worker 在 polling 抓到内容时 emit 进度,主进程
@@ -594,6 +603,18 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_task_char_progress"):
             self._task_char_progress = {}
         self._task_char_progress[task_id] = int(char_count or 0)
+
+    def _on_task_thinking(self, task_id, is_thinking):
+        """
+        v2.22.3 BUG-085:worker 在 polling 检测到 Qwen "思考中"动画状态变化时
+        emit。主进程跟踪每个 task 的 thinking 状态。`_check_timeout` 用这个
+        判断"0 字节卡死"是不是误报:
+          - thinking=True  → Qwen 在思考(合法 0 字节),延期 60 秒再查
+          - thinking=False → 不在思考期,正常按 0 字节判定卡死
+        """
+        if not hasattr(self, "_task_thinking_state"):
+            self._task_thinking_state = {}
+        self._task_thinking_state[task_id] = bool(is_thinking)
 
     def update_browser_status(self, status):
         """浏览器状态变化时由 BrowserWorker 信号调用 — 把状态显示在状态栏右侧 + 控制 close 按钮"""
@@ -1814,7 +1835,19 @@ class MainWindow(QMainWindow):
             if char_progress > 0:
                 # AI 正在写字(Qwen 章节常态),静默不打扰
                 return
-            # 真的 0 字节卡了 90 秒 → 报警
+            # v2.22.3 BUG-085: 思考期闸门
+            # 实战(21:44:11):Canon抽取-第1章实际 17 秒后成功 985 字,但 90 秒
+            # 时已被误报"0 字节无回复" — Qwen 思考阶段就是合法的 0 字节 0-90 秒。
+            # worker 检测到 thinking_indicator 命中时 emit True。看到 True 就
+            # 延期 60 秒再查,不报警。
+            is_thinking = False
+            if hasattr(self, "_task_thinking_state"):
+                is_thinking = self._task_thinking_state.get(_task_label, False)
+            if is_thinking:
+                from PyQt5.QtCore import QTimer
+                QTimer.singleShot(60000, _check_timeout)
+                return
+            # 真的 0 字节卡了 90 秒(且不在思考期) → 报警
             self.tab_generation.log(
                 f"⏰ 「{_task_label}」已等待 90 秒,0 字节无回复(可能真卡住了)!",
                 "warn")
@@ -1844,6 +1877,9 @@ class MainWindow(QMainWindow):
         # v2.22.2 BUG-083:任务完成时清掉进度跟踪(防止字典无限增长)
         if hasattr(self, "_task_char_progress"):
             self._task_char_progress.pop(task_id, None)
+        # v2.22.3 BUG-085:任务完成时清掉思考状态跟踪
+        if hasattr(self, "_task_thinking_state"):
+            self._task_thinking_state.pop(task_id, None)
         # ── 0字节/空内容自动重试 ──
         if not content or not content.strip():
             meta = self._pending_task_targets.get(task_id, {})

@@ -79,6 +79,13 @@ class BrowserWorker(QObject):
     # 每次都误报。现在 worker 在 polling 抓到内容时 emit (task_id, char_count),
     # 主进程跟踪每个 task 的最新字符数,只在"该任务 0 字节卡了 90 秒"时才弹窗。
     task_progress = pyqtSignal(str, int)         # task_id, current_char_count
+    # v2.22.3 BUG-085: Qwen 思考期 _check_timeout 误报"卡住"修复
+    # 实战日志(21:44:11):任务实际 17 秒后成功 985 字,但 90 秒时已弹
+    # "0 字节无回复(可能真卡住了)" — 因为 Qwen 思考阶段就是合法的
+    # 0 字节 0-90 秒。worker polling 检测 thinking_indicator 状态变化时
+    # emit (task_id, is_thinking)。主进程 _check_timeout 看到 thinking=True
+    # 时延期 60 秒再查,不弹窗。
+    task_thinking = pyqtSignal(str, bool)        # task_id, is_thinking
 
     DEBUG_PORT = 9222
 
@@ -1318,12 +1325,37 @@ class BrowserWorker(QObject):
         _site_min_chars = int(prof.get("min_complete_chars", 0) or 0)
         _b082_min_chars_warned = False  # 防刷屏:同一任务内只告警一次
         _b082_thinking_warned = False  # 同上,thinking 守卫只告警一次
+        # v2.22.3 BUG-084: BUG-082 守卫死循环修复
+        # 实战(21:45:27→21:49:01,3 分 35 秒,200+圈紧循环):BUG-082 守卫触发后
+        # Qwen 67 字思考预览顶按钮恢复 + cur 不变,polling 陷"按钮快照已恢复 → 0.8s
+        # → recheck 还是 67 字 → BUG-082 拒绝 → continue → 回顶 → 按钮快照已恢复" 死循环。
+        # 修法三条:1) 守卫累计 90s 超时则放弃接受当前内容 2) sleep 3s 避免紧循环
+        # 3) "⏳ 按钮快照已恢复" 日志加抑制(否则 200+ 行刷屏)
+        _b082_guard_first_at = None  # 守卫第一次触发的时间(None = 还没触发)
+        _B082_GUARD_MAX = 90.0  # 守卫累计超时(秒),超过则放弃守卫
+        _b082_guard_sleep = 3.0  # 守卫触发后 continue 前的强制 sleep
+        _b082_button_resume_log_silenced = False  # "⏳ 按钮快照已恢复" 日志抑制
+        _b082_guard_giveup_logged = False  # 守卫超时放弃日志只打一次
+        # v2.22.3 BUG-085: Qwen 思考期 _check_timeout 误报"卡住"修复
+        # polling 每圈检测 thinking 状态变化就 emit task_thinking 信号给主进程。
+        # 主进程 _check_timeout 看到 thinking=True 时延期 60 秒再查,不弹窗。
+        _last_thinking_emitted = None  # 上次 emit 的 thinking 状态,变化才 emit
         # 继续生成防死循环计数:连续点击但 AI 没响应 → 3 次后放弃
         cg_attempts = 0
         cg_max_attempts = 3
         while time.time() - start < self.max_wait:
             if self._stop.is_set(): return
             cur = self._grab_last_response(prof)
+            # v2.22.3 BUG-085: 每圈检测 thinking 状态,变化时 emit
+            # 主进程 _check_timeout 用这个判断"0 字节卡死"是不是误报
+            if _site_thinking_sel:
+                try:
+                    _curr_thinking = self._site_is_thinking(_site_thinking_sel)
+                    if _curr_thinking != _last_thinking_emitted:
+                        self.task_thinking.emit(task_id, bool(_curr_thinking))
+                        _last_thinking_emitted = _curr_thinking
+                except Exception:
+                    pass
             # ★ 防串:如果抓到的内容跟发送前指纹一致 → 这是上一轮残留,不是新回复
             #   假装 cur 为空,让循环继续等,直到 DeepSeek 真出新回复
             if cur and prev_response_fingerprint:
@@ -1515,9 +1547,10 @@ class BrowserWorker(QObject):
             # ★★ 但要 0.8s 保险确认按钮快照没"延迟恢复"
             if not stopping and cur and len(cur) > 30 and cur == last_text:
                 # ★★ 保险减速:写完后再等 0.8s,确认按钮快照没"延迟恢复"
-                #    (有些机器 DeepSeek 渲染慢,按钮变回纸飞机后 AI 还在写最后几句)
-                self.log_signal.emit(
-                    f"⏳ 按钮快照已恢复(可能写完),0.8s 保险确认...", "info")
+                # v2.22.3 BUG-084: 日志抑制 — 死循环时这条会刷 200+ 次
+                if not _b082_button_resume_log_silenced:
+                    self.log_signal.emit(
+                        f"⏳ 按钮快照已恢复(可能写完),0.8s 保险确认...", "info")
                 time.sleep(0.8)
                 recheck = self._grab_last_response(prof)
                 if recheck and recheck != cur:
@@ -1527,9 +1560,11 @@ class BrowserWorker(QObject):
                         "info")
                     last_text = recheck
                     last_change = time.time()
+                    # v2.22.3 BUG-084: 字符真涨 → 重置守卫计时 + 解除日志抑制
+                    _b082_guard_first_at = None
+                    _b082_button_resume_log_silenced = False
                     continue
                 # v2.22.1 BUG-082 (C 主防御): 站点说"还在思考" → 不结束
-                # 优先级最高:DOM 提供的确定性信号 > 时间/字符估算
                 if _site_thinking_sel and self._site_is_thinking(_site_thinking_sel):
                     if not _b082_thinking_warned:
                         self.log_signal.emit(
@@ -1537,12 +1572,23 @@ class BrowserWorker(QObject):
                             f"继续等真正完成...",
                             "info")
                         _b082_thinking_warned = True
+                    # v2.22.3 BUG-084: 守卫累计超时检查
+                    if _b082_guard_first_at is None:
+                        _b082_guard_first_at = time.time()
+                    elif time.time() - _b082_guard_first_at > _B082_GUARD_MAX:
+                        if not _b082_guard_giveup_logged:
+                            self.log_signal.emit(
+                                f"  · [BUG-084] BUG-082 守卫累计 {_B082_GUARD_MAX:.0f}s "
+                                f"仍在拒绝完成 → 放弃守卫接受当前 {len(cur)} 字",
+                                "warn")
+                            _b082_guard_giveup_logged = True
+                        break
                     last_text = cur
                     last_change = time.time()
+                    _b082_button_resume_log_silenced = True
+                    time.sleep(_b082_guard_sleep)
                     continue
-                # v2.22.1 BUG-082 (B 兜底): 按钮虽恢复但字符数不够站点下限 → 可能是
-                # Qwen 的"思考完→开始流式输出"的过渡瞬间,按钮短暂离开 stop
-                # 状态。这种情况不要判完成,继续等内容继续涨。
+                # v2.22.1 BUG-082 (B 兜底): 按钮虽恢复但字符数不够站点下限
                 if _site_min_chars and len(cur) < _site_min_chars:
                     if not _b082_min_chars_warned:
                         self.log_signal.emit(
@@ -1550,8 +1596,21 @@ class BrowserWorker(QObject):
                             f" {_site_min_chars} → 继续等 Qwen 流式输出...",
                             "info")
                         _b082_min_chars_warned = True
+                    # v2.22.3 BUG-084: 守卫累计超时检查
+                    if _b082_guard_first_at is None:
+                        _b082_guard_first_at = time.time()
+                    elif time.time() - _b082_guard_first_at > _B082_GUARD_MAX:
+                        if not _b082_guard_giveup_logged:
+                            self.log_signal.emit(
+                                f"  · [BUG-084] BUG-082 守卫累计 {_B082_GUARD_MAX:.0f}s "
+                                f"仍在拒绝完成 → 放弃守卫接受当前 {len(cur)} 字",
+                                "warn")
+                            _b082_guard_giveup_logged = True
+                        break
                     last_text = cur
                     last_change = time.time()
+                    _b082_button_resume_log_silenced = True
+                    time.sleep(_b082_guard_sleep)
                     continue
                 self.log_signal.emit(
                     f"✓ 按钮快照已恢复(AI 写完)+ 内容稳定 → 完成 ({len(cur)} 字符)", "info")
@@ -1575,7 +1634,6 @@ class BrowserWorker(QObject):
                     wait_threshold = max(wait_threshold, _site_stable_min)
                 if time.time() - last_change >= wait_threshold:
                     # v2.22.1 BUG-082 (C 主防御): 站点说"还在思考" → 不结束
-                    # 优先级最高,先于字符数检查
                     if _site_thinking_sel and self._site_is_thinking(_site_thinking_sel):
                         if not _b082_thinking_warned:
                             self.log_signal.emit(
@@ -1583,8 +1641,18 @@ class BrowserWorker(QObject):
                                 f"Qwen 还显示\"思考中\"动画 → 继续等真正完成...",
                                 "info")
                             _b082_thinking_warned = True
-                        # 不 break,让 max_wait 兜底
-                    # v2.22.1 BUG-082 (B 兜底): 字符数不够站点下限 → 还在写,不完成
+                        # v2.22.3 BUG-084: 守卫累计超时检查
+                        if _b082_guard_first_at is None:
+                            _b082_guard_first_at = time.time()
+                        elif time.time() - _b082_guard_first_at > _B082_GUARD_MAX:
+                            if not _b082_guard_giveup_logged:
+                                self.log_signal.emit(
+                                    f"  · [BUG-084] BUG-082 守卫累计 {_B082_GUARD_MAX:.0f}s "
+                                    f"仍在拒绝完成 → 放弃守卫接受当前 {clen} 字",
+                                    "warn")
+                                _b082_guard_giveup_logged = True
+                            break
+                    # v2.22.1 BUG-082 (B 兜底): 字符数不够站点下限
                     elif _site_min_chars and clen < _site_min_chars:
                         if not _b082_min_chars_warned:
                             self.log_signal.emit(
@@ -1593,7 +1661,17 @@ class BrowserWorker(QObject):
                                 f"继续等(Qwen 等结构化输出补齐)...",
                                 "info")
                             _b082_min_chars_warned = True
-                        # 不 break。让 max_wait / zero-char timeout 兜底
+                        # v2.22.3 BUG-084: 守卫累计超时检查
+                        if _b082_guard_first_at is None:
+                            _b082_guard_first_at = time.time()
+                        elif time.time() - _b082_guard_first_at > _B082_GUARD_MAX:
+                            if not _b082_guard_giveup_logged:
+                                self.log_signal.emit(
+                                    f"  · [BUG-084] BUG-082 守卫累计 {_B082_GUARD_MAX:.0f}s "
+                                    f"仍在拒绝完成 → 放弃守卫接受当前 {clen} 字",
+                                    "warn")
+                                _b082_guard_giveup_logged = True
+                            break
                     else:
                         self.log_signal.emit(
                             f"✓ 内容稳定 {wait_threshold:.1f}s → 完成 ({clen} 字符)", "info")
@@ -1602,8 +1680,10 @@ class BrowserWorker(QObject):
                 last_text = cur
                 last_change = time.time()
                 no_change_streak = 0
+                # v2.22.3 BUG-084: 字符真涨 → 重置守卫计时 + 解除日志抑制
+                _b082_guard_first_at = None
+                _b082_button_resume_log_silenced = False
                 # v2.22.2 BUG-083: 内容刚变化 → 立刻通知主进程"这个任务在写字"
-                # 主进程用这个判断"卡死提醒"是不是误报
                 try:
                     self.task_progress.emit(task_id, len(cur or ""))
                 except Exception:
@@ -1675,6 +1755,14 @@ class BrowserWorker(QObject):
                     "⚠ AI 空闲确认超时(5s),继续下一任务(可能 DeepSeek 卡住)", "warn")
         except Exception as _e_idle:
             self.log_signal.emit(f"AI 空闲检测异常:{_e_idle}", "warn")
+
+        # v2.22.3 BUG-085: polling 退出前 emit thinking=False
+        # 避免任务真完成后,主进程 _check_timeout 还误以为在思考期
+        try:
+            if _last_thinking_emitted is True:
+                self.task_thinking.emit(task_id, False)
+        except Exception:
+            pass
 
         self.response_received.emit(task_id, last_text)
 

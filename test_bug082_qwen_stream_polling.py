@@ -165,22 +165,34 @@ def test_thinking_guard_priority_over_chars_guard():
 
 
 def test_min_chars_blocks_premature_completion():
-    """min_complete_chars 守卫必须 'continue/pass 不 break',不是 'log+break'"""
+    """min_complete_chars 守卫必须 'continue/pass 不 break',不是 'log+break'
+
+    v2.22.3 BUG-084 修复:允许"守卫累计超时"分支的 break(看周围有 _B082_GUARD_MAX
+    或 [BUG-084] 标识 = 这个 break 是 BUG-084 守卫超时放弃,而不是 BUG-082 原修复
+    被破坏)。
+    """
     src = WORKER_FILE.read_text(encoding="utf-8")
     lines = src.splitlines()
     for i, line in enumerate(lines):
         if "BUG-082" in line and ("< _site_min_chars" in line or "< 站点下限" in line):
-            block = "\n".join(lines[i:i+15])
+            block = "\n".join(lines[i:i+30])  # v2.22.3:扩到 30 行,因为加了守卫超时分支
             first_break = block.find("break")
             first_continue = block.find("continue")
             first_comment_no_break = block.find("不 break")
+            # v2.22.3:允许"守卫累计超时"分支的 break
+            has_bug084_guard = ("_B082_GUARD_MAX" in block or "[BUG-084]" in block)
             if first_break != -1:
+                if has_bug084_guard:
+                    # 这个 break 是 BUG-084 守卫累计超时分支 — 合法
+                    continue
+                # 否则要求 continue 或 "不 break" 注释在 break 之前
                 earliest_safe = min(
                     x for x in (first_continue, first_comment_no_break)
                     if x != -1
                 ) if (first_continue != -1 or first_comment_no_break != -1) else -1
                 assert earliest_safe != -1 and earliest_safe < first_break, \
-                    f"BUG-082 守卫块第 {i+1} 行附近:字符数不够时不能直接 break"
+                    f"BUG-082 守卫块第 {i+1} 行附近:字符数不够时不能直接 break " \
+                    f"(除非是 BUG-084 守卫累计超时放弃分支)"
 
 
 def test_app_version_at_least_v2_22_1():
