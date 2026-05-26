@@ -46,6 +46,8 @@ class FanqieRankTab(QWidget):
 
     # 用户点"刷新扫榜"发出(主进程 connect 后触发 worker 任务)
     request_rescan = pyqtSignal()
+    # 用户点"补抓失败详情"发出(主进程 connect 后触发 detail batch)
+    request_retry_details = pyqtSignal(list)  # [(book_id, label, category), ...]
     request_log = pyqtSignal(str, str)
 
     def __init__(self, mw=None, parent=None):
@@ -83,6 +85,11 @@ class FanqieRankTab(QWidget):
         self.btn_rescan.setMinimumWidth(100)
         self.btn_rescan.clicked.connect(self._on_rescan_clicked)
         top_row.addWidget(self.btn_rescan)
+
+        self.btn_retry_detail = QPushButton("🔁 补抓失败详情")
+        self.btn_retry_detail.setMinimumWidth(130)
+        self.btn_retry_detail.clicked.connect(self._on_retry_detail_clicked)
+        top_row.addWidget(self.btn_retry_detail)
 
         self.btn_open_cache = QPushButton("📂 打开缓存目录")
         self.btn_open_cache.setMinimumWidth(120)
@@ -539,3 +546,88 @@ class FanqieRankTab(QWidget):
             except Exception:
                 QMessageBox.information(
                     self, "缓存目录", cache_dir)
+
+    def _on_retry_detail_clicked(self):
+        """用户点"补抓失败详情" — 找到没有详情缓存的 book_id,重新抓"""
+        if not self._project_root:
+            QMessageBox.information(self, "提示", "请先打开一个项目")
+            return
+
+        failed = self._get_failed_book_ids()
+        if not failed:
+            QMessageBox.information(
+                self, "补抓详情",
+                "所有已扫到的书都已有详情缓存,无需补抓。")
+            return
+
+        self.btn_retry_detail.setEnabled(False)
+        self.btn_retry_detail.setText(f"补抓中({len(failed)} 本)...")
+        QTimer.singleShot(10000, self._reenable_retry)
+
+        self.request_retry_details.emit(failed)
+
+    def _reenable_retry(self):
+        self.btn_retry_detail.setEnabled(True)
+        self.btn_retry_detail.setText("🔁 补抓失败详情")
+
+    def _get_failed_book_ids(self):
+        """
+        对比 rank_snapshot 里所有 book_id 和 books/ 目录已有缓存,
+        返回缺失的 [(book_id, source_label, source_category), ...]
+        """
+        if not self._project_root:
+            return []
+
+        cache_dir = os.path.join(self._project_root, ".fanqie_cache")
+
+        # 1. 已有详情的 book_id
+        books_dir = os.path.join(cache_dir, "books")
+        cached_ids = set()
+        now = time.time()
+        TTL = 7 * 24 * 3600
+        if os.path.isdir(books_dir):
+            for fname in os.listdir(books_dir):
+                if not fname.endswith(".json"):
+                    continue
+                bid = fname[:-5]
+                fpath = os.path.join(books_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    detail = data.get("detail", {})
+                    # 只算"有效详情"(title 非空)
+                    if detail and detail.get("title") and \
+                       now - float(data.get("scraped_at", 0)) < TTL:
+                        cached_ids.add(bid)
+                except Exception:
+                    pass
+
+        # 2. rank_snapshot 里所有 book_id
+        snapshots = sorted([
+            f for f in os.listdir(cache_dir)
+            if f.startswith("rank_snapshot_") and f.endswith(".json")
+        ], reverse=True) if os.path.isdir(cache_dir) else []
+
+        if not snapshots:
+            return []
+
+        failed = []
+        seen = set()
+        try:
+            with open(os.path.join(cache_dir, snapshots[0]),
+                      "r", encoding="utf-8") as f:
+                snap = json.load(f)
+            for board in snap.get("scraped", []):
+                label = board.get("label", "")
+                category = board.get("category", "")
+                for b in board.get("books", []):
+                    bid = b.get("book_id", "")
+                    if not bid or bid in seen:
+                        continue
+                    seen.add(bid)
+                    if bid not in cached_ids:
+                        failed.append((bid, label, category))
+        except Exception:
+            pass
+
+        return failed

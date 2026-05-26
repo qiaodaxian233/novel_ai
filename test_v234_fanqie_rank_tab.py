@@ -164,3 +164,15 @@ def test_14_scanning_guard_exists():
     # 至少 5 处:2 个 guard check + 2 个 set True + 1 个 set False
     count = src.count("_fanqie_scanning")
     assert count >= 5, f"_fanqie_scanning 只出现 {count} 次,需 >= 5"
+
+
+def test_15_retry_detail_button_exists():
+    """补抓失败详情按钮 + 信号 + handler"""
+    tab_src = open("ui/fanqie_rank_tab.py", encoding="utf-8").read()
+    main_src = open("novel_ai.py", encoding="utf-8").read()
+    assert "btn_retry_detail" in tab_src
+    assert "request_retry_details" in tab_src
+    assert "_on_retry_detail_clicked" in tab_src
+    assert "_get_failed_book_ids" in tab_src
+    assert "request_retry_details.connect" in main_src
+    assert "_on_fanqie_retry_details" in main_src

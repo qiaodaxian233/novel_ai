@@ -955,6 +955,8 @@ class MainWindow(QMainWindow):
         self.tab_fanqie_rank = FanqieRankTab(mw=self)
         self.tab_fanqie_rank.request_rescan.connect(
             self._on_fanqie_rank_rescan)
+        self.tab_fanqie_rank.request_retry_details.connect(
+            self._on_fanqie_retry_details)
         tab_list.append((self.tab_fanqie_rank, "📊 番茄榜单"))
 
         # DEBUG 面板(最后一个 Tab)
@@ -9350,6 +9352,39 @@ class MainWindow(QMainWindow):
                 tab.load_details_from_disk()
         except Exception:
             pass
+
+    def _on_fanqie_retry_details(self, failed_list):
+        """
+        用户在番茄榜单 Tab 点了'补抓失败详情'
+
+        failed_list: [(book_id, source_label, source_category), ...]
+        """
+        try:
+            if not failed_list:
+                return
+            project_root = self._v233_get_project_root()
+            if not project_root:
+                self.tab_generation.log(
+                    "⚠ 补抓详情:无法确定项目根目录", "warn")
+                return
+
+            self.tab_generation.log(
+                f"📚 用户手动补抓 {len(failed_list)} 本失败详情...", "info")
+
+            # 获取最近的 stats(给 INDEX.md 用)
+            cache = getattr(self, "_v231_rank_stats_cache", None)
+            stats = cache.get("stats", {}) if cache else {}
+
+            self.worker.submit({
+                "action": "scrape_book_details_batch",
+                "task_id": "fanqie_detail_retry",
+                "book_ids": failed_list,
+                "project_root": project_root,
+                "stats": stats,
+            })
+        except Exception as e:
+            self.tab_generation.log(
+                f"⚠ 补抓详情触发失败:{e}", "warn")
 
     def _gen_inspiration_send_fallback(self, genres, platform):
         """v2.23.0 BUG-086: fallback 路径 — 走旧通用 prompt"""
