@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.23.3"
+APP_VERSION = "v2.23.4"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -612,6 +612,15 @@ class MainWindow(QMainWindow):
             self.worker.detail_batch_done.connect(self._on_v233_detail_batch_done)
         except Exception:
             pass
+
+        # v2.23.4: 番茄榜单 Tab 实时更新(转发 worker 信号到 Tab)
+        try:
+            self.worker.rank_progress.connect(self._fanqie_tab_on_rank_progress)
+            self.worker.rank_all_scraped.connect(self._fanqie_tab_on_rank_done)
+            self.worker.detail_progress.connect(self._fanqie_tab_on_detail_progress)
+            self.worker.detail_batch_done.connect(self._fanqie_tab_on_detail_done)
+        except Exception:
+            pass
         try:
             from PyQt5.QtCore import QTimer
             QTimer.singleShot(30000, self._v233_bg_auto_scrape)  # 30s 后启动后台抓
@@ -941,6 +950,13 @@ class MainWindow(QMainWindow):
             (self.tab_editor, "章节编辑器"),
             (self.tab_book_splitter, "📚 拆书学习"),
         ]
+        # ── 📊 番茄榜单(v2.23.4) ──
+        from ui.fanqie_rank_tab import FanqieRankTab
+        self.tab_fanqie_rank = FanqieRankTab(mw=self)
+        self.tab_fanqie_rank.request_rescan.connect(
+            self._on_fanqie_rank_rescan)
+        tab_list.append((self.tab_fanqie_rank, "📊 番茄榜单"))
+
         # DEBUG 面板(最后一个 Tab)
         self.tab_debug = DebugPanel()
         tab_list.append((self.tab_debug, "🔧 DEBUG"))
@@ -8001,6 +8017,8 @@ class MainWindow(QMainWindow):
             self.tab_generation.log(f"📂 已打开: {target.name}", "success")
             self._project_title = target.name
             self._update_window_title()
+            # v2.23.4: 番茄榜单 Tab 同步项目根目录 + 加载磁盘缓存
+            self._sync_fanqie_rank_tab()
             # 刷新项目主页
             if hasattr(self, "tab_home"):
                 self.tab_home.refresh(self)
@@ -9250,6 +9268,69 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    # ─── v2.23.4: 番茄榜单 Tab 转发方法 ───
+
+    def _fanqie_tab_on_rank_progress(self, task_id, cur, total, label, n_books):
+        """转发扫榜进度到 Tab"""
+        try:
+            self.tab_fanqie_rank.update_scan_progress(cur, total, label, n_books)
+        except Exception:
+            pass
+
+    def _fanqie_tab_on_rank_done(self, task_id, stats):
+        """扫榜完成 → 更新 Tab 热度表"""
+        try:
+            import time as _t
+            self.tab_fanqie_rank.update_stats(stats, _t.time())
+            # 同时从磁盘加载详情(可能之前抓过)
+            self.tab_fanqie_rank.load_details_from_disk()
+        except Exception:
+            pass
+
+    def _fanqie_tab_on_detail_progress(self, task_id, cur, total, book_id):
+        """转发详情进度到 Tab"""
+        try:
+            self.tab_fanqie_rank.update_detail_progress(cur, total, book_id)
+        except Exception:
+            pass
+
+    def _fanqie_tab_on_detail_done(self, task_id, success, fail):
+        """详情完成 → 刷新 Tab 详情表"""
+        try:
+            self.tab_fanqie_rank.on_detail_batch_done(success, fail)
+        except Exception:
+            pass
+
+    def _on_fanqie_rank_rescan(self):
+        """用户在番茄榜单 Tab 点了'刷新扫榜'"""
+        try:
+            self.tab_generation.log(
+                "📊 用户手动触发番茄全榜刷新扫描...", "info")
+            self._v233_bg_auto_scrape()  # 复用后台扫榜方法
+        except Exception as e:
+            self.tab_generation.log(
+                f"⚠ 手动扫榜触发失败:{e}", "warn")
+
+    def _sync_fanqie_rank_tab(self):
+        """
+        v2.23.4: 项目打开后同步番茄榜单 Tab
+
+        1. 设置项目根目录(让 Tab 知道磁盘缓存在哪)
+        2. 从磁盘加载上次扫榜快照(热度表立刻有数据)
+        3. 从磁盘加载已有详情(详情表立刻有数据)
+        """
+        try:
+            tab = getattr(self, "tab_fanqie_rank", None)
+            if not tab:
+                return
+            root = self._v233_get_project_root()
+            if root:
+                tab.set_project_root(root)
+                tab.load_snapshot_from_disk()
+                tab.load_details_from_disk()
+        except Exception:
+            pass
+
     def _gen_inspiration_send_fallback(self, genres, platform):
         """v2.23.0 BUG-086: fallback 路径 — 走旧通用 prompt"""
         prompt = PROMPTS["creative_inspiration"].format(
@@ -10188,6 +10269,8 @@ class MainWindow(QMainWindow):
                     self.tab_home.refresh(self)
             except Exception:
                 pass
+            # v2.23.4: 番茄榜单 Tab 同步项目根目录 + 加载磁盘缓存
+            self._sync_fanqie_rank_tab()
             self.statusBar().showMessage("已恢复上次自动保存的项目", 3000)
         except Exception as e:
             self.statusBar().showMessage(f"自动加载失败:{e}", 5000)
