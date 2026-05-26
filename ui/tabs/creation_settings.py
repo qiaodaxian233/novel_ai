@@ -52,8 +52,8 @@ class CreationSettings(QWidget):
         inner = QWidget()
         scroll.setWidget(inner)
         layout = QVBoxLayout(inner)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
 
         # ---- AI 配置(只管「用什么 AI」;启动 / 关闭 / 内核 / 抓取 在生成控制 Tab) ----
         ai_box = QGroupBox("AI 配置")
@@ -372,78 +372,36 @@ class CreationSettings(QWidget):
         pangu_tools_lay.addLayout(p_row2)
         layout.addWidget(pangu_tools_box)
 
-        # ---- 商业参数 ----
-        bbox = QGroupBox("商业参数")
-        blay = QVBoxLayout(bbox)
-        prow = QHBoxLayout()
-        prow.addWidget(QLabel("平台定位:"))
-        self.platform_group = QButtonGroup(self)
-        for i, p in enumerate(PLATFORMS):
-            rb = QRadioButton(p)
-            if p == "番茄小说":
-                rb.setChecked(True)
-                rb.setStyleSheet("color: #cc3333; font-weight: bold;")
-            self.platform_group.addButton(rb, i)
-            prow.addWidget(rb)
-        prow.addStretch()
-        blay.addLayout(prow)
-        layout.addWidget(bbox)
+        # ---- 写作参数(v2.23.4 紧凑化:5 个设置合并为一个网格) ----
+        param_box = QGroupBox("写作参数")
+        param_grid = QGridLayout(param_box)
+        param_grid.setSpacing(4)
+        param_grid.setContentsMargins(8, 8, 8, 8)
 
-        # ---- 目标读者 ----
-        ar_box = QGroupBox("目标读者")
-        ar_lay = QHBoxLayout(ar_box)
-        self.audience_group = QButtonGroup(self)
-        for i, a in enumerate(["青少年", "青年", "成人"]):
-            rb = QRadioButton(a)
-            if a == "成人":
-                rb.setChecked(True)
-                rb.setStyleSheet("color: #cc3333; font-weight: bold;")
-            self.audience_group.addButton(rb, i)
-            ar_lay.addWidget(rb)
-        ar_lay.addStretch()
-        layout.addWidget(ar_box)
+        def _add_radio_row(grid, row, label, group_attr, options, default, parent):
+            lbl = QLabel(label)
+            lbl.setStyleSheet("font-weight:bold; font-size:11px; color:#555;")
+            grid.addWidget(lbl, row, 0)
+            grp = QButtonGroup(parent)
+            for i, text in enumerate(options):
+                rb = QRadioButton(text)
+                if text == default:
+                    rb.setChecked(True)
+                grp.addButton(rb, i)
+                grid.addWidget(rb, row, i + 1)
+            setattr(parent, group_attr, grp)
 
-        # ---- 爽点密度 ----
-        dn_box = QGroupBox("爽点密度")
-        dn_lay = QHBoxLayout(dn_box)
-        self.density_group = QButtonGroup(self)
-        for i, d in enumerate(["低密度", "适中", "高密度", "极致爽"]):
-            rb = QRadioButton(d)
-            if d == "极致爽":
-                rb.setChecked(True)
-                rb.setStyleSheet("color: #cc3333; font-weight: bold;")
-            self.density_group.addButton(rb, i)
-            dn_lay.addWidget(rb)
-        dn_lay.addStretch()
-        layout.addWidget(dn_box)
-
-        # ---- 成长曲线 ----
-        gc_box = QGroupBox("成长曲线")
-        gc_lay = QHBoxLayout(gc_box)
-        self.growth_group = QButtonGroup(self)
-        for i, g in enumerate(["慢热型", "均衡型", "爆发型"]):
-            rb = QRadioButton(g)
-            if g == "爆发型":
-                rb.setChecked(True)
-                rb.setStyleSheet("color: #cc3333; font-weight: bold;")
-            self.growth_group.addButton(rb, i)
-            gc_lay.addWidget(rb)
-        gc_lay.addStretch()
-        layout.addWidget(gc_box)
-
-        # ---- 冲突强度 ----
-        ci_box = QGroupBox("冲突强度")
-        ci_lay = QHBoxLayout(ci_box)
-        self.conflict_group = QButtonGroup(self)
-        for i, c in enumerate(["轻度", "中度", "强烈", "极端"]):
-            rb = QRadioButton(c)
-            if c == "极端":
-                rb.setChecked(True)
-                rb.setStyleSheet("color: #cc3333; font-weight: bold;")
-            self.conflict_group.addButton(rb, i)
-            ci_lay.addWidget(rb)
-        ci_lay.addStretch()
-        layout.addWidget(ci_box)
+        _add_radio_row(param_grid, 0, "平台定位:", "platform_group",
+                       PLATFORMS, "番茄小说", self)
+        _add_radio_row(param_grid, 1, "目标读者:", "audience_group",
+                       ["青少年", "青年", "成人"], "成人", self)
+        _add_radio_row(param_grid, 2, "爽点密度:", "density_group",
+                       ["低密度", "适中", "高密度", "极致爽"], "极致爽", self)
+        _add_radio_row(param_grid, 3, "成长曲线:", "growth_group",
+                       ["慢热型", "均衡型", "爆发型"], "爆发型", self)
+        _add_radio_row(param_grid, 4, "冲突强度:", "conflict_group",
+                       ["轻度", "中度", "强烈", "极端"], "极端", self)
+        layout.addWidget(param_box)
 
         # ---- 时代背景 ----
         era_box = QGroupBox("时代背景")
@@ -491,82 +449,58 @@ class CreationSettings(QWidget):
         except Exception:
             pass
 
-        # ---- 生成规模 ----
-        scale_label = QLabel("生成规模")
-        scale_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #1a4480;")
-        layout.addWidget(scale_label)
+        # ---- 生成规模(v2.23.4: 紧凑化 — 三项合一) ----
+        scale_box = QGroupBox("生成规模")
+        scale_grid = QGridLayout(scale_box)
+        scale_grid.setSpacing(4)
+        scale_grid.setContentsMargins(8, 8, 8, 8)
 
-        # 总章节数
-        cc_box = QGroupBox("总章节数")
-        cc_lay = QVBoxLayout(cc_box)
-        cc_row = QHBoxLayout()
+        # 总章节数(第 0 行)
+        scale_grid.addWidget(QLabel("总章节:"), 0, 0)
         self.chapter_preset_group = QButtonGroup(self)
         for i, n in enumerate(["60章", "120章", "300章", "500章"]):
             rb = QRadioButton(n)
             if n == "300章":
                 rb.setChecked(True)
-                rb.setStyleSheet("color: #cc3333; font-weight: bold;")
             self.chapter_preset_group.addButton(rb, i)
-            cc_row.addWidget(rb)
-        cc_row.addStretch()
-        cc_lay.addLayout(cc_row)
-        cc_row2 = QHBoxLayout()
-        cc_row2.addWidget(QLabel("自定义:"))
+            scale_grid.addWidget(rb, 0, i + 1)
         self.chapter_custom = QSpinBox()
         self.chapter_custom.setRange(10, 9999)
         self.chapter_custom.setValue(300)
-        cc_row2.addWidget(self.chapter_custom)
-        cc_row2.addWidget(QLabel("章"))
-        cc_row2.addStretch()
-        cc_lay.addLayout(cc_row2)
-        # 联动:点击预设填进自定义
+        self.chapter_custom.setFixedWidth(80)
+        scale_grid.addWidget(self.chapter_custom, 0, 5)
         for btn in self.chapter_preset_group.buttons():
             btn.toggled.connect(self._sync_chapter_preset)
-        layout.addWidget(cc_box)
 
-        # 每章字数
-        wp_box = QGroupBox("每章正文字数")
-        wp_lay = QVBoxLayout(wp_box)
-        wp_row = QHBoxLayout()
+        # 每章字数(第 1 行)
+        scale_grid.addWidget(QLabel("每章字数:"), 1, 0)
         self.words_preset_group = QButtonGroup(self)
         for i, w in enumerate(["1500字", "2000字", "3000字"]):
             rb = QRadioButton(w)
             if w == "3000字":
                 rb.setChecked(True)
-                rb.setStyleSheet("color: #cc3333; font-weight: bold;")
             self.words_preset_group.addButton(rb, i)
-            wp_row.addWidget(rb)
-        wp_row.addStretch()
-        wp_lay.addLayout(wp_row)
-        wp_row2 = QHBoxLayout()
-        wp_row2.addWidget(QLabel("自定义:"))
+            scale_grid.addWidget(rb, 1, i + 1)
         self.words_custom = QSpinBox()
         self.words_custom.setRange(500, 20000)
         self.words_custom.setValue(3000)
         self.words_custom.setSingleStep(500)
-        wp_row2.addWidget(self.words_custom)
-        wp_row2.addWidget(QLabel("字"))
-        wp_row2.addStretch()
-        wp_lay.addLayout(wp_row2)
+        self.words_custom.setFixedWidth(80)
+        scale_grid.addWidget(self.words_custom, 1, 4)
         for btn in self.words_preset_group.buttons():
             btn.toggled.connect(self._sync_words_preset)
-        layout.addWidget(wp_box)
 
-        # v2.12:📖 一致性上下文 已迁移到 GenerationControl(生成控制 Tab)
-
-        # 大纲详细度
-        od_box = QGroupBox("大纲详细度")
-        od_lay = QHBoxLayout(od_box)
+        # 大纲详细度(第 2 行)
+        scale_grid.addWidget(QLabel("大纲详细度:"), 2, 0)
         self.detail_group = QButtonGroup(self)
         for i, d in enumerate(["简洁", "标准", "详细"]):
             rb = QRadioButton(d)
             if d == "详细":
                 rb.setChecked(True)
-                rb.setStyleSheet("color: #cc3333; font-weight: bold;")
             self.detail_group.addButton(rb, i)
-            od_lay.addWidget(rb)
-        od_lay.addStretch()
-        layout.addWidget(od_box)
+            scale_grid.addWidget(rb, 2, i + 1)
+
+        layout.addWidget(scale_box)
 
         # ---- 风格权重(滑块,总计=100%) ----
         sw_box = QGroupBox("风格权重 (总计 100%)")
@@ -596,20 +530,18 @@ class CreationSettings(QWidget):
         sw_lay.addWidget(self._style_total_label, len(STYLE_DIMENSIONS), 0, 1, 3)
         layout.addWidget(sw_box)
 
-        # ---- 节奏 ----
-        rh_box = QGroupBox("节奏")
-        rh_lay = QHBoxLayout(rh_box)
-        rh_lay.addWidget(QLabel("故事节奏:"))
+        # ---- 节奏(v2.23.4: 内联,不用 GroupBox) ----
+        rh_row = QHBoxLayout()
+        rh_row.addWidget(QLabel("故事节奏:"))
         self.rhythm_group = QButtonGroup(self)
         for i, r in enumerate(["慢热", "适中", "紧凑"]):
             rb = QRadioButton(r)
             if r == "适中":
                 rb.setChecked(True)
-                rb.setStyleSheet("color: #cc3333; font-weight: bold;")
             self.rhythm_group.addButton(rb, i)
-            rh_lay.addWidget(rb)
-        rh_lay.addStretch()
-        layout.addWidget(rh_box)
+            rh_row.addWidget(rb)
+        rh_row.addStretch()
+        layout.addLayout(rh_row)
 
         # ---- 结局倾向(可多选) ----
         ed_box = QGroupBox("结局倾向 (可多选)")
@@ -624,19 +556,19 @@ class CreationSettings(QWidget):
                 ed_lay.addWidget(cb, r, c)
         layout.addWidget(ed_box)
 
-        # ---- 创作模式 ----
-        cm_box = QGroupBox("创作模式")
-        cm_lay = QVBoxLayout(cm_box)
+        # ---- 创作模式(v2.23.4: 内联) ----
+        cm_row = QHBoxLayout()
+        cm_row.addWidget(QLabel("创作模式:"))
         self.mode_group = QButtonGroup(self)
-        rb_stable = QRadioButton("稳定版 (遵循经典套路)")
-        rb_creative = QRadioButton("创造版 (鼓励创新突破)")
+        rb_stable = QRadioButton("稳定版(经典套路)")
+        rb_creative = QRadioButton("创造版(创新突破)")
         rb_creative.setChecked(True)
-        rb_creative.setStyleSheet("color: #cc3333; font-weight: bold;")
         self.mode_group.addButton(rb_stable, 0)
         self.mode_group.addButton(rb_creative, 1)
-        cm_lay.addWidget(rb_stable)
-        cm_lay.addWidget(rb_creative)
-        layout.addWidget(cm_box)
+        cm_row.addWidget(rb_stable)
+        cm_row.addWidget(rb_creative)
+        cm_row.addStretch()
+        layout.addLayout(cm_row)
 
         # ---- 提示词字数偏移 ----
         po_row = QHBoxLayout()
