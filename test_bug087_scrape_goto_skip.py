@@ -100,9 +100,11 @@ def test_06_book_id_min_10_digits():
 
 
 def test_07_app_version_bumped():
-    """APP_VERSION 升到 v2.23.2"""
-    assert re.search(r'APP_VERSION\s*=\s*["\']v2\.23\.2["\']', NOVEL_AI_SRC), \
-        "APP_VERSION 应该升到 v2.23.2"
+    """APP_VERSION 升到 v2.23.2+(允许 v2.23.X 任何 patch 号)"""
+    assert re.search(r'APP_VERSION\s*=\s*["\']v2\.23\.[2-9]\d*["\']', NOVEL_AI_SRC) \
+           or re.search(r'APP_VERSION\s*=\s*["\']v2\.2[4-9]', NOVEL_AI_SRC) \
+           or re.search(r'APP_VERSION\s*=\s*["\']v[3-9]', NOVEL_AI_SRC), \
+        "APP_VERSION 应该升到 v2.23.2 或更高"
 
 
 def test_08_bug087_marker_in_comments():

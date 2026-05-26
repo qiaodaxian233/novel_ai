@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.23.2"
+APP_VERSION = "v2.23.3"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -603,6 +603,18 @@ class MainWindow(QMainWindow):
         try:
             self.worker.rank_progress.connect(self._on_v231_rank_progress)
             self.worker.rank_all_scraped.connect(self._on_v231_all_ranks_scraped)
+        except Exception:
+            pass
+
+        # v2.23.3: 详情抓取信号 + 启动 30 秒后自动后台扫
+        try:
+            self.worker.detail_progress.connect(self._on_v233_detail_progress)
+            self.worker.detail_batch_done.connect(self._on_v233_detail_batch_done)
+        except Exception:
+            pass
+        try:
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(30000, self._v233_bg_auto_scrape)  # 30s 后启动后台抓
         except Exception:
             pass
 
@@ -9002,19 +9014,24 @@ class MainWindow(QMainWindow):
         self._v231_scan_dialog = None
 
         ctx = getattr(self, "_pending_v231_inspiration_ctx", None)
-        if not ctx:
-            return
+        # v2.23.3: ctx 为 None = 后台自动扫(_v233_bg_auto_scrape),不发 AI 但保存数据
+        is_bg_mode = ctx is None
         self._pending_v231_inspiration_ctx = None
-        genres = ctx.get("genres", [])
-        platform = ctx.get("platform", "番茄小说")
+        genres = ctx.get("genres", []) if ctx else []
+        platform = ctx.get("platform", "番茄小说") if ctx else "番茄小说"
 
         if getattr(self, "_v231_scan_cancelled_full", False):
             self._v231_scan_cancelled_full = False
-            self.tab_generation.log("💡 全榜扫描取消,fallback 通用 prompt", "warn")
-            self._gen_inspiration_send_fallback(genres, platform)
+            if not is_bg_mode:
+                self.tab_generation.log("💡 全榜扫描取消,fallback 通用 prompt", "warn")
+                self._gen_inspiration_send_fallback(genres, platform)
             return
 
         if not stats or stats.get("total_books", 0) == 0:
+            if is_bg_mode:
+                self.tab_generation.log(
+                    "⚠ v2.23.3 后台扫榜结果为空,跳过", "warn")
+                return
             self.tab_generation.log(
                 "⚠ v2.23.1 全榜扫描结果为空,fallback 到 v2.23.0 单榜", "warn")
             if self._gen_inspiration_try_scrape(genres, platform):
@@ -9029,13 +9046,40 @@ class MainWindow(QMainWindow):
             "scraped_at": _time.time(),
         }
 
+        # v2.23.3: 保存扫榜快照到磁盘 + 触发后台详情抓取
+        scraped_raw = stats.get("_scraped_raw", [])
+        self._v233_save_snapshot_and_trigger_details(stats, scraped_raw)
+
+        # v2.23.3: 后台模式只保存数据,不发 AI
+        if is_bg_mode:
+            self.tab_generation.log(
+                f"📚 v2.23.3 后台扫榜完成:{stats.get('total_books', 0)} 本 "
+                f"(去重 {stats.get('unique_books', 0)} 本)→ 详情抓取已自动启动",
+                "info")
+            return
+
         self.tab_generation.log(
             f"💡 v2.23.1 全榜扫描成功:{stats.get('total_books', 0)} 本 "
             f"(去重 {stats.get('unique_books', 0)} 本) → 拼增强 prompt", "info")
         self._gen_inspiration_send_with_v231_stats(stats, genres, platform)
 
     def _gen_inspiration_send_with_v231_stats(self, stats, genres, platform):
-        """v2.23.1: 用 stats 拼 prompt 发 AI"""
+        """v2.23.1: 用 stats 拼 prompt 发 AI。v2.23.3 升级:有详情数据就加进 prompt"""
+        # v2.23.3: 优先用增强 prompt(含详情爆款样本)
+        try:
+            from core.fanqie_rank_scraper import build_v233_enriched_prompt
+            base_prompt = PROMPTS["creative_inspiration"].format(
+                genre="/".join(genres), platform=platform)
+            project_root = self._v233_get_project_root()
+            prompt = build_v233_enriched_prompt(
+                stats, genres, project_root, base_prompt)
+            if prompt:
+                self._send_to_ai(prompt, "创意灵感", target="inspiration")
+                return
+        except Exception:
+            pass
+
+        # Fallback 到 v2.23.1 纯统计 prompt
         try:
             from core.fanqie_rank_scraper import build_v231_full_rank_prompt
         except Exception:
@@ -9048,6 +9092,163 @@ class MainWindow(QMainWindow):
             self._gen_inspiration_send_fallback(genres, platform)
             return
         self._send_to_ai(prompt, "创意灵感", target="inspiration")
+
+    # ===========================================================
+    # v2.23.3: 详情抓取相关方法
+    # ===========================================================
+
+    def _v233_get_project_root(self):
+        """
+        v2.23.3: 返回当前项目根目录(.fanqie_cache 放在这里)
+
+        优先用 self.current_project 路径,fallback 到 cwd
+        """
+        try:
+            proj = getattr(self, "current_project", None)
+            if proj and getattr(proj, "path", None):
+                return str(proj.path)
+        except Exception:
+            pass
+        try:
+            proj_dir = getattr(self, "project_dir", None)
+            if proj_dir:
+                return str(proj_dir)
+        except Exception:
+            pass
+        import os
+        return os.getcwd()
+
+    def _v233_save_snapshot_and_trigger_details(self, stats, scraped_raw):
+        """
+        v2.23.3: 扫完榜后:
+          1. 保存快照到磁盘
+          2. 写一次 INDEX.md
+          3. 提取 Top5 book_id 列表,提交后台详情抓取任务
+        """
+        if not stats or not scraped_raw:
+            return
+        try:
+            from core.fanqie_rank_scraper import (
+                save_rank_snapshot, write_index_md,
+                get_t5_book_ids_from_scraped, ensure_cache_dirs,
+                list_cached_book_ids,
+            )
+        except Exception as e:
+            self.tab_generation.log(f"⚠ v2.23.3 模块导入失败:{e}", "warn")
+            return
+
+        project_root = self._v233_get_project_root()
+        try:
+            ensure_cache_dirs(project_root)
+            save_rank_snapshot(project_root, scraped_raw, stats)
+        except Exception:
+            pass
+
+        # 提取 Top5 × 74 = 370 个 book_id(去重后约 200-300)
+        book_ids = get_t5_book_ids_from_scraped(scraped_raw)
+        # 排除已缓存的(7 天 TTL 内的复用)
+        cached = list_cached_book_ids(project_root)
+        pending = [(bid, lbl, cat) for (bid, lbl, cat) in book_ids
+                    if bid not in cached]
+
+        # 写初始 INDEX.md
+        try:
+            write_index_md(project_root, stats, scraped_raw,
+                            (len(cached), len(book_ids)))
+        except Exception:
+            pass
+
+        if not pending:
+            self.tab_generation.log(
+                f"📚 v2.23.3 详情已全在缓存({len(cached)} 本),不需要抓", "info")
+            return
+
+        self.tab_generation.log(
+            f"📚 v2.23.3 启动后台详情抓取:待抓 {len(pending)} 本"
+            f"(已缓存 {len(cached)} 本)→ 缓存目录 {project_root}/.fanqie_cache/",
+            "info")
+
+        # 提交后台抓取任务(worker 会自行礼让 AI 任务)
+        self.worker.submit({
+            "action": "scrape_book_details_batch",
+            "task_id": "fanqie_detail_batch",
+            "book_ids": pending,
+            "project_root": project_root,
+            "stats": stats,
+        })
+
+    def _v233_bg_auto_scrape(self):
+        """
+        v2.23.3: 程序启动 30 秒后自动触发(QTimer.singleShot 30s 调过来)
+
+        条件:
+          - 浏览器就绪
+          - v2.23.1 stats 缓存不在 24h 内(没扫过 / 过期)
+          → 触发后台扫榜 + 详情(走 _gen_inspiration_try_v231_full_scrape 同样流程
+            但不弹进度对话框,因为是后台)
+        """
+        try:
+            if not self.worker.is_ready():
+                self.tab_generation.log(
+                    "📚 v2.23.3 启动 30s 后台抓取:浏览器未就绪,跳过", "info")
+                return
+            # 浏览器忙(用户已在生成章节)→ 跳过这次
+            if self.worker.task_queue.qsize() > 0:
+                self.tab_generation.log(
+                    "📚 v2.23.3 后台抓取:浏览器有任务排队,本次跳过", "info")
+                return
+
+            # 检查 v2.23.1 stats 缓存
+            from core.fanqie_rank_scraper import V231_CACHE_TTL_SEC
+            import time as _time
+            cache = getattr(self, "_v231_rank_stats_cache", None)
+            age = _time.time() - (cache.get("scraped_at", 0) if cache else 0)
+            if cache and cache.get("stats") and age < V231_CACHE_TTL_SEC:
+                # 缓存还在,只需要检查详情有没有抓
+                self.tab_generation.log(
+                    f"📚 v2.23.3 v2.23.1 缓存命中(扫过 {int(age//60)} 分钟前),"
+                    f"只补抓详情", "info")
+                stats = cache["stats"]
+                scraped = stats.get("_scraped_raw", [])
+                self._v233_save_snapshot_and_trigger_details(stats, scraped)
+                return
+
+            # 没缓存,后台静默扫(不弹进度对话框)
+            self.tab_generation.log(
+                "📚 v2.23.3 启动 30s 自动后台扫榜:74 榜 × Top10", "info")
+            self._pending_v231_inspiration_ctx = None  # 后台模式不发 AI
+            self.worker.reset_scan_cancel()
+            self._v231_scan_dialog = None
+            self._v231_scan_cancelled_full = False
+            self.worker.submit({
+                "action": "scrape_fanqie_all_ranks",
+                "task_id": "fanqie_all_ranks_scrape",
+            })
+        except Exception as e:
+            try:
+                self.tab_generation.log(
+                    f"⚠ v2.23.3 后台启动抓取失败:{e}", "warn")
+            except Exception:
+                pass
+
+    def _on_v233_detail_progress(self, task_id, cur, total, book_id):
+        """v2.23.3: 详情抓取进度(每抓完 1 本)— 静默,只在每 10 本打日志"""
+        # 每 20 本打一次,worker 已经每 10 打了,这里更稀疏
+        if cur % 20 == 0:
+            try:
+                self.tab_generation.log(
+                    f"📚 v2.23.3 详情后台 {cur}/{total}", "info")
+            except Exception:
+                pass
+
+    def _on_v233_detail_batch_done(self, task_id, success, fail):
+        """v2.23.3: 详情批抓完成"""
+        try:
+            self.tab_generation.log(
+                f"📚 v2.23.3 详情抓取批次完成:成功 {success} / 失败 {fail}。"
+                f"下一次点'生成灵感'就会用上这些样本。", "info")
+        except Exception:
+            pass
 
     def _gen_inspiration_send_fallback(self, genres, platform):
         """v2.23.0 BUG-086: fallback 路径 — 走旧通用 prompt"""

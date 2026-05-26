@@ -684,3 +684,401 @@ def build_v231_full_rank_prompt(stats: Dict, user_genres: List[str],
     parts.append(base_prompt or "请基于以上榜单数据,生成 5 个差异化的小说创意。")
 
     return "\n".join(parts)
+
+
+# ============================================================
+# v2.23.3: 详情页深度抓取 + 磁盘缓存
+# ============================================================
+# v2.23.1 只抓榜单页(book_id + 在读数),AI prompt 信息量薄。
+# v2.23.3 加详情抓取:每本 book_id → /page/{book_id} 拿干净的:
+#   - 真书名(榜单页是字体反爬乱码)
+#   - 作者
+#   - 完整简介(从 <meta name="description">,纯文本干净)
+#   - 标签(【XXX】格式)
+#   - 题材分类(本书自带的)
+#   - 字数 / 状态(连载中 / 已完结)
+#
+# 范围:每榜 Top5 × 74 榜 = 370 个 book_id(去重后 200-300 本)
+# 后台时机:程序启动 30 秒后开始,礼让 AI 任务
+# 磁盘缓存:<项目目录>/.fanqie_cache/ + INDEX.md(用户能直接打开看)
+# TTL:7 天
+
+V233_DETAIL_TOPK = 5  # 每榜抓 Top5 详情(用户敲定)
+V233_DISK_CACHE_TTL_SEC = 7 * 24 * 3600  # 详情磁盘缓存 7 天
+V233_BG_DELAY_SEC = 30  # 程序启动后多久才开始后台抓
+
+
+import json
+import os
+import time as _time
+from typing import Set
+
+
+def get_t5_book_ids_from_scraped(scraped: List[Dict]) -> List[Tuple[str, str, str]]:
+    """
+    从扫榜结果里提取需要抓详情的 Top5 book_id 列表
+
+    输入 scraped 格式(rank_all_scraped 信号 emit 给主进程的):
+        [{"label": ..., "books": [{"book_id": ..., ...}, ...]}, ...]
+
+    输出:[(book_id, source_label, source_category), ...] 去重后
+    """
+    seen = set()
+    out = []
+    for board in scraped:
+        books = board.get("books") or []
+        label = board.get("label", "")
+        category = board.get("category", "")
+        for b in books[:V233_DETAIL_TOPK]:
+            bid = b.get("book_id", "")
+            if not bid or bid in seen:
+                continue
+            seen.add(bid)
+            out.append((bid, label, category))
+    return out
+
+
+def parse_detail_page_html(html: str) -> Dict:
+    """
+    从详情页 HTML 提取干净字段
+
+    番茄详情页 head 里有:
+      <title>书名完整版在线免费阅读_书名小说_番茄小说官网</title>
+      <meta name="description" content="番茄小说提供书名完整版在线免费阅读,...
+            【标签1】【标签2】简介文本...">
+      <meta name="keywords" content="书名,书名免费阅读,...,作者名书名,...">
+      <link rel="canonical" href="https://fanqienovel.com/page/123">
+
+    body 里有(渲染前是 React #root):
+      <h1 / .book-title>真书名</h1>
+      <span>题材分类</span><span>奇幻仙侠</span><span>玄幻</span>
+      <span>X 万字</span>
+      <a href="/author-page/...">作者</a>
+    """
+    if not html:
+        return {}
+
+    out = {
+        "title": "",
+        "author": "",
+        "abstract": "",
+        "tags": [],
+        "categories": [],
+        "word_count": "",
+        "status": "",  # 连载中 / 已完结
+    }
+
+    # 1. 从 <title> 抓书名(最稳)
+    m_title = re.search(
+        r"<title>([^<]+?)完整版在线免费阅读_", html, re.IGNORECASE)
+    if m_title:
+        out["title"] = m_title.group(1).strip()
+
+    # 2. 从 <meta name="description"> 抓简介(干净文本,字体反爬不动 meta)
+    m_desc = re.search(
+        r'<meta\s+name=["\']description["\']\s+content=["\']([^"\']+)["\']',
+        html, re.IGNORECASE)
+    if m_desc:
+        desc = m_desc.group(1)
+        # 去掉"番茄小说提供 X完整版在线免费阅读,精彩小说尽在番茄小说网。"前缀
+        desc = re.sub(
+            r"^番茄小说提供[^。]+。\s*", "", desc, flags=re.IGNORECASE)
+        out["abstract"] = desc.strip()
+
+    # 3. 从简介里抽标签【XXX】
+    if out["abstract"]:
+        tags = re.findall(r"【([^】]+?)】", out["abstract"])
+        out["tags"] = [t.strip() for t in tags if t.strip()]
+
+    # 4. 从 <meta name="keywords"> 抓作者(格式:..., 作者名书名, ...)
+    m_kw = re.search(
+        r'<meta\s+name=["\']keywords["\']\s+content=["\']([^"\']+)["\']',
+        html, re.IGNORECASE)
+    if m_kw and out["title"]:
+        # keywords 格式:"书名,书名免费阅读,...,作者书名,书名全本免费下载"
+        kw = m_kw.group(1)
+        # 找包含书名的段:"作者书名" 在书名前的部分就是作者
+        parts = [p.strip() for p in kw.split(",")]
+        for p in parts:
+            if p.endswith(out["title"]) and p != out["title"]:
+                author = p[:-len(out["title"])].strip()
+                if author and 1 <= len(author) <= 20:
+                    out["author"] = author
+                    break
+
+    return out
+
+
+def _cache_dir(project_root: str) -> str:
+    """缓存目录路径:<项目根>/.fanqie_cache/"""
+    return os.path.join(project_root or ".", ".fanqie_cache")
+
+
+def _cache_books_dir(project_root: str) -> str:
+    return os.path.join(_cache_dir(project_root), "books")
+
+
+def ensure_cache_dirs(project_root: str):
+    """确保缓存目录存在"""
+    os.makedirs(_cache_books_dir(project_root), exist_ok=True)
+
+
+def save_book_detail(project_root: str, book_id: str, detail: Dict,
+                     source_label: str = "", source_category: str = ""):
+    """
+    把一本书的详情写到磁盘
+    路径:<项目>/.fanqie_cache/books/{book_id}.json
+    """
+    ensure_cache_dirs(project_root)
+    path = os.path.join(_cache_books_dir(project_root), f"{book_id}.json")
+    payload = {
+        "book_id": book_id,
+        "scraped_at": _time.time(),
+        "source_label": source_label,
+        "source_category": source_category,
+        "detail": detail,
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def load_book_detail(project_root: str, book_id: str) -> Optional[Dict]:
+    """
+    读磁盘的一本书详情。过期(> 7 天)返回 None。
+    返回 dict 含 detail / source_label / source_category / scraped_at,或 None。
+    """
+    path = os.path.join(_cache_books_dir(project_root), f"{book_id}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    age = _time.time() - float(data.get("scraped_at", 0))
+    if age > V233_DISK_CACHE_TTL_SEC:
+        return None
+    return data
+
+
+def list_cached_book_ids(project_root: str) -> Set[str]:
+    """返回磁盘上已有的(且未过期)的 book_id 集合"""
+    out = set()
+    bdir = _cache_books_dir(project_root)
+    if not os.path.exists(bdir):
+        return out
+    try:
+        for name in os.listdir(bdir):
+            if not name.endswith(".json"):
+                continue
+            bid = name[:-5]
+            if load_book_detail(project_root, bid):
+                out.add(bid)
+    except Exception:
+        pass
+    return out
+
+
+def save_rank_snapshot(project_root: str, scraped: List[Dict], stats: Dict):
+    """保存当天的扫榜快照(给 INDEX.md 用)"""
+    ensure_cache_dirs(project_root)
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    path = os.path.join(_cache_dir(project_root),
+                         f"rank_snapshot_{today}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({
+                "scraped_at": _time.time(),
+                "stats": stats,
+                "scraped": scraped,
+            }, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def write_index_md(project_root: str, stats: Dict,
+                    scraped: List[Dict], details_progress: Tuple[int, int]):
+    """
+    写人类可读的 INDEX.md,用户能用 VSCode/记事本打开看
+
+    details_progress: (已抓本数, 总目标本数)
+    """
+    ensure_cache_dirs(project_root)
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    done, total = details_progress
+    lines = [
+        f"# 番茄榜单缓存(最后更新:{now})",
+        "",
+        "## 扫榜统计",
+        f"- 总扫描:{stats.get('total_boards_scanned', 0)} 榜单",
+        f"- 总抓取:{stats.get('total_books', 0)} 本(去重 {stats.get('unique_books', 0)} 本)",
+        f"- 已抓详情:**{done} / {total} 本**({(done * 100 // total) if total else 0}% — 后台慢慢抓)",
+        "",
+        "## 男频题材热度 Top10",
+    ]
+    for i, (cat, avg) in enumerate(stats.get("hot_categories_male", [])[:10], 1):
+        lines.append(f"{i}. {cat}({avg // 10000} 万在读)")
+    lines.append("")
+    lines.append("## 女频题材热度 Top10")
+    for i, (cat, avg) in enumerate(stats.get("hot_categories_female", [])[:10], 1):
+        lines.append(f"{i}. {cat}({avg // 10000} 万在读)")
+
+    # 已抓的详情列表
+    cached_ids = list_cached_book_ids(project_root)
+    if cached_ids:
+        lines.append("")
+        lines.append(f"## 已抓详情样本({len(cached_ids)} 本,点 .json 看)")
+        # 显示前 20 个
+        for bid in list(cached_ids)[:20]:
+            data = load_book_detail(project_root, bid)
+            if not data:
+                continue
+            d = data.get("detail", {})
+            title = d.get("title", "?")
+            cat = data.get("source_category", "")
+            author = d.get("author", "")
+            wc = d.get("word_count", "")
+            lines.append(
+                f"- [{title}](books/{bid}.json) - {cat} - "
+                f"{author} - {wc}")
+        if len(cached_ids) > 20:
+            lines.append(f"- ... 其他 {len(cached_ids) - 20} 本省略")
+
+    path = os.path.join(_cache_dir(project_root), "INDEX.md")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        return True
+    except Exception:
+        return False
+
+
+def build_v233_enriched_prompt(stats: Dict, user_genres: List[str],
+                                project_root: str,
+                                base_prompt: str = "") -> str:
+    """
+    v2.23.3 增强 prompt:用磁盘缓存的详情数据补充统计
+
+    跟 v2.23.1 的区别:
+    - 统计部分保留(男女频 Top10 题材热度)
+    - 加"已抓样本(用户题材相关)"段:列 5-10 个真实爆款的 [标签组合 + 简介一句话]
+    - 仍然不传具体书名(防 AI 抄)
+    """
+    if not stats or stats.get("total_books", 0) == 0:
+        return base_prompt or ""
+
+    # 复用 v2.23.1 prompt 基础
+    parts = []
+    parts.append(f"【番茄小说全榜真实数据(扫描 {stats.get('total_boards_scanned', 0)} 个榜单·下午 3 点更新)】")
+    parts.append("")
+
+    total = stats.get("total_books", 0)
+    unique = stats.get("unique_books", 0)
+    parts.append(f"📊 总样本:{total} 本(去重后 {unique} 本独立作品)")
+    by_g = stats.get("by_gender", {})
+    parts.append(f"   男频 {by_g.get('男频', {}).get('boards', 0)} 榜 = {by_g.get('男频', {}).get('books', 0)} 本")
+    parts.append(f"   女频 {by_g.get('女频', {}).get('boards', 0)} 榜 = {by_g.get('女频', {}).get('books', 0)} 本")
+    parts.append("")
+
+    male_hot = stats.get("hot_categories_male", [])[:10]
+    if male_hot:
+        parts.append("🔥 男频题材热度 Top10:")
+        for i, (cat, avg) in enumerate(male_hot, 1):
+            parts.append(f"  {i}. {cat}({avg // 10000} 万在读)")
+        parts.append("")
+
+    female_hot = stats.get("hot_categories_female", [])[:10]
+    if female_hot:
+        parts.append("💃 女频题材热度 Top10:")
+        for i, (cat, avg) in enumerate(female_hot, 1):
+            parts.append(f"  {i}. {cat}({avg // 10000} 万在读)")
+        parts.append("")
+
+    # v2.23.3 新增:用户题材相关的爆款样本(详情数据)
+    matched = _gather_matched_samples(project_root, user_genres, max_samples=8)
+    if matched:
+        parts.append(f"📚 已扫到的真实爆款样本({len(matched)} 本,与你题材相关):")
+        for i, sample in enumerate(matched, 1):
+            tags_str = "+".join(sample.get("tags", [])[:5]) or "(无标签)"
+            abstract = sample.get("abstract", "")[:80]
+            cat = sample.get("source_category", "")
+            parts.append(f"  样本{i} [{cat}] 标签组合:{tags_str}")
+            if abstract:
+                parts.append(f"    简介摘要:{abstract}...")
+        parts.append("")
+        parts.append("  ↑ 这些是当前在榜的爆款,请观察它们的 **标签组合规律** 和 **钩子手法**,")
+        parts.append("    但**绝不直接复制简介内容**,你的创意要差异化。")
+        parts.append("")
+
+    if user_genres:
+        parts.append(f"✏️ 用户选择题材:{' / '.join(user_genres)}")
+        parts.append("")
+
+    parts.append("【硬性约束】")
+    parts.append("1. 基于上述真实榜单数据出 5 个差异化创意")
+    parts.append("2. 绝不复制书名或简介,只借鉴标签组合规律")
+    parts.append("3. **每个创意必须用 AI 自己想的具体卖点词当标签**,例如:")
+    parts.append("   ✓ 正确:`1. 【厨子修仙】主角拿菜刀斩妖,一身锅气压魂魄...`")
+    parts.append("   ✗ 错误:`1. 【一句话卖点】xxx`(不要复制'一句话卖点'这五个字!)")
+    parts.append("4. 4 要素:【题材组合】【主角设定】【核心钩子】【差异化卖点】")
+    parts.append("5. 优先用户选择题材,但可借鉴其它热门题材手法")
+    parts.append("")
+    parts.append("---")
+    parts.append("")
+    parts.append(base_prompt or "请基于以上数据生成 5 个差异化的小说创意。")
+
+    return "\n".join(parts)
+
+
+def _gather_matched_samples(project_root: str, user_genres: List[str],
+                             max_samples: int = 8) -> List[Dict]:
+    """从磁盘缓存里挑跟用户题材相关的爆款样本"""
+    out = []
+    cached_ids = list_cached_book_ids(project_root)
+    user_genre_set = set(g.lower() for g in (user_genres or []))
+
+    # 第一轮:source_category hard match
+    for bid in cached_ids:
+        if len(out) >= max_samples:
+            break
+        data = load_book_detail(project_root, bid)
+        if not data:
+            continue
+        cat = (data.get("source_category", "") or "").lower()
+        detail = data.get("detail", {})
+        # hard match:用户题材跟分类相互包含
+        if any(g in cat or cat in g for g in user_genre_set):
+            out.append({
+                "source_category": data.get("source_category", ""),
+                "abstract": detail.get("abstract", ""),
+                "tags": detail.get("tags", []),
+            })
+
+    # 第二轮:不够 max_samples 时补充任意爆款
+    if len(out) < max_samples:
+        for bid in cached_ids:
+            if len(out) >= max_samples:
+                break
+            data = load_book_detail(project_root, bid)
+            if not data:
+                continue
+            cat = data.get("source_category", "")
+            already = any(s["source_category"] == cat for s in out)
+            if already:
+                continue
+            detail = data.get("detail", {})
+            out.append({
+                "source_category": cat,
+                "abstract": detail.get("abstract", ""),
+                "tags": detail.get("tags", []),
+            })
+
+    return out

@@ -99,6 +99,12 @@ class BrowserWorker(QObject):
     #   stats_dict["total_books"] == 0 → 扫榜全失败,主进程 fallback
     rank_progress = pyqtSignal(str, int, int, str, int)   # task_id, cur, total, label, n_books
     rank_all_scraped = pyqtSignal(str, dict)              # task_id, stats_dict
+    # v2.23.3: 详情抓取相关信号
+    # detail_progress: 每抓完一本 emit (task_id, current, total, book_id)
+    #   主进程更新 INDEX.md 或状态栏
+    # detail_batch_done: 整批详情抓完 emit (task_id, success_count, fail_count)
+    detail_progress = pyqtSignal(str, int, int, str)      # task_id, cur, total, book_id
+    detail_batch_done = pyqtSignal(str, int, int)         # task_id, success, fail
 
     DEBUG_PORT = 9222
 
@@ -577,6 +583,14 @@ class BrowserWorker(QObject):
                 #       循环检测 _scan_cancel,提前退出 emit 部分结果
                 # 失败兜底:任何榜失败跳过继续下一榜,全失败 emit empty stats
                 self._scrape_fanqie_all_ranks(task)
+            elif action == "scrape_book_details_batch":
+                # v2.23.3: 详情页深度抓取(后台任务)
+                # 流程:接收 task["book_ids"] (list of (bid, label, category)),
+                #       逐个 navigate /page/{book_id} → 抓 page_source meta →
+                #       parse_detail_page_html → save_book_detail 写磁盘
+                # 礼让:每抓完一本检查 task_queue.qsize(),有任务就让位
+                # 主进程通过 task["project_root"] 告诉 worker 缓存目录
+                self._scrape_book_details_batch(task)
             self.status_signal.emit("idle")
         except Exception as e:
             self.log_signal.emit(f"任务执行失败:{e}", "error")
@@ -886,6 +900,8 @@ class BrowserWorker(QObject):
             stats["scanned_ok"] = scanned_ok
             stats["scanned_fail"] = scanned_fail
             stats["cancelled"] = self._scan_cancel.is_set()
+            # v2.23.3: 嵌入 scraped 列表本身,主进程能取 Top5 book_id 做详情抓取
+            stats["_scraped_raw"] = scraped
 
         self.log_signal.emit(
             f"📊 全榜扫描完成:共扫 {len(scraped)} 榜(成功 {scanned_ok}/失败 {scanned_fail}),"
@@ -893,6 +909,144 @@ class BrowserWorker(QObject):
             "info")
 
         self.rank_all_scraped.emit(task_id, stats)
+
+    def _scrape_book_details_batch(self, task):
+        """
+        v2.23.3: 详情页深度抓取(后台批任务)
+
+        task 格式:
+          {
+            "action": "scrape_book_details_batch",
+            "task_id": "fanqie_detail_batch",
+            "book_ids": [(book_id, source_label, source_category), ...],
+            "project_root": "<项目根目录,用于磁盘缓存>",
+          }
+
+        流程:
+          for (bid, label, category) in book_ids:
+            - 如果磁盘已有该 book_id 缓存且没过期 → 跳过
+            - 如果 _scan_cancel 触发 → break(用户取消)
+            - 如果 task_queue.qsize() > 0 → sleep 让位 AI 任务(礼让)
+            - driver.get("/page/{book_id}")
+            - 等 1.5 秒
+            - page_source → parse_detail_page_html → save_book_detail
+            - emit detail_progress
+          - 写 INDEX.md
+          - emit detail_batch_done
+
+        礼让:每抓完一本检查 task_queue,有任务就 sleep 直到队列空。
+        """
+        task_id = task.get("task_id", "fanqie_detail_batch")
+        book_ids = task.get("book_ids") or []
+        project_root = task.get("project_root", "")
+
+        try:
+            from core.fanqie_rank_scraper import (
+                parse_detail_page_html, save_book_detail,
+                load_book_detail, write_index_md, ensure_cache_dirs,
+            )
+        except Exception as e:
+            self.log_signal.emit(
+                f"⚠ 详情抓取模块导入失败:{e}", "warn")
+            self.detail_batch_done.emit(task_id, 0, 0)
+            return
+
+        if not self._is_alive():
+            self.log_signal.emit("⚠ 浏览器未就绪,无法抓详情", "warn")
+            self.detail_batch_done.emit(task_id, 0, 0)
+            return
+
+        if not book_ids:
+            self.detail_batch_done.emit(task_id, 0, 0)
+            return
+
+        ensure_cache_dirs(project_root)
+
+        total = len(book_ids)
+        success = 0
+        fail = 0
+        skipped = 0
+        stats_for_index = task.get("stats", {})
+
+        self.log_signal.emit(
+            f"📚 v2.23.3 后台开始抓详情:{total} 本(磁盘缓存 7 天)", "info")
+
+        for i, (bid, label, category) in enumerate(book_ids, 1):
+            # 取消检查
+            if self._scan_cancel.is_set():
+                self.log_signal.emit(
+                    f"📚 详情抓取被取消(已抓 {success} 本)", "info")
+                break
+
+            # 缓存命中检查(跳过已抓)
+            if load_book_detail(project_root, bid):
+                skipped += 1
+                self.detail_progress.emit(task_id, i, total, bid)
+                continue
+
+            # 礼让:有 AI 任务排队就让位(每 0.5 秒检查一次,最多等 60 秒)
+            wait_count = 0
+            while self.task_queue.qsize() > 0 and wait_count < 120:
+                time.sleep(0.5)
+                wait_count += 1
+                if self._scan_cancel.is_set():
+                    break
+
+            if self._scan_cancel.is_set():
+                break
+
+            # 抓详情
+            url = f"https://fanqienovel.com/page/{bid}"
+            try:
+                self.driver.get(url)
+                time.sleep(1.5)  # 详情页静态多,1.5 秒够
+
+                html = ""
+                try:
+                    html = self.driver.page_source or ""
+                except Exception:
+                    html = ""
+
+                detail = parse_detail_page_html(html)
+                if detail and detail.get("title"):
+                    save_book_detail(project_root, bid, detail, label, category)
+                    success += 1
+                else:
+                    fail += 1
+
+            except Exception as e:
+                fail += 1
+                self.log_signal.emit(
+                    f"⚠ 详情抓取 [{bid}] 失败:{e}", "warn")
+
+            self.detail_progress.emit(task_id, i, total, bid)
+
+            # 每 10 本打一条进度
+            if i % 10 == 0 or i == total:
+                self.log_signal.emit(
+                    f"📚 详情抓取进度 {i}/{total}"
+                    f"(成功 {success}, 跳过 {skipped}, 失败 {fail})", "info")
+
+            # 实时更新 INDEX.md(每 5 本)
+            if i % 5 == 0 and stats_for_index:
+                try:
+                    write_index_md(project_root, stats_for_index,
+                                    [], (success + skipped, total))
+                except Exception:
+                    pass
+
+        # 最终写一次 INDEX.md
+        if stats_for_index:
+            try:
+                write_index_md(project_root, stats_for_index,
+                                [], (success + skipped, total))
+            except Exception:
+                pass
+
+        self.log_signal.emit(
+            f"📚 详情抓取完成:总 {total}(成功 {success} / 跳过 {skipped} / 失败 {fail})",
+            "info")
+        self.detail_batch_done.emit(task_id, success, fail)
 
     def _goto(self, url):
         if not self._is_alive():
