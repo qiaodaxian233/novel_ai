@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.21.4"
+APP_VERSION = "v2.21.5"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -988,6 +988,9 @@ class MainWindow(QMainWindow):
         self.tab_generation.btn_new_chat.clicked.connect(self._manual_new_chat)
         self.tab_generation.btn_go.clicked.connect(self._goto_url)
         self.tab_generation.btn_grab.clicked.connect(self.grab_response)
+        # v2.21.5:登录副 AI 按钮
+        if hasattr(self.tab_generation, "btn_open_aux"):
+            self.tab_generation.btn_open_aux.clicked.connect(self._open_aux_for_login)
 
         # 创作设置 ai_group(单选) ↔ 生成控制 site_combo(下拉) 双向同步
         def _ai_radio_to_combo(btn):
@@ -1240,6 +1243,36 @@ class MainWindow(QMainWindow):
             url = "https://" + url
             self.tab_generation.url_input.setText(url)
         self.worker.submit({"action": "navigate", "url": url})
+
+    def _open_aux_for_login(self):
+        """v2.21.5:打开副 AI 网站让用户登录(首次使用必须)。
+        登录后 Chrome 用户数据目录会记 cookie,以后自动用。"""
+        if not self.worker.is_ready():
+            QMessageBox.warning(
+                self, "提示",
+                "请先点『🚀 启动浏览器』启动主浏览器,然后再登录副 AI。")
+            return
+        if not hasattr(self.tab_generation, "aux_url_input"):
+            return
+        aux_url = self.tab_generation.aux_url_input.text().strip()
+        if not aux_url:
+            QMessageBox.warning(self, "提示", "副 AI URL 为空")
+            return
+        if not aux_url.startswith("http"):
+            aux_url = "https://" + aux_url
+            self.tab_generation.aux_url_input.setText(aux_url)
+        aux_site = self.tab_generation.aux_site_combo.currentText()
+        self.tab_generation.log(
+            f"🔓 打开 {aux_site} 副 AI 标签,请在浏览器里完成登录。", "info")
+        # navigate 走 _goto,会自动开新标签或复用已有标签
+        self.worker.submit({"action": "navigate", "url": aux_url})
+        # 提示用户
+        QMessageBox.information(
+            self, "登录副 AI",
+            f"已在浏览器打开 {aux_site}({aux_url})。\n\n"
+            f"请在浏览器里完成登录。\n"
+            f"登录一次,Chrome 永久记住(用户数据目录:NovelAI_Browser_Data)。\n\n"
+            f"登录完不需要关闭这个标签 — 它会留着,让主程序自动切换使用。")
 
     def _on_ai_changed(self, button):
         ai = button.text()

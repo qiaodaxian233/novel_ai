@@ -537,17 +537,70 @@ class BrowserWorker(QObject):
     def _goto(self, url):
         if not self._is_alive():
             return
+        if not url:
+            return
         cur = self._current_url()
-        # attach 模式下尽量保留用户已有标签 —— 同站点直接复用,异站点开新标签
-        if self.channel == "chrome" and cur and url and url.split("?")[0] != cur.split("?")[0]:
+        # v2.21.5:双 AI 分工要求频繁主↔副切换,旧逻辑每次开新标签会堆积。
+        # 新策略:
+        #   ① 当前 URL 已在目标 host 上 → 啥也不做(避免每次切都打开 deepseek.com/?)
+        #   ② 已有打开的标签匹配目标 host → 切过去复用(不开新)
+        #   ③ 都没有 → attach 模式开新标签,直连模式直接 get
+        from urllib.parse import urlparse
+        try:
+            target_host = urlparse(url).hostname or ""
+        except Exception:
+            target_host = ""
+        cur_host = ""
+        try:
+            cur_host = urlparse(cur).hostname or "" if cur else ""
+        except Exception:
+            pass
+
+        # ① 当前标签已在目标 host
+        if target_host and cur_host and target_host == cur_host:
+            return
+
+        # ② attach 模式:在已有标签里找匹配 host 的,切过去复用
+        if self.channel == "chrome" and target_host:
             try:
-                from urllib.parse import urlparse
-                if urlparse(url).hostname not in (cur or ""):
-                    self.driver.execute_script(f"window.open({json.dumps(url)},'_blank');")
-                    handles = self.driver.window_handles
-                    self.driver.switch_to.window(handles[-1])
-                    self.log_signal.emit(f"已在新标签打开:{url}", "info")
-                    return
+                cur_handle = None
+                try:
+                    cur_handle = self.driver.current_window_handle
+                except Exception:
+                    pass
+                for h in self.driver.window_handles:
+                    if h == cur_handle:
+                        continue
+                    try:
+                        self.driver.switch_to.window(h)
+                        h_url = self._current_url() or ""
+                        h_host = urlparse(h_url).hostname or ""
+                        if h_host == target_host:
+                            self.log_signal.emit(
+                                f"🔁 切到已有标签:{target_host}", "info")
+                            return
+                    except Exception:
+                        continue
+                # 没找到 → 切回原标签再开新
+                if cur_handle:
+                    try:
+                        self.driver.switch_to.window(cur_handle)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # ③ attach 模式异站点开新标签;否则直接 get
+        if (self.channel == "chrome" and cur and url
+                and url.split("?")[0] != cur.split("?")[0]
+                and target_host and cur_host
+                and target_host != cur_host):
+            try:
+                self.driver.execute_script(f"window.open({json.dumps(url)},'_blank');")
+                handles = self.driver.window_handles
+                self.driver.switch_to.window(handles[-1])
+                self.log_signal.emit(f"已在新标签打开:{url}", "info")
+                return
             except Exception:
                 pass
         self.driver.get(url)
@@ -879,9 +932,19 @@ class BrowserWorker(QObject):
             time.sleep(_wait)
         self._last_send_time = time.time()
 
-        if target_url and target_url not in self._current_url():
-            self._goto(target_url)
-            time.sleep(1.5)
+        # v2.21.5:统一调用 _goto,由 _goto 内部判断是否需要切换
+        # (旧逻辑用字符串包含判断有 bug:"https://chat.qwen.ai/" in "https://chat.qwen.ai/c/abc"
+        #  在切到 Qwen 后会一直为 True,导致切回主 AI 时不切换)
+        if target_url:
+            from urllib.parse import urlparse
+            try:
+                target_host = urlparse(target_url).hostname or ""
+                cur_host = urlparse(self._current_url() or "").hostname or ""
+            except Exception:
+                target_host = cur_host = ""
+            if target_host and target_host != cur_host:
+                self._goto(target_url)
+                time.sleep(1.5)
 
         prof = _profile_for_url(self._current_url())
         self.log_signal.emit(f"使用档案:{prof['name']}", "info")

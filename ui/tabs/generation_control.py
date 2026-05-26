@@ -140,6 +140,13 @@ class GenerationControl(QWidget):
         _saved_aux_url = _aux_settings.value("url", AI_URLS.get("Qwen", ""), type=str)
         self.aux_url_input = QLineEdit(_saved_aux_url)
         b3.addWidget(self.aux_url_input, 1)
+        # v2.21.5:打开副 AI 登录按钮 — 首次使用必须登录
+        self.btn_open_aux = QPushButton("🔓 登录副 AI")
+        self.btn_open_aux.setToolTip(
+            "在新标签打开副 AI(Qwen),用于首次登录。\n"
+            "登录后 Chrome 会记住 cookie,以后自动用。")
+        self.btn_open_aux.setStyleSheet("padding:4px 10px;")
+        b3.addWidget(self.btn_open_aux)
         # 状态指示
         self.aux_status_label = QLabel("●")
         self.aux_status_label.setStyleSheet("color:#aaa; font-size:14px;")
