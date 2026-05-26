@@ -139,7 +139,7 @@ from PyQt5.QtWidgets import (
     QSpinBox, QFrame, QScrollArea, QGridLayout, QAction, QStatusBar,
     QSlider, QComboBox,
 )
-from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QObject, QThread
+from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal, QObject, QThread, QSize
 from PyQt5.QtGui import QFont, QIcon, QColor, QSyntaxHighlighter, QTextCharFormat, QTextCursor
 
 # core/ 子包(v2.00 P1 拆分:UI/数据常量 + 全局 QSS)
@@ -854,40 +854,172 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         central = QWidget(); self.setCentralWidget(central)
         ml = QHBoxLayout(central)
-        ml.setContentsMargins(8, 8, 8, 8); ml.setSpacing(8)
+        ml.setContentsMargins(0, 0, 0, 0); ml.setSpacing(0)
 
-        # ---- 左侧 ----
-        left = QWidget()
-        left.setMaximumWidth(220); left.setMinimumWidth(180)
-        ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0)
-        # v1.61: 动态显示章节总数(导入后用户能立刻看到导入了多少章)
-        self.lbl_chapter_count = QLabel("章节列表 (按 Ctrl 多选)")
-        self.lbl_chapter_count.setStyleSheet("font-weight:bold; padding:2px;")
+        # ──── 左侧导航栏 (v2.23.4 重写) ────
+        left = QFrame()
+        left.setFixedWidth(200)
+        left.setStyleSheet("""
+            QFrame#nav_sidebar {
+                background: white;
+                border-right: 1px solid #e0e6ed;
+            }
+        """)
+        left.setObjectName("nav_sidebar")
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(12, 12, 12, 8)
+        ll.setSpacing(4)
+
+        # ── 项目操作按钮 ──
+        btn_new_proj = QPushButton("＋  新建项目")
+        btn_new_proj.setCursor(Qt.PointingHandCursor)
+        btn_new_proj.setStyleSheet("""
+            QPushButton {
+                background: #4a9eff; color: white;
+                padding: 10px; font-size: 12px; font-weight: bold;
+                border-radius: 6px; text-align: left;
+            }
+            QPushButton:hover { background: #3584e4; }
+        """)
+        btn_new_proj.clicked.connect(self.new_project)
+        ll.addWidget(btn_new_proj)
+
+        for text, slot in [
+            ("📂  打开项目", lambda: self._on_nav_open_project()),
+            ("⏩  继续上次", lambda: None),  # 占位,启动时自动加载
+        ]:
+            btn = QPushButton(text)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: transparent; color: #333;
+                    padding: 8px; font-size: 12px;
+                    border-radius: 6px; text-align: left; border: none;
+                }
+                QPushButton:hover { background: #f0f4ff; color: #4a9eff; }
+            """)
+            if slot:
+                btn.clicked.connect(slot)
+            ll.addWidget(btn)
+
+        # ── 分隔线 ──
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.HLine)
+        sep1.setStyleSheet("color: #e0e6ed; margin: 6px 0;")
+        ll.addWidget(sep1)
+
+        # ── 创作流程(导航步骤) ──
+        flow_lbl = QLabel("→  创作流程")
+        flow_lbl.setStyleSheet(
+            "color:#555; font-size:11px; font-weight:bold; padding:4px 0;")
+        ll.addWidget(flow_lbl)
+
+        self._nav_steps = []
+        steps = [
+            ("1", "基础设定", "题材/风格/设定", 0),
+            ("2", "世界构建", "世界观/势力/地图", 1),
+            ("3", "角色设定", "角色/关系/命运线", 3),
+            ("4", "大纲规划", "故事线/主线/支线", 1),
+            ("5", "章节创作", "章节/内容/写作", -1),  # 特殊:切到生成引擎
+            ("6", "AI 工具箱", "伏笔/质检/角色等", -2),  # 特殊:切到伏笔检查
+        ]
+        for num, name, desc, tab_idx in steps:
+            step_btn = QPushButton(f"  {num}   {name}")
+            step_btn.setToolTip(desc)
+            step_btn.setCursor(Qt.PointingHandCursor)
+            step_btn.setStyleSheet("""
+                QPushButton {
+                    background: transparent; color: #444;
+                    padding: 7px 8px; font-size: 12px;
+                    border-radius: 6px; text-align: left; border: none;
+                }
+                QPushButton:hover { background: #eef5ff; color: #4a9eff; }
+            """)
+            _idx = tab_idx
+            step_btn.clicked.connect(lambda checked, i=_idx: self._on_nav_step(i))
+            ll.addWidget(step_btn)
+            self._nav_steps.append(step_btn)
+
+        # ── 分隔线 ──
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.HLine)
+        sep2.setStyleSheet("color: #e0e6ed; margin: 6px 0;")
+        ll.addWidget(sep2)
+
+        # ── 章节列表(保留原有 self.chapter_list,44 处引用不能断) ──
+        self.lbl_chapter_count = QLabel("📄 章节列表")
+        self.lbl_chapter_count.setStyleSheet(
+            "font-weight:bold; font-size:11px; color:#555; padding:2px 0;")
         ll.addWidget(self.lbl_chapter_count)
+
         self.chapter_list = QListWidget()
         self.chapter_list.setSelectionMode(QListWidget.ExtendedSelection)
         self.chapter_list.setDragDropMode(QListWidget.InternalMove)
         self.chapter_list.model().rowsMoved.connect(self._on_chapters_reordered)
         self.chapter_list.itemClicked.connect(self._on_chapter_clicked)
-        # v1.92 BUG-066:章节列表右键菜单(锁定/解锁章节)
         self.chapter_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.chapter_list.customContextMenuRequested.connect(self._on_chapter_list_context_menu)
+        self.chapter_list.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #e8ecf0; border-radius: 6px;
+                background: #fafbfd; font-size: 11px;
+            }
+            QListWidget::item { padding: 5px 6px; border-bottom: 1px solid #f0f2f5; }
+            QListWidget::item:selected { background: #e8f0fe; color: #1a73e8; }
+            QListWidget::item:hover { background: #f0f4ff; }
+        """)
         ll.addWidget(self.chapter_list, 1)
 
-        # 按钮区精简为一行(其他操作在右键菜单里)
+        # 章节操作按钮
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
-        btn_add = QPushButton("＋ 新增")
+        btn_add = QPushButton("＋")
+        btn_add.setFixedSize(32, 28)
+        btn_add.setToolTip("新增章节")
+        btn_add.setStyleSheet("""
+            QPushButton { padding:4px; font-size:14px; border-radius:4px; }
+        """)
         btn_add.clicked.connect(self.add_chapter)
-        btn_del = QPushButton("－ 删除")
+        btn_del = QPushButton("－")
+        btn_del.setFixedSize(32, 28)
+        btn_del.setToolTip("删除章节")
+        btn_del.setStyleSheet("""
+            QPushButton {
+                background:#e74c3c; padding:4px; font-size:14px; border-radius:4px;
+            }
+            QPushButton:hover { background:#c0392b; }
+        """)
         btn_del.clicked.connect(self.delete_chapter)
         btn_row.addWidget(btn_add)
         btn_row.addWidget(btn_del)
         btn_row.addStretch()
-        hint = QLabel("右键更多操作")
-        hint.setStyleSheet("color:#888; font-size:11px;")
+        hint = QLabel("右键更多")
+        hint.setStyleSheet("color:#aaa; font-size:10px;")
         btn_row.addWidget(hint)
         ll.addLayout(btn_row)
+
+        # ── 最近项目(折叠区) ──
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.HLine)
+        sep3.setStyleSheet("color: #e0e6ed; margin: 4px 0;")
+        ll.addWidget(sep3)
+
+        self._recent_list = QListWidget()
+        self._recent_list.setMaximumHeight(120)
+        self._recent_list.setStyleSheet("""
+            QListWidget {
+                border: none; background: transparent; font-size: 10px;
+            }
+            QListWidget::item { padding: 4px 6px; color: #666; }
+            QListWidget::item:hover { color: #4a9eff; }
+        """)
+        self._recent_list.itemDoubleClicked.connect(self._on_recent_project_clicked)
+        ll.addWidget(self._recent_list)
+
+        more_lbl = QLabel('<a style="color:#4a9eff; font-size:10px;" href="#">更多项目...</a>')
+        more_lbl.setStyleSheet("padding:2px 0;")
+        ll.addWidget(more_lbl)
+
         ml.addWidget(left)
 
         # ---- 右侧 Tab ----
@@ -1547,6 +1679,78 @@ class MainWindow(QMainWindow):
         if suffix:
             parts.append(suffix)
         self.setWindowTitle(" — ".join(parts))
+
+    # ──── v2.23.4: 左侧导航栏辅助方法 ────
+
+    def _on_nav_step(self, tab_idx):
+        """创作流程步骤点击 → 切到对应 Tab"""
+        try:
+            if tab_idx == -1:
+                # 章节创作 → 生成引擎
+                for i in range(self.tabs.count()):
+                    if "生成引擎" in self.tabs.tabText(i):
+                        self.tabs.setCurrentIndex(i)
+                        return
+            elif tab_idx == -2:
+                # AI 工具箱 → 伏笔检查
+                for i in range(self.tabs.count()):
+                    if "伏笔" in self.tabs.tabText(i):
+                        self.tabs.setCurrentIndex(i)
+                        return
+            elif 0 <= tab_idx < self.tabs.count():
+                self.tabs.setCurrentIndex(tab_idx)
+        except Exception:
+            pass
+
+    def _on_nav_open_project(self):
+        """左栏"打开项目"按钮"""
+        try:
+            path = QFileDialog.getExistingDirectory(
+                self, "选择项目文件夹", str(self.project_dir))
+            if path:
+                self._open_project_by_path(path)
+        except Exception:
+            pass
+
+    def _on_recent_project_clicked(self, item):
+        """最近项目列表双击"""
+        path = item.data(Qt.UserRole)
+        if path:
+            try:
+                from pathlib import Path as _P
+                if _P(path).exists():
+                    self._open_project_by_path(path)
+            except Exception:
+                pass
+
+    def _load_recent_to_sidebar(self):
+        """刷新左栏最近项目列表"""
+        try:
+            rl = getattr(self, "_recent_list", None)
+            if not rl:
+                return
+            rl.clear()
+            from PyQt5.QtCore import QSettings
+            recent = QSettings("NovelAI", "UI").value(
+                "recent_projects", [], type=list) or []
+            from pathlib import Path as _P
+            from datetime import datetime
+            for path in recent[:8]:
+                p = _P(path)
+                if not p.exists():
+                    continue
+                try:
+                    mtime = datetime.fromtimestamp(p.stat().st_mtime)
+                    time_str = mtime.strftime("%m-%d %H:%M")
+                except Exception:
+                    time_str = ""
+                label = f"{p.name}\n{time_str}" if time_str else p.name
+                item = QListWidgetItem(label)
+                item.setData(Qt.UserRole, str(p))
+                item.setSizeHint(QSize(0, 36))
+                rl.addItem(item)
+        except Exception:
+            pass
 
     def _on_chapter_clicked(self, item):
         idx = self.chapter_list.row(item)
@@ -7990,6 +8194,12 @@ class MainWindow(QMainWindow):
             self.recent_menu.addSeparator()
             a_clear = self.recent_menu.addAction("✕ 清空最近项目列表")
             a_clear.triggered.connect(self._clear_recent_projects)
+
+        # v2.23.4: 同步刷新左栏最近项目列表
+        try:
+            self._load_recent_to_sidebar()
+        except Exception:
+            pass
 
     def _open_project_by_path(self, path):
         """v1.41: 通过路径直接打开项目(跳过 open_project 的对话框)"""
