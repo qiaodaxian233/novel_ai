@@ -164,6 +164,31 @@ SITE_PROFILES = {
             'button[aria-label*="Stop"], '
             'button[aria-label*="停止"]'
         ),
+        # v2.22.1 BUG-082:Qwen 流式输出比 DeepSeek 慢 5-10 倍,prompt 后常有
+        # 5-90s "思考"阶段然后才开始逐字符吐出,且字符间隔可能 > 1s。
+        # 用 polling 默认的 0.9s/1.5s stable_wait 会在 Qwen 写到几十字时
+        # 误判"内容稳定 → 完成",抓到的只是 JSON 半句(实战日志:17 字
+        # `[{"key":"角色.苏棠.体质`)。
+        #
+        # 修法分三层(C 主防御 + A/B 兜底):
+        #
+        # C. thinking_indicator (主防御):Qwen 思考中页面会有
+        #    `.qwen-chat-status-card-title-animate` 这个带 -animate 后缀的 div
+        #    (例:"梳理情节脉络,提炼核心要素")。思考完后这个动画类消失,
+        #    父容器换成 `.qwen-chat-thinking-status-card-completed` + 文本
+        #    "已经完成思考"。Polling 看到 -animate 类 → 直接跳过完成判定。
+        #    这是 Qwen UI 提供的**确定性信号**,不靠时间/字数估算。
+        #
+        # A. stable_wait_min (兜底):万一未来 Qwen 改 class 名,C 失效,A 把
+        #    完成等待提到 8 秒,避免回归到 0.9s 秒判错。
+        #
+        # B. min_complete_chars (兜底):字符数 < 100 强制不完成,JSON 短输出
+        #    的最小合理长度。
+        #
+        # DeepSeek 等不设这三个字段(走默认),只对 Qwen 这类慢站生效。
+        "thinking_indicator": ".qwen-chat-status-card-title-animate",
+        "stable_wait_min": 8.0,
+        "min_complete_chars": 100,
     },
 
 "_default": {

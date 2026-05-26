@@ -1298,6 +1298,21 @@ class BrowserWorker(QObject):
         # 0字符超时:如果90秒都是0字符,放弃等待(触发上层自动重试)
         _zero_char_start = time.time()
         _ZERO_CHAR_TIMEOUT = 90  # 秒
+        # v2.22.1 BUG-082: 站点专属"完成判定下限"(给 Qwen 这类流式输出慢的站点用)
+        # Qwen 思考 80s 后才开始逐字流出 JSON,字符间隔 > 0.9s 会被 polling
+        # 误判"内容稳定 → 完成",抓到的只是 `[{"key":"角色.苏棠.体质` 这种半句。
+        # 修法分三层(C 主防御 + A/B 兜底):
+        #   C. thinking_indicator:DOM 里这个 selector 命中 → Qwen 还在思考,
+        #      直接跳过完成判定。**确定性信号**,优先级最高。
+        #   A. stable_wait_min:稳定等待时间下限(秒),C 失效时兜底
+        #   B. min_complete_chars:最小完成字符数,A 失效时兜底
+        # profile 里如果设了对应字段,任何完成路径(按钮快照恢复 / 内容稳定 /
+        # RL 学习态)都要先过这三道关。
+        _site_thinking_sel = str(prof.get("thinking_indicator", "") or "")
+        _site_stable_min = float(prof.get("stable_wait_min", 0.0) or 0.0)
+        _site_min_chars = int(prof.get("min_complete_chars", 0) or 0)
+        _b082_min_chars_warned = False  # 防刷屏:同一任务内只告警一次
+        _b082_thinking_warned = False  # 同上,thinking 守卫只告警一次
         # 继续生成防死循环计数:连续点击但 AI 没响应 → 3 次后放弃
         cg_attempts = 0
         cg_max_attempts = 3
@@ -1508,6 +1523,31 @@ class BrowserWorker(QObject):
                     last_text = recheck
                     last_change = time.time()
                     continue
+                # v2.22.1 BUG-082 (C 主防御): 站点说"还在思考" → 不结束
+                # 优先级最高:DOM 提供的确定性信号 > 时间/字符估算
+                if _site_thinking_sel and self._site_is_thinking(_site_thinking_sel):
+                    if not _b082_thinking_warned:
+                        self.log_signal.emit(
+                            f"  · [BUG-082] 按钮恢复但 Qwen 还显示\"思考中\"动画 → "
+                            f"继续等真正完成...",
+                            "info")
+                        _b082_thinking_warned = True
+                    last_text = cur
+                    last_change = time.time()
+                    continue
+                # v2.22.1 BUG-082 (B 兜底): 按钮虽恢复但字符数不够站点下限 → 可能是
+                # Qwen 的"思考完→开始流式输出"的过渡瞬间,按钮短暂离开 stop
+                # 状态。这种情况不要判完成,继续等内容继续涨。
+                if _site_min_chars and len(cur) < _site_min_chars:
+                    if not _b082_min_chars_warned:
+                        self.log_signal.emit(
+                            f"  · [BUG-082] 按钮恢复但 {len(cur)} 字 < 站点下限"
+                            f" {_site_min_chars} → 继续等 Qwen 流式输出...",
+                            "info")
+                        _b082_min_chars_warned = True
+                    last_text = cur
+                    last_change = time.time()
+                    continue
                 self.log_signal.emit(
                     f"✓ 按钮快照已恢复(AI 写完)+ 内容稳定 → 完成 ({len(cur)} 字符)", "info")
                 break
@@ -1525,10 +1565,34 @@ class BrowserWorker(QObject):
                     wait_threshold = fast_stable_wait
                 else:
                     wait_threshold = normal_stable_wait
+                # v2.22.1 BUG-082: 站点级稳定等待下限(Qwen 8s,DeepSeek 不设)
+                if _site_stable_min:
+                    wait_threshold = max(wait_threshold, _site_stable_min)
                 if time.time() - last_change >= wait_threshold:
-                    self.log_signal.emit(
-                        f"✓ 内容稳定 {wait_threshold:.1f}s → 完成 ({clen} 字符)", "info")
-                    break
+                    # v2.22.1 BUG-082 (C 主防御): 站点说"还在思考" → 不结束
+                    # 优先级最高,先于字符数检查
+                    if _site_thinking_sel and self._site_is_thinking(_site_thinking_sel):
+                        if not _b082_thinking_warned:
+                            self.log_signal.emit(
+                                f"  · [BUG-082] 内容稳定 {wait_threshold:.1f}s 但 "
+                                f"Qwen 还显示\"思考中\"动画 → 继续等真正完成...",
+                                "info")
+                            _b082_thinking_warned = True
+                        # 不 break,让 max_wait 兜底
+                    # v2.22.1 BUG-082 (B 兜底): 字符数不够站点下限 → 还在写,不完成
+                    elif _site_min_chars and clen < _site_min_chars:
+                        if not _b082_min_chars_warned:
+                            self.log_signal.emit(
+                                f"  · [BUG-082] 内容稳定 {wait_threshold:.1f}s 但 "
+                                f"{clen} 字 < 站点下限 {_site_min_chars} → "
+                                f"继续等(Qwen 等结构化输出补齐)...",
+                                "info")
+                            _b082_min_chars_warned = True
+                        # 不 break。让 max_wait / zero-char timeout 兜底
+                    else:
+                        self.log_signal.emit(
+                            f"✓ 内容稳定 {wait_threshold:.1f}s → 完成 ({clen} 字符)", "info")
+                        break
             else:
                 last_text = cur
                 last_change = time.time()
@@ -2200,6 +2264,30 @@ class BrowserWorker(QObject):
             return False
 
     # ---------- 发送按钮状态机(v1.91 BUG-065)----------
+    def _site_is_thinking(self, selector):
+        """
+        v2.22.1 BUG-082 (C 主防御):查询 DOM 是否存在某个 "AI 正在思考" 元素。
+
+        给 Qwen 这类有显式"思考状态"UI 的站点用。Qwen 思考中页面会有
+        `.qwen-chat-status-card-title-animate` 这个带 -animate 后缀的 div
+        (例:"梳理情节脉络,提炼核心要素")。思考完后这个动画类消失,
+        父容器换成 `.qwen-chat-thinking-status-card-completed` + 文本
+        "已经完成思考"。
+
+        polling 看到这个 selector 命中 → Qwen 还在思考 → 跳过完成判定。
+
+        参数 selector:CSS selector,从 profile 的 thinking_indicator 字段读
+        返回 True = 还在思考,False = 已完成或没这种 UI / 查询失败
+        """
+        if not selector:
+            return False
+        try:
+            return bool(self.driver.execute_script(
+                "return !!document.querySelector(arguments[0]);", selector
+            ))
+        except Exception:
+            return False
+
     def _get_send_button_state(self):
         """
         统一查"发送按钮当前态",返回 dict:
