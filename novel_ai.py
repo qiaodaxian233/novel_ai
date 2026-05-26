@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.21.2"
+APP_VERSION = "v2.21.3"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -9662,16 +9662,42 @@ class MainWindow(QMainWindow):
         except Exception as _e:
             print(f"[_reset] canon 清空异常: {_e}", flush=True)
 
-        # 6. 6 库(charlib) — 5 个表格全部清空
+        # 6. 全部库(charlib) — v2.21.3 BUG-078:旧版只清 5 个表且两个名字写错(tbl_rel/tbl_foreshadows 不存在,
+        # 应是 tbl_relations/tbl_fore),导致新建项目时关系/伏笔/承诺等 10+ 个表都还留着老数据,
+        # AI 写新章节时 build_inject_block 注入了老角色,出现"新项目串老剧情"
         try:
             if hasattr(self, "tab_charlib"):
+                _cl = self.tab_charlib
+                # 全部 13 个表全清(对齐 serialize 的列表)
                 for tbl_attr in (
-                    "tbl_chars", "tbl_rel", "tbl_timeline",
-                    "tbl_items", "tbl_foreshadows",
+                    "tbl_chars", "tbl_relations", "tbl_timeline",
+                    "tbl_items", "tbl_power", "tbl_fore",
+                    "tbl_promises", "tbl_arcs", "tbl_rel_values",
+                    "tbl_goals", "tbl_infos", "tbl_known_by",
+                    "tbl_hooks", "tbl_cool",
                 ):
-                    tbl = getattr(self.tab_charlib, tbl_attr, None)
+                    tbl = getattr(_cl, tbl_attr, None)
                     if tbl is not None:
                         tbl.setRowCount(0)
+                # 主角当前状态 5 个字段也要清(否则老项目的"傅恬恬·18岁·练气期"会被注入新项目)
+                if hasattr(_cl, "hero_age"):
+                    _cl.hero_age.setText("18")
+                if hasattr(_cl, "hero_realm"):
+                    _cl.hero_realm.setText("")
+                if hasattr(_cl, "hero_location"):
+                    _cl.hero_location.setText("")
+                if hasattr(_cl, "hero_faction"):
+                    _cl.hero_faction.setText("")
+                if hasattr(_cl, "hero_mood"):
+                    _cl.hero_mood.setText("")
+                # POV 模式回到默认值(角色 POV 的角色名也清)
+                if hasattr(_cl, "cb_pov_mode"):
+                    _cl.cb_pov_mode.setCurrentText("全知视角")
+                if hasattr(_cl, "le_pov_character"):
+                    _cl.le_pov_character.clear()
+                # 剧情树 (QTreeWidget,不是 QTableWidget)
+                if hasattr(_cl, "tree_plot"):
+                    _cl.tree_plot.clear()
         except Exception as _e:
             print(f"[_reset] charlib 清空异常: {_e}", flush=True)
 
