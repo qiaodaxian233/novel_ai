@@ -2217,11 +2217,32 @@ class BrowserWorker(QObject):
         (消息计数 / textarea 清空 / AI 写迹象),漏掉"按钮当前态"
         这个最直接的信号,导致 BUG-065 中摘要任务发送失败时
         诊断不清根因(灰?还是焦点丢?)。
+
+        v2.22.0 BUG-081 修复:在 JS 内的通用 selector 之前,先用当前站点
+        profile 的 send_btn 作为最高优先级 — 否则 Qwen 的 button.send-button
+        既不被 composer-submit-btn / [data-testid=send-button] / aria-label
+        命中,也不被 DeepSeek 风格的 textarea 邻近 div[role=button] 命中,
+        会一路掉到 no_btn_in_dom,实战日志里看到的就是这个症状。
         """
+        # BUG-081: 取当前 URL 对应站点 profile 的 send_btn,作为 JS 内最高优先 selector
+        try:
+            _prof = _profile_for_url(self._current_url())
+            _site_send_sel = _prof.get("send_btn", "") if _prof else ""
+        except Exception:
+            _site_send_sel = ""
         try:
             return self.driver.execute_script(r"""
+                const siteSel = arguments[0] || '';
+                // 0) BUG-081: site profile 优先 — 命中 Qwen 这类自定义按钮
+                let btn = null;
+                if (siteSel) {
+                    try {
+                        const c = document.querySelector(siteSel);
+                        if (c && c.offsetParent !== null) btn = c;
+                    } catch (_) {}
+                }
                 // 1) 通用发送按钮(ChatGPT/Claude/镜像站)
-                let btn = document.querySelector('button.composer-submit-btn')
+                if (!btn) btn = document.querySelector('button.composer-submit-btn')
                        || document.querySelector('[data-testid="send-button"]')
                        || document.querySelector('button[aria-label*="发送"]')
                        || document.querySelector('button[aria-label*="Send" i]');
@@ -2281,8 +2302,11 @@ class BrowserWorker(QObject):
                 }
                 
                 // 6) 默认 enabled
-                return {state: 'enabled', detail: (isDsCandidate ? 'ds_nearby' : 'common_selector')};
-            """) or {'state': 'none', 'detail': 'js_returned_null'}
+                let _src = 'common_selector';
+                if (siteSel && btn === document.querySelector(siteSel)) _src = 'site_profile';
+                else if (isDsCandidate) _src = 'ds_nearby';
+                return {state: 'enabled', detail: _src};
+            """, _site_send_sel) or {'state': 'none', 'detail': 'js_returned_null'}
         except Exception as e:
             return {'state': 'none', 'detail': f'exception:{e}'}
 
@@ -2430,8 +2454,35 @@ class BrowserWorker(QObject):
             pass
 
         # 策略B: 强制点击按钮(DeepSeek + ChatGPT 通用,加 textarea 邻近按钮策略)
+        # BUG-081: 同步在 JS 内最先尝试当前站点 profile 的 send_btn,解决 Qwen
+        #          button.send-button 不被通用 selector 命中导致返回 'no-btn'
+        try:
+            _prof_b = _profile_for_url(self._current_url())
+            _site_send_sel_b = _prof_b.get("send_btn", "") if _prof_b else ""
+        except Exception:
+            _site_send_sel_b = ""
         try:
             clicked = self.driver.execute_script(r"""
+                const siteSel = arguments[0] || '';
+                // 0) BUG-081: 当前站点 profile 优先 — 命中 Qwen 等自定义按钮
+                if (siteSel) {
+                    try {
+                        const sb = document.querySelector(siteSel);
+                        if (sb && sb.offsetParent !== null) {
+                            // 排除 stop 状态(AI 写时按钮会切到停止图标)
+                            const _hasRect = sb.querySelector('svg rect') !== null;
+                            const _al = (sb.getAttribute('aria-label') || '').toLowerCase();
+                            const _isStop = _hasRect || _al.includes('停止')
+                                                     || _al.includes('stop');
+                            if (!_isStop) {
+                                sb.removeAttribute('disabled');
+                                sb.removeAttribute('aria-disabled');
+                                sb.click();
+                                return 'site-profile-btn';
+                            }
+                        }
+                    } catch (_) {}
+                }
                 // 1) 通用按钮选择器(ChatGPT/Claude 镜像站)
                 let btn = document.querySelector('button.composer-submit-btn')
                        || document.querySelector('[data-testid="send-button"]')
@@ -2484,7 +2535,7 @@ class BrowserWorker(QObject):
                     }
                 }
                 return 'no-btn';
-            """)
+            """, _site_send_sel_b)
             self.log_signal.emit(f"点击发送按钮策略B: {clicked}", "info")
             time.sleep(1.5)
             _after_cnt2 = self.driver.execute_script(_count_js) or 0
