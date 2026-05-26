@@ -173,6 +173,33 @@ QToolTip {{
 /* ── Splitter ── */
 QSplitter::handle {{ background-color: {border}; }}
 
+/* ── 左侧导航栏(跟随主题) ── */
+QFrame#nav_sidebar {{
+    background-color: {bg_white};
+    border-right: 1px solid {border};
+}}
+QPushButton#nav_primary_btn {{
+    background: {primary}; color: {btn_fg};
+    padding: 10px; font-size: 12px; font-weight: bold;
+    border-radius: 6px; text-align: left;
+}}
+QPushButton#nav_primary_btn:hover {{ background: {primary_dark}; }}
+QPushButton#nav_side_btn {{
+    background: transparent; color: {text_sec};
+    padding: 8px; font-size: 12px; border-radius: 6px;
+}}
+QPushButton#nav_side_btn:hover {{ background: {bg_hover}; color: {primary}; }}
+QPushButton#nav_step_btn {{
+    background: transparent; color: {text_sec};
+    padding: 7px 8px; font-size: 12px; border-radius: 6px;
+}}
+QPushButton#nav_step_btn:hover {{ background: {bg_hover}; color: {primary}; }}
+QPushButton#nav_danger_btn {{
+    background: #e74c3c; color: white;
+    padding: 4px; font-size: 14px; border-radius: 4px;
+}}
+QPushButton#nav_danger_btn:hover {{ background: #c0392b; }}
+
 {extra_qss}
 """
 

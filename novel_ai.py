@@ -863,15 +863,9 @@ class MainWindow(QMainWindow):
         ml = QHBoxLayout(central)
         ml.setContentsMargins(0, 0, 0, 0); ml.setSpacing(0)
 
-        # ──── 左侧导航栏 (v2.23.4 重写) ────
+        # ──── 左侧导航栏 (v2.23.4 — 无硬编码颜色,跟随主题) ────
         left = QFrame()
         left.setFixedWidth(200)
-        left.setStyleSheet("""
-            QFrame#nav_sidebar {
-                background: white;
-                border-right: 1px solid #e0e6ed;
-            }
-        """)
         left.setObjectName("nav_sidebar")
         ll = QVBoxLayout(left)
         ll.setContentsMargins(12, 12, 12, 8)
@@ -880,45 +874,28 @@ class MainWindow(QMainWindow):
         # ── 项目操作按钮 ──
         btn_new_proj = QPushButton("＋  新建项目")
         btn_new_proj.setCursor(Qt.PointingHandCursor)
-        btn_new_proj.setStyleSheet("""
-            QPushButton {
-                background: #4a9eff; color: white;
-                padding: 10px; font-size: 12px; font-weight: bold;
-                border-radius: 6px; text-align: left;
-            }
-            QPushButton:hover { background: #3584e4; }
-        """)
+        btn_new_proj.setObjectName("nav_primary_btn")
         btn_new_proj.clicked.connect(self.new_project)
         ll.addWidget(btn_new_proj)
 
         for text, slot in [
             ("📂  打开项目", lambda: self._on_nav_open_project()),
-            ("⏩  继续上次", lambda: None),  # 占位,启动时自动加载
+            ("⏩  继续上次", lambda: None),
         ]:
             btn = QPushButton(text)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: transparent; color: #333;
-                    padding: 8px; font-size: 12px;
-                    border-radius: 6px; text-align: left; border: none;
-                }
-                QPushButton:hover { background: #f0f4ff; color: #4a9eff; }
-            """)
+            btn.setObjectName("nav_side_btn")
+            btn.setStyleSheet("text-align: left; border: none;")
             if slot:
                 btn.clicked.connect(slot)
             ll.addWidget(btn)
 
-        # ── 分隔线 ──
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.HLine)
-        sep1.setStyleSheet("color: #e0e6ed; margin: 6px 0;")
+        sep1 = QFrame(); sep1.setFrameShape(QFrame.HLine)
         ll.addWidget(sep1)
 
-        # ── 创作流程(导航步骤) ──
+        # ── 创作流程 ──
         flow_lbl = QLabel("→  创作流程")
-        flow_lbl.setStyleSheet(
-            "color:#555; font-size:11px; font-weight:bold; padding:4px 0;")
+        flow_lbl.setStyleSheet("font-size:11px; font-weight:bold; padding:4px 0;")
         ll.addWidget(flow_lbl)
 
         self._nav_steps = []
@@ -934,29 +911,20 @@ class MainWindow(QMainWindow):
             step_btn = QPushButton(f"  {num}   {name}")
             step_btn.setToolTip(desc)
             step_btn.setCursor(Qt.PointingHandCursor)
-            step_btn.setStyleSheet("""
-                QPushButton {
-                    background: transparent; color: #444;
-                    padding: 7px 8px; font-size: 12px;
-                    border-radius: 6px; text-align: left; border: none;
-                }
-                QPushButton:hover { background: #eef5ff; color: #4a9eff; }
-            """)
+            step_btn.setObjectName("nav_step_btn")
+            step_btn.setStyleSheet("text-align: left; border: none;")
             _kw = tab_keyword
             step_btn.clicked.connect(lambda checked, k=_kw: self._on_nav_step_by_name(k))
             ll.addWidget(step_btn)
             self._nav_steps.append(step_btn)
 
-        # ── 分隔线 ──
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.HLine)
-        sep2.setStyleSheet("color: #e0e6ed; margin: 6px 0;")
+        sep2 = QFrame(); sep2.setFrameShape(QFrame.HLine)
         ll.addWidget(sep2)
 
-        # ── 章节列表(保留原有 self.chapter_list,44 处引用不能断) ──
+        # ── 章节列表 ──
         self.lbl_chapter_count = QLabel("📄 章节列表")
         self.lbl_chapter_count.setStyleSheet(
-            "font-weight:bold; font-size:11px; color:#555; padding:2px 0;")
+            "font-weight:bold; font-size:11px; padding:2px 0;")
         ll.addWidget(self.lbl_chapter_count)
 
         self.chapter_list = QListWidget()
@@ -966,65 +934,39 @@ class MainWindow(QMainWindow):
         self.chapter_list.itemClicked.connect(self._on_chapter_clicked)
         self.chapter_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.chapter_list.customContextMenuRequested.connect(self._on_chapter_list_context_menu)
-        self.chapter_list.setStyleSheet("""
-            QListWidget {
-                border: 1px solid #e8ecf0; border-radius: 6px;
-                background: #fafbfd; font-size: 11px;
-            }
-            QListWidget::item { padding: 5px 6px; border-bottom: 1px solid #f0f2f5; }
-            QListWidget::item:selected { background: #e8f0fe; color: #1a73e8; }
-            QListWidget::item:hover { background: #f0f4ff; }
-        """)
+        self.chapter_list.setStyleSheet("font-size: 11px;")
         ll.addWidget(self.chapter_list, 1)
 
-        # 章节操作按钮
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
         btn_add = QPushButton("＋")
         btn_add.setFixedSize(32, 28)
         btn_add.setToolTip("新增章节")
-        btn_add.setStyleSheet("""
-            QPushButton { padding:4px; font-size:14px; border-radius:4px; }
-        """)
         btn_add.clicked.connect(self.add_chapter)
         btn_del = QPushButton("－")
         btn_del.setFixedSize(32, 28)
         btn_del.setToolTip("删除章节")
-        btn_del.setStyleSheet("""
-            QPushButton {
-                background:#e74c3c; padding:4px; font-size:14px; border-radius:4px;
-            }
-            QPushButton:hover { background:#c0392b; }
-        """)
+        btn_del.setObjectName("nav_danger_btn")
         btn_del.clicked.connect(self.delete_chapter)
         btn_row.addWidget(btn_add)
         btn_row.addWidget(btn_del)
         btn_row.addStretch()
         hint = QLabel("右键更多")
-        hint.setStyleSheet("color:#aaa; font-size:10px;")
+        hint.setStyleSheet("font-size:10px;")
         btn_row.addWidget(hint)
         ll.addLayout(btn_row)
 
-        # ── 最近项目(折叠区) ──
-        sep3 = QFrame()
-        sep3.setFrameShape(QFrame.HLine)
-        sep3.setStyleSheet("color: #e0e6ed; margin: 4px 0;")
+        sep3 = QFrame(); sep3.setFrameShape(QFrame.HLine)
         ll.addWidget(sep3)
 
         self._recent_list = QListWidget()
         self._recent_list.setMaximumHeight(120)
-        self._recent_list.setStyleSheet("""
-            QListWidget {
-                border: none; background: transparent; font-size: 10px;
-            }
-            QListWidget::item { padding: 4px 6px; color: #666; }
-            QListWidget::item:hover { color: #4a9eff; }
-        """)
+        self._recent_list.setStyleSheet("border: none; background: transparent; font-size: 10px;")
         self._recent_list.itemDoubleClicked.connect(self._on_recent_project_clicked)
         ll.addWidget(self._recent_list)
 
-        more_lbl = QLabel('<a style="color:#4a9eff; font-size:10px;" href="#">更多项目...</a>')
-        more_lbl.setStyleSheet("padding:2px 0;")
+        more_lbl = QLabel("更多项目...")
+        more_lbl.setStyleSheet("font-size:10px; padding:2px 0;")
         ll.addWidget(more_lbl)
 
         ml.addWidget(left)
