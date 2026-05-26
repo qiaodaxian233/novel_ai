@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.22.1"
+APP_VERSION = "v2.22.2"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -577,6 +577,23 @@ class MainWindow(QMainWindow):
         self.worker.status_signal.connect(self.update_browser_status)
         self.worker.response_received.connect(self._on_response_received)
         self.worker.started.connect(self._on_browser_started)
+        # v2.22.2 BUG-083: 任务进度 → 主进程,给"卡死提醒"判定用
+        # (旧逻辑:90 秒任务没完成就弹窗。新逻辑:90 秒任务字符数还是 0 才弹)
+        try:
+            self.worker.task_progress.connect(self._on_task_progress)
+        except Exception:
+            pass
+
+    def _on_task_progress(self, task_id, char_count):
+        """
+        v2.22.2 BUG-083:worker 在 polling 抓到内容时 emit 进度,主进程
+        跟踪每个 task 的最新字符数。`_check_timeout` 用这个判断"是否真卡死":
+          - 90 秒到了 + 字符数 == 0 → 真卡了,弹窗 + TTS 报警
+          - 90 秒到了 + 字符数 > 0  → AI 正在写(Qwen 章节常态),静默不打扰
+        """
+        if not hasattr(self, "_task_char_progress"):
+            self._task_char_progress = {}
+        self._task_char_progress[task_id] = int(char_count or 0)
 
     def update_browser_status(self, status):
         """浏览器状态变化时由 BrowserWorker 信号调用 — 把状态显示在状态栏右侧 + 控制 close 按钮"""
@@ -1781,34 +1798,52 @@ class MainWindow(QMainWindow):
             **{k: v for k, v in extra.items()
                if k.startswith("_") and isinstance(v, (str, int, float, bool, type(None)))},
         })
-        # 超时报警(90秒没回复 → 弹窗 + TTS语音提醒)
+        # v2.22.2 BUG-083:超时报警从"纯时间触发"改为"0字节卡 90 秒才报警"。
+        # 旧逻辑:90 秒任务没完成就弹窗 — Qwen 写章节本来就要 4-5 分钟,每次都误报。
+        # 新逻辑:90 秒到了去查 worker 报上来的最新字符数,字符数 > 0 → AI 在写字,
+        # 静默不打扰;字符数 == 0 → 真卡了 → 弹窗 + TTS。
+        # task_id == label(BUG-071 注释:key=label(== worker 侧 task_id))
         _task_label = label
         def _check_timeout():
-            if _task_label in self._pending_task_targets:
-                self.tab_generation.log(
-                    f"⏰ 「{_task_label}」已等待90秒未回复!", "warn")
-                # TTS 语音报警
-                try:
-                    self._tts_alert("注意,任务超时可能卡住了,请检查浏览器")
-                except Exception:
-                    pass
-                # 弹窗
-                QMessageBox.warning(
-                    self, "⏰ 任务超时",
-                    f"「{_task_label}」已等待 90 秒没有回复。\n\n"
-                    f"可能原因:\n"
-                    f"  • AI 正在深度思考(等久一点)\n"
-                    f"  • 页面卡住了(刷新浏览器)\n"
-                    f"  • 网络断了(检查网络)\n\n"
-                    f"你可以:\n"
-                    f"  1. 继续等待\n"
-                    f"  2. 切到浏览器手动刷新\n"
-                    f"  3. 重新点击生成")
+            if _task_label not in self._pending_task_targets:
+                return  # 任务早就完成了
+            # v2.22.2 BUG-083:查 worker 报上来的最新字符进度(task_id == label)
+            char_progress = 0
+            if hasattr(self, "_task_char_progress"):
+                char_progress = self._task_char_progress.get(_task_label, 0)
+            if char_progress > 0:
+                # AI 正在写字(Qwen 章节常态),静默不打扰
+                return
+            # 真的 0 字节卡了 90 秒 → 报警
+            self.tab_generation.log(
+                f"⏰ 「{_task_label}」已等待 90 秒,0 字节无回复(可能真卡住了)!",
+                "warn")
+            # TTS 语音报警
+            try:
+                self._tts_alert("注意,任务 90 秒没有任何回复,可能卡住了,请检查浏览器")
+            except Exception:
+                pass
+            # 弹窗
+            QMessageBox.warning(
+                self, "⏰ 任务超时",
+                f"「{_task_label}」已等待 90 秒,且 0 字节无任何回复。\n\n"
+                f"可能原因:\n"
+                f"  • 页面卡住了(刷新浏览器)\n"
+                f"  • 网络断了(检查网络)\n"
+                f"  • AI 服务异常(等会儿再试)\n\n"
+                f"如果 AI 正在写字,这条不会弹 — 只有 0 字节才报警。\n\n"
+                f"你可以:\n"
+                f"  1. 继续等待\n"
+                f"  2. 切到浏览器手动刷新\n"
+                f"  3. 重新点击生成")
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(90000, _check_timeout)
 
     def _on_response_received(self, task_id, content):
         """worker 回调:某次提示词的 AI 回复已抓取完毕"""
+        # v2.22.2 BUG-083:任务完成时清掉进度跟踪(防止字典无限增长)
+        if hasattr(self, "_task_char_progress"):
+            self._task_char_progress.pop(task_id, None)
         # ── 0字节/空内容自动重试 ──
         if not content or not content.strip():
             meta = self._pending_task_targets.get(task_id, {})

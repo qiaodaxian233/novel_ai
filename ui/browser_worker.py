@@ -74,6 +74,11 @@ class BrowserWorker(QObject):
     response_received = pyqtSignal(str, str)     # task_id, content
     status_signal = pyqtSignal(str)              # idle / busy / starting / stopped / error
     started = pyqtSignal()                       # 浏览器就绪
+    # v2.22.2 BUG-083:任务进度信号(给主进程的"卡死提醒"判定用)
+    # 主进程的 90 秒"卡死"弹窗以前是纯时间触发,Qwen 写章节本来就要 4-5 分钟,
+    # 每次都误报。现在 worker 在 polling 抓到内容时 emit (task_id, char_count),
+    # 主进程跟踪每个 task 的最新字符数,只在"该任务 0 字节卡了 90 秒"时才弹窗。
+    task_progress = pyqtSignal(str, int)         # task_id, current_char_count
 
     DEBUG_PORT = 9222
 
@@ -1597,10 +1602,22 @@ class BrowserWorker(QObject):
                 last_text = cur
                 last_change = time.time()
                 no_change_streak = 0
+                # v2.22.2 BUG-083: 内容刚变化 → 立刻通知主进程"这个任务在写字"
+                # 主进程用这个判断"卡死提醒"是不是误报
+                try:
+                    self.task_progress.emit(task_id, len(cur or ""))
+                except Exception:
+                    pass
             elapsed = int(time.time() - start)
             if elapsed and elapsed % 5 == 0 and no_change_streak == 0:
                 self.log_signal.emit(
                     f"AI 生成中...已 {elapsed}s,当前 {len(cur or '')} 字符", "info")
+                # v2.22.2 BUG-083: 每 5 秒也同步一次进度(防内容稳定时主进程
+                # 拿不到最新字符数)
+                try:
+                    self.task_progress.emit(task_id, len(cur or ""))
+                except Exception:
+                    pass
             time.sleep(0.3)  # 提速:1s → 0.3s,响应快 3 倍
 
         if last_text:
