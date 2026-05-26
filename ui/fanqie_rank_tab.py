@@ -56,6 +56,7 @@ class FanqieRankTab(QWidget):
         self._detail_total = 0
         self._detail_done = 0
         self._project_root = ""       # 项目根目录(由主进程设)
+        self._all_books = []          # 全量书单(用于筛选)
         self._build_ui()
 
     # ──────────────── UI 构建 ────────────────
@@ -121,11 +122,23 @@ class FanqieRankTab(QWidget):
         splitter.setSizes([400, 400])
         lay.addWidget(splitter)
 
-        # ── 下方:详情进度 + 详情表格 ──
+        # ── 下方:题材筛选 + 详情进度 + 详情表格 ──
         detail_header = QHBoxLayout()
-        self.lbl_detail = QLabel("📚 详情抓取:等待扫榜完成")
+        self.lbl_detail = QLabel("📚 书单:")
         self.lbl_detail.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
         detail_header.addWidget(self.lbl_detail)
+
+        # 题材筛选下拉
+        from PyQt5.QtWidgets import QComboBox
+        filter_lbl = QLabel("题材筛选:")
+        filter_lbl.setStyleSheet("font-size:12px; padding-left:12px;")
+        detail_header.addWidget(filter_lbl)
+        self.cmb_filter = QComboBox()
+        self.cmb_filter.setMinimumWidth(120)
+        self.cmb_filter.addItem("全部")
+        self.cmb_filter.currentTextChanged.connect(self._on_filter_changed)
+        detail_header.addWidget(self.cmb_filter)
+
         detail_header.addStretch()
 
         self.progress_detail = QProgressBar()
@@ -279,53 +292,141 @@ class FanqieRankTab(QWidget):
     def on_detail_batch_done(self, success: int, fail: int):
         """详情批抓完成"""
         self.progress_detail.setVisible(False)
-        self.lbl_detail.setText(
-            f"📚 详情已抓 {success} 本(失败 {fail})")
-        # 自动刷新详情表格
+        # 自动刷新详情表格(会重新算 detail_count)
         self.load_details_from_disk()
 
     def load_details_from_disk(self):
-        """从磁盘缓存加载书详情并填充表格"""
+        """
+        从磁盘缓存加载书单并填充表格。
+
+        数据来源两层(合并):
+          1. rank_snapshot_*.json(扫榜快照)→ 每本有 book_id + category + 在读数
+          2. books/{book_id}.json(详情缓存)→ 有 title + author + tags + abstract
+
+        即使详情没抓完,扫榜数据也能让表格显示"题材 + 在读数"。
+        """
         if not self._project_root:
             return
 
-        cache_dir = os.path.join(self._project_root, ".fanqie_cache", "books")
+        cache_dir = os.path.join(self._project_root, ".fanqie_cache")
         if not os.path.isdir(cache_dir):
-            self.lbl_detail.setText("📚 详情: 无缓存(等待后台抓取)")
+            self.lbl_detail.setText("📚 书单: 无缓存(等待扫榜)")
             return
 
-        books = []
+        # ── 1. 从 rank_snapshot 加载扫榜数据(主数据源) ──
+        book_map = {}  # book_id → {category, read_count, read_num, ...}
+        snapshots = sorted([
+            f for f in os.listdir(cache_dir)
+            if f.startswith("rank_snapshot_") and f.endswith(".json")
+        ], reverse=True)
+
+        if snapshots:
+            try:
+                with open(os.path.join(cache_dir, snapshots[0]),
+                          "r", encoding="utf-8") as f:
+                    snap = json.load(f)
+                for board in snap.get("scraped", []):
+                    category = board.get("category", "")
+                    for b in board.get("books", []):
+                        bid = b.get("book_id", "")
+                        if not bid or bid in book_map:
+                            continue
+                        raw_read = b.get("read_count_raw", "")
+                        num_read = b.get("read_count_num", 0)
+                        book_map[bid] = {
+                            "book_id": bid,
+                            "category": category,
+                            "read_display": raw_read if raw_read else (
+                                f"{num_read / 10000:.1f}万" if num_read else ""),
+                            "read_num": num_read,
+                            "title": "",
+                            "author": "",
+                            "tags": "",
+                            "abstract": "",
+                        }
+            except Exception:
+                pass
+
+        # ── 2. 从 books/*.json 合并详情(如果有) ──
+        books_dir = os.path.join(cache_dir, "books")
         now = time.time()
-        TTL = 7 * 24 * 3600  # 7 天
+        TTL = 7 * 24 * 3600
+        detail_count = 0
 
-        try:
-            for fname in os.listdir(cache_dir):
-                if not fname.endswith(".json"):
-                    continue
-                fpath = os.path.join(cache_dir, fname)
-                try:
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                except Exception:
-                    continue
-                # 过期跳过
-                if now - float(data.get("scraped_at", 0)) > TTL:
-                    continue
-                detail = data.get("detail", {})
-                if not detail:
-                    continue
-                books.append({
-                    "title": detail.get("title", ""),
-                    "author": detail.get("author", ""),
-                    "category": data.get("source_category", ""),
-                    "tags": ", ".join(detail.get("tags", [])),
-                    "read": detail.get("word_count", ""),
-                    "abstract": (detail.get("abstract", "") or "")[:200],
-                })
-        except Exception:
-            pass
+        if os.path.isdir(books_dir):
+            try:
+                for fname in os.listdir(books_dir):
+                    if not fname.endswith(".json"):
+                        continue
+                    fpath = os.path.join(books_dir, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except Exception:
+                        continue
+                    if now - float(data.get("scraped_at", 0)) > TTL:
+                        continue
+                    bid = data.get("book_id", fname[:-5])
+                    detail = data.get("detail", {})
+                    if not detail:
+                        continue
+                    detail_count += 1
+                    entry = book_map.get(bid, {
+                        "book_id": bid,
+                        "category": data.get("source_category", ""),
+                        "read_display": "",
+                        "read_num": 0,
+                    })
+                    entry["title"] = detail.get("title", "") or entry.get("title", "")
+                    entry["author"] = detail.get("author", "")
+                    entry["tags"] = ", ".join(detail.get("tags", []))
+                    entry["abstract"] = (detail.get("abstract", "") or "")[:200]
+                    if not entry.get("category"):
+                        entry["category"] = data.get("source_category", "")
+                    book_map[bid] = entry
+            except Exception:
+                pass
 
-        self._fill_detail_table(books)
+        # ── 3. 转成列表,按在读数降序 ──
+        books = sorted(book_map.values(),
+                       key=lambda x: x.get("read_num", 0), reverse=True)
+        self._all_books = books
+
+        # ── 4. 更新题材筛选下拉 ──
+        categories = sorted(set(
+            b.get("category", "") for b in books if b.get("category")))
+        current_filter = self.cmb_filter.currentText()
+        self.cmb_filter.blockSignals(True)
+        self.cmb_filter.clear()
+        self.cmb_filter.addItem("全部")
+        for cat in categories:
+            self.cmb_filter.addItem(cat)
+        # 恢复之前选中的
+        idx = self.cmb_filter.findText(current_filter)
+        if idx >= 0:
+            self.cmb_filter.setCurrentIndex(idx)
+        self.cmb_filter.blockSignals(False)
+
+        # ── 5. 填表 ──
+        self._apply_filter()
+        total = len(books)
+        self.lbl_detail.setText(
+            f"📚 书单: {total} 本"
+            f"(已抓详情 {detail_count} 本)")
+
+    def _on_filter_changed(self, text):
+        """题材筛选下拉变化"""
+        self._apply_filter()
+
+    def _apply_filter(self):
+        """按当前选中的题材筛选并刷新表格"""
+        cat_filter = self.cmb_filter.currentText()
+        if cat_filter == "全部":
+            filtered = self._all_books
+        else:
+            filtered = [b for b in self._all_books
+                        if b.get("category") == cat_filter]
+        self._fill_detail_table(filtered)
 
     def _fill_detail_table(self, books: list):
         """填充详情表格"""
@@ -341,7 +442,12 @@ class FanqieRankTab(QWidget):
             tbl.setItem(row, 1, QTableWidgetItem(b.get("author", "")))
             tbl.setItem(row, 2, QTableWidgetItem(b.get("category", "")))
             tbl.setItem(row, 3, QTableWidgetItem(b.get("tags", "")))
-            tbl.setItem(row, 4, QTableWidgetItem(b.get("read", "")))
+
+            # 在读数:用 read_display(来自扫榜),排序用 read_num
+            read_item = QTableWidgetItem(b.get("read_display", ""))
+            read_item.setData(Qt.UserRole, b.get("read_num", 0))
+            read_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            tbl.setItem(row, 4, read_item)
 
             # 简介用 tooltip 显示完整版
             abstract = b.get("abstract", "")
@@ -351,7 +457,6 @@ class FanqieRankTab(QWidget):
             tbl.setItem(row, 5, abstract_item)
 
         tbl.setSortingEnabled(True)
-        self.lbl_detail.setText(f"📚 详情: 已加载 {len(books)} 本")
 
     def load_snapshot_from_disk(self):
         """

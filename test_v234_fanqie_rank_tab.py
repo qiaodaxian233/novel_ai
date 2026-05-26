@@ -138,3 +138,20 @@ def test_11_disk_cache_read_format():
         data = json.load(f)
     assert data["detail"]["title"] == "早知道不这么玩了!"
     assert "剑与魔法" in data["detail"]["tags"]
+
+
+def test_12_filter_method_exists():
+    """题材筛选方法存在"""
+    src = open("ui/fanqie_rank_tab.py", encoding="utf-8").read()
+    assert "_on_filter_changed" in src
+    assert "_apply_filter" in src
+    assert "cmb_filter" in src
+
+
+def test_13_rank_snapshot_loading():
+    """load_details_from_disk 从 rank_snapshot 读数据"""
+    src = open("ui/fanqie_rank_tab.py", encoding="utf-8").read()
+    assert "rank_snapshot_" in src
+    assert "read_count_num" in src
+    assert "read_count_raw" in src
+    assert "read_display" in src
