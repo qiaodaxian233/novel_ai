@@ -86,6 +86,11 @@ class BrowserWorker(QObject):
     # emit (task_id, is_thinking)。主进程 _check_timeout 看到 thinking=True
     # 时延期 60 秒再查,不弹窗。
     task_thinking = pyqtSignal(str, bool)        # task_id, is_thinking
+    # v2.23.0 BUG-086: 番茄榜单扫描完成信号
+    # gen_inspiration 流程会先扫榜,scrape_fanqie_rank 任务完成时 emit
+    # (task_id, list[dict]) — books 列表(已解析,可直接传给 core.fanqie_rank_scraper)
+    # books 为空 = 扫榜失败 / 扫到 0 条,主进程要 fallback 到旧通用 prompt
+    rank_scraped = pyqtSignal(str, list)          # task_id, books_list
 
     DEBUG_PORT = 9222
 
@@ -535,6 +540,11 @@ class BrowserWorker(QObject):
                 prof = _profile_for_url(self._current_url())
                 self.response_received.emit(
                     task.get("task_id", ""), self._grab_last_response(prof))
+            elif action == "scrape_fanqie_rank":
+                # v2.23.0 BUG-086: 番茄榜单扫描
+                # 流程:navigate → 等懒加载 → 多重 selector 抓取 → emit rank_scraped
+                # 失败兜底:任何异常 → emit 空列表,主进程会 fallback 到旧 prompt
+                self._scrape_fanqie_rank(task)
             self.status_signal.emit("idle")
         except Exception as e:
             self.log_signal.emit(f"任务执行失败:{e}", "error")
@@ -545,6 +555,130 @@ class BrowserWorker(QObject):
             return self.driver.current_url or ""
         except Exception:
             return ""
+
+    def _scrape_fanqie_rank(self, task):
+        """
+        v2.23.0 BUG-086: 扫描番茄小说榜单页面
+
+        流程:
+          1. navigate 到榜单 URL(默认 https://fanqienovel.com/rank?enter_from=menu)
+          2. 等页面加载 + 滚动让懒加载内容出现
+          3. 用 JS 多重 selector 尝试抓 book 卡片
+          4. 解析每张卡的 title/category/abstract/read_count
+          5. emit rank_scraped 信号给主进程
+
+        失败兜底:任何异常 → emit 空列表,主进程会 fallback 到旧通用 prompt。
+        """
+        task_id = task.get("task_id", "fanqie_rank")
+        try:
+            from core.fanqie_rank_scraper import FANQIE_SCRAPER_PROFILE
+        except Exception as e:
+            self.log_signal.emit(
+                f"⚠ 扫榜模块导入失败:{e},fallback 到旧灵感 prompt", "warn")
+            self.rank_scraped.emit(task_id, [])
+            return
+
+        prof = FANQIE_SCRAPER_PROFILE
+        rank_url = task.get("url") or prof.get("rank_url", "")
+        if not rank_url:
+            self.log_signal.emit("⚠ 扫榜 URL 为空", "warn")
+            self.rank_scraped.emit(task_id, [])
+            return
+
+        if not self._is_alive():
+            self.log_signal.emit("⚠ 浏览器未就绪,无法扫榜", "warn")
+            self.rank_scraped.emit(task_id, [])
+            return
+
+        try:
+            self.log_signal.emit(f"📊 扫描番茄榜单:{rank_url}", "info")
+            self._goto(rank_url)
+            wait_sec = float(prof.get("wait_after_load_sec", 3.5))
+            time.sleep(wait_sec)
+
+            # 滚动让懒加载内容出现
+            scroll_steps = int(prof.get("scroll_steps", 3))
+            scroll_pause = float(prof.get("scroll_pause_sec", 0.6))
+            for i in range(scroll_steps):
+                try:
+                    self.driver.execute_script(
+                        "window.scrollBy(0, window.innerHeight * 0.8);")
+                except Exception:
+                    pass
+                time.sleep(scroll_pause)
+
+            # 多重 selector 尝试抓取
+            card_sels = prof.get("book_card_selectors", [])
+            title_sels = prof.get("title_selectors", [])
+            cat_sels = prof.get("category_selectors", [])
+            abs_sels = prof.get("abstract_selectors", [])
+            read_sels = prof.get("read_count_selectors", [])
+
+            # 用 JS 一次抓回所有卡片字段(避免 selenium 单元素查询的慢)
+            js = """
+            const cardSels = arguments[0];
+            const titleSels = arguments[1];
+            const catSels = arguments[2];
+            const absSels = arguments[3];
+            const readSels = arguments[4];
+            function findFirst(root, sels) {
+                for (const s of sels) {
+                    try {
+                        const el = root.querySelector(s);
+                        if (el && el.textContent) return el.textContent.trim();
+                    } catch(e) {}
+                }
+                return "";
+            }
+            let cards = [];
+            for (const cs of cardSels) {
+                try {
+                    const nodes = document.querySelectorAll(cs);
+                    if (nodes && nodes.length > 0) {
+                        cards = Array.from(nodes);
+                        break;
+                    }
+                } catch(e) {}
+            }
+            // 兜底:如果没有任何 selector 命中,尝试用通用启发式
+            // (页面里"看起来像书卡片"的元素 — 有 a 标签 + 文本)
+            if (cards.length === 0) {
+                try {
+                    const allAs = document.querySelectorAll('a[href*="/page/"], a[href*="/book/"]');
+                    const seen = new Set();
+                    for (const a of allAs) {
+                        let p = a.closest('div, li');
+                        if (p && !seen.has(p)) { seen.add(p); cards.push(p); }
+                        if (cards.length >= 50) break;
+                    }
+                } catch(e) {}
+            }
+            const out = [];
+            for (const card of cards.slice(0, 50)) {
+                const title = findFirst(card, titleSels) || (card.textContent || '').slice(0, 30);
+                const category = findFirst(card, catSels);
+                const abstract = findFirst(card, absSels);
+                const read_count = findFirst(card, readSels);
+                if (title || category) {
+                    out.push({title, category, abstract, read_count});
+                }
+            }
+            return out;
+            """
+            raw_data = self.driver.execute_script(
+                js, card_sels, title_sels, cat_sels, abs_sels, read_sels) or []
+
+            # 解析 + 去重
+            from core.fanqie_rank_scraper import parse_scraped_books
+            books = parse_scraped_books(raw_data)
+            self.log_signal.emit(
+                f"📊 扫榜完成:抓到 {len(raw_data)} 张卡片,有效 {len(books)} 本", "info")
+            # emit dict 列表(信号跨进程,Book 对象不能直接传)
+            self.rank_scraped.emit(task_id, [b.to_dict() for b in books])
+        except Exception as e:
+            self.log_signal.emit(
+                f"⚠ 扫榜异常:{e},fallback 到旧灵感 prompt", "warn")
+            self.rank_scraped.emit(task_id, [])
 
     def _goto(self, url):
         if not self._is_alive():

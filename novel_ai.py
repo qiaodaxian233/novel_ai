@@ -16,7 +16,7 @@
 """
 
 # ── 版本号(改这里就行,会同步到窗口标题/状态栏/关于框) ──
-APP_VERSION = "v2.22.3"
+APP_VERSION = "v2.23.0"
 # 版本号规则(用户铁律):格式 vX.YZ,小改动末位+1(v1.01→v1.02),
 # 大改动十位+1末位归零(v1.02→v1.10),v1.99 满 → v2.00 主版本进位。
 # 详见 项目对接记忆.md "版本号铁律" 段。
@@ -590,6 +590,12 @@ class MainWindow(QMainWindow):
         # thinking=True 就延期 60 秒再查)
         try:
             self.worker.task_thinking.connect(self._on_task_thinking)
+        except Exception:
+            pass
+
+        # v2.23.0 BUG-086: 番茄榜单扫描完成 → 主进程拼增强 prompt 发 AI
+        try:
+            self.worker.rank_scraped.connect(self._on_fanqie_rank_scraped)
         except Exception:
             pass
 
@@ -5829,6 +5835,40 @@ class MainWindow(QMainWindow):
     # ===================================================================
     # 多维自鞭策(C 模块)
     # ===================================================================
+    def _extract_hook_intensity_from_text(self, content):
+        """
+        v2.23.0 BUG-086 helper:从章节正文末尾的【断章钩子】元信息块解析强度
+
+        AI 输出的元信息块格式示例:
+            【断章钩子】
+            类型:倒计时
+            强度:★★★★★
+            内容:还有 7 天系统就要重启
+
+        返回 0-5(★ 数量),解析失败或没声明就返回 0。
+
+        实现要点:
+        - 只看末尾 ~2000 字(章节末尾才有元信息块),避免误抓正文里的"★"
+        - 用 re 匹配"强度"行,统计连续 ★ 字符
+        """
+        if not content:
+            return 0
+        import re as _re
+        tail = content[-2000:] if len(content) > 2000 else content
+        # 找 "【断章钩子】" 块
+        m_block = _re.search(r'【断章钩子】(.*?)(?:【|$)', tail, _re.DOTALL)
+        if not m_block:
+            return 0
+        block = m_block.group(1)
+        # 找"强度"行的 ★ 数量(支持中英文冒号 + 容错空格)
+        m_int = _re.search(r'强度[\s::]+([★☆⭐\s]+)', block)
+        if not m_int:
+            return 0
+        star_seq = m_int.group(1).strip()
+        # 数有几个 ★ / ⭐(☆ 视为半颗,不计)
+        count = star_seq.count('★') + star_seq.count('⭐')
+        return min(count, 5)
+
     def _check_chapter_quality(self, content, target_words, min_words):
         """对章节做即时校验(无 AI 调用部分)。
         返回 (issues:list[str], need_ai_audit:bool)"""
@@ -5858,6 +5898,24 @@ class MainWindow(QMainWindow):
                 has_hook = _PE.check_chapter_has_hook(content)
             except Exception:
                 has_hook = True  # 兜底:pangu 不可用就放行,不要硬崩
+            # v2.23.0 BUG-086 钩子检测松绑:
+            # 实战(第 1 章死磕 10 次全失败):AI 元信息块里声明了"钩子类型=倒计时
+            # / 强度★★★★★ / 内容=...",但正文末段没有 HOOK_MARKERS 任一关键词
+            # (倒计时类钩子 "还有 7 天" 不在 80+ 关键词列表里)。导致钩子入库成功
+            # 但写后校验失败,死磕 10 次浪费 ~7 分钟 + 大量 token。
+            #
+            # 修法:HOOK_MARKERS 检测失败时,解析 【断章钩子】 元信息块,如果 AI
+            # 声明了 intensity ≥ ★★★★(4 星以上),视为"AI 自己说写了强钩子"
+            # → 放行,不再要求关键词必须命中。代价:AI 可能虚标强度,但实战
+            # 4 星以上虚标的概率远低于关键词列表不全的概率。日志说明放行原因
+            # 让用户能审。
+            if not has_hook:
+                hook_meta_intensity = self._extract_hook_intensity_from_text(content)
+                if hook_meta_intensity >= 4:
+                    self.tab_generation.log(
+                        f"  · [BUG-086] 关键词未命中但元信息声明强度 ★{'★'*hook_meta_intensity} "
+                        f"→ 放行(信任 AI 元信息;关键词列表跟不上创意)", "info")
+                    has_hook = True
             if not has_hook:
                 issues.append(
                     "章末缺少钩子:末段无悬念/转折/留白/反差元素,"
@@ -8780,10 +8838,126 @@ class MainWindow(QMainWindow):
         if not genres:
             QMessageBox.warning(self, "提示", "请至少选一个题材"); return
         platform = self.tab_settings.get_platform()
+        # v2.23.0 BUG-086: 扫榜增强灵感
+        # 新流程:平台是"番茄小说"+ 浏览器就绪 → 先扫榜抓真实题材趋势 → 拼增强 prompt
+        # 否则 → fallback 旧通用 prompt(行为不变)
+        # 30 分钟缓存复用,避免每次开新页面
+        if (platform == "番茄小说" and self.worker.is_ready()
+                and self._gen_inspiration_try_scrape(genres, platform)):
+            # 已经触发扫榜任务,await rank_scraped 信号回调
+            # 回调里再发 AI prompt
+            return
+        # Fallback:旧通用 prompt
+        self._gen_inspiration_send_fallback(genres, platform)
+
+    def _gen_inspiration_send_fallback(self, genres, platform):
+        """v2.23.0 BUG-086: fallback 路径 — 走旧通用 prompt"""
         prompt = PROMPTS["creative_inspiration"].format(
             genre="/".join(genres), platform=platform)
         self.tab_generation.log(
             f"💡 正在根据{platform}{'/'.join(genres)}类热榜生成创意...", "info")
+        self._send_to_ai(prompt, "创意灵感", target="inspiration")
+
+    def _gen_inspiration_try_scrape(self, genres, platform):
+        """
+        v2.23.0 BUG-086:尝试扫榜,返回 True 表示扫榜任务已触发 / 缓存命中已发 AI
+        返回 False 表示扫榜不可用,让上层走 fallback。
+        """
+        try:
+            from core.fanqie_rank_scraper import (
+                FanqieRankCache, filter_by_genres,
+                build_enhanced_inspiration_prompt, Book)
+        except Exception as e:
+            self.tab_generation.log(
+                f"⚠ 扫榜模块导入失败:{e},fallback 到通用 prompt", "warn")
+            return False
+
+        # 单例缓存,挂在 self 上
+        if not hasattr(self, "_fanqie_rank_cache"):
+            self._fanqie_rank_cache = FanqieRankCache()
+
+        cached = self._fanqie_rank_cache.get(platform, genres)
+        if cached:
+            self.tab_generation.log(
+                f"💡 番茄榜单缓存命中({len(cached)} 本),直接用", "info")
+            self._gen_inspiration_with_books(cached, genres, platform)
+            return True
+
+        # 触发扫榜任务
+        self.tab_generation.log(
+            f"💡 准备扫描番茄榜单(用户选 {'/'.join(genres)} 类)...", "info")
+        # 暂存上下文,扫榜回调时用
+        self._pending_inspiration_ctx = {
+            "genres": list(genres),
+            "platform": platform,
+        }
+        self.worker.submit({
+            "action": "scrape_fanqie_rank",
+            "task_id": "fanqie_rank_scrape",
+        })
+        return True
+
+    def _on_fanqie_rank_scraped(self, task_id, books_data):
+        """
+        v2.23.0 BUG-086:worker 扫榜完成回调,books_data 是 list[dict]
+
+        - 扫到 0 条 → fallback 到旧通用 prompt
+        - 扫到正常 → filter by genres → build_enhanced_prompt → 发 AI
+        """
+        ctx = getattr(self, "_pending_inspiration_ctx", None)
+        if not ctx:
+            # 不是 gen_inspiration 触发的扫榜?不该发生,稳妥起见忽略
+            return
+        # 用完即清
+        self._pending_inspiration_ctx = None
+        genres = ctx.get("genres", [])
+        platform = ctx.get("platform", "番茄小说")
+        try:
+            from core.fanqie_rank_scraper import (
+                Book, parse_scraped_books)
+        except Exception:
+            self._gen_inspiration_send_fallback(genres, platform)
+            return
+        # books_data 是 dict 列表(信号传递),转回 Book 对象
+        books = parse_scraped_books(books_data) if books_data else []
+        if not books:
+            self.tab_generation.log(
+                "⚠ 扫榜返回 0 条,fallback 到通用 prompt", "warn")
+            self._gen_inspiration_send_fallback(genres, platform)
+            return
+        # 缓存
+        if hasattr(self, "_fanqie_rank_cache"):
+            self._fanqie_rank_cache.put(platform, genres, books)
+        self._gen_inspiration_with_books(books, genres, platform)
+
+    def _gen_inspiration_with_books(self, books, genres, platform):
+        """
+        v2.23.0 BUG-086:扫到的真实榜单 → filter by genres → build enhanced prompt → 发 AI
+        """
+        try:
+            from core.fanqie_rank_scraper import (
+                filter_by_genres, build_enhanced_inspiration_prompt)
+        except Exception:
+            self._gen_inspiration_send_fallback(genres, platform)
+            return
+        filtered, hard_n, relax_n = filter_by_genres(books, genres)
+        if not filtered:
+            self.tab_generation.log(
+                f"⚠ 扫到 {len(books)} 本但题材匹配 0 条,fallback 到通用 prompt", "warn")
+            self._gen_inspiration_send_fallback(genres, platform)
+            return
+        match_summary = (
+            f"题材严格匹配 {hard_n} 本" +
+            (f" + 题材相近补充 {relax_n} 本" if relax_n > 0 else "")
+        )
+        self.tab_generation.log(
+            f"💡 榜单过滤后共 {len(filtered)} 本({match_summary})→ 拼增强 prompt", "info")
+        prompt = build_enhanced_inspiration_prompt(filtered, genres, platform)
+        if not prompt:
+            self.tab_generation.log(
+                "⚠ 增强 prompt 构造失败,fallback 到通用 prompt", "warn")
+            self._gen_inspiration_send_fallback(genres, platform)
+            return
         self._send_to_ai(prompt, "创意灵感", target="inspiration")
 
     def _show_inspiration_picker(self, content):

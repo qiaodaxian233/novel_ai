@@ -131,7 +131,12 @@ def test_bug085_polling_exit_emits_false():
 
 def test_bug085_version_bumped():
     code = _read('novel_ai.py')
-    assert re.search(r'APP_VERSION\s*=\s*["\']v2\.22\.3["\']', code)
+    # v2.22.3 + 起,允许后续 minor/patch 继续升,只要 ≥ v2.22.3
+    m = re.search(r'APP_VERSION\s*=\s*["\']v?(\d+)\.(\d+)\.(\d+)', code)
+    assert m
+    major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    assert (major, minor, patch) >= (2, 22, 3), \
+        f"APP_VERSION 必须 ≥ v2.22.3,实际 v{major}.{minor}.{patch}"
 
 
 # ============ 综合 ============
