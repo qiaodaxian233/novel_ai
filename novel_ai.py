@@ -1542,6 +1542,12 @@ class MainWindow(QMainWindow):
             self._update_ctx_estimate()
         except Exception:
             pass
+        # v2.23.4: 同步 AI 工具箱章节下拉
+        try:
+            if hasattr(self, "tab_ai_toolbox"):
+                self.tab_ai_toolbox.refresh_chapters()
+        except Exception:
+            pass
 
     def _update_task_monitor(self, task_id, status, retry=0):
         """更新任务监控状态"""
