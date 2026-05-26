@@ -772,9 +772,20 @@ class BrowserWorker(QObject):
             label = board["label"]
             books = []
             try:
-                self._goto(url)
-                # 等加载;比 v2.23.0 单榜 3.5s 短一些(74 榜要扫,每榜慢就要 4 分钟)
-                time.sleep(2.0)
+                # v2.23.2 BUG-087: 不能用 self._goto() — 它有"同 host 跳过 navigate"优化
+                # (双 AI 切换时复用标签),导致 74 次循环里浏览器从来没真正切换 URL,
+                # 一直停在第一个 fanqienovel.com 标签的原始页面(可能是详情页),
+                # 每次抓 page_source 都是同一本书的详情页 → 全部 0 本。
+                # 修法:直接 driver.get(url) 强制每次都真 navigate。
+                try:
+                    self.driver.get(url)
+                except Exception as ge:
+                    raise RuntimeError(f"navigate 失败: {ge}")
+
+                # 等 React 渲染完(番茄是 SPA,JS 渲染需要时间)
+                time.sleep(2.5)
+
+                # 滚动让懒加载内容出现
                 try:
                     self.driver.execute_script(
                         "window.scrollBy(0, window.innerHeight * 0.8);")
@@ -782,19 +793,70 @@ class BrowserWorker(QObject):
                     pass
                 time.sleep(0.5)
 
-                # 抓 page_source(纯文本,字体反爬绕不开,但 parse_rank_page_minimal
-                # 只抽 book_id + 在读数,这两个字段在 HTML 里是干净的)
-                html = ""
+                # v2.23.2 BUG-087: 用 JS DOM 查询而不是 page_source 正则。
+                # page_source 在 React 应用里可能是渲染前的 #root 空 div,
+                # 而 querySelectorAll 拿到的是渲染后的真实 DOM。
+                # 抓:所有指向 /page/{book_id} 的 a 标签 + 同 row 里的"在读 XX万"文本
+                # 字体反爬只影响显示文本,DOM href 和数字+万的文本是干净的
                 try:
-                    html = self.driver.page_source or ""
-                except Exception:
-                    html = ""
+                    raw_books = self.driver.execute_script("""
+                        const links = document.querySelectorAll('a[href*="/page/"]');
+                        const seen = new Set();
+                        const out = [];
+                        for (const a of links) {
+                            const href = a.getAttribute('href') || '';
+                            const m = href.match(/\\/page\\/(\\d{10,})/);
+                            if (!m) continue;
+                            const bid = m[1];
+                            if (seen.has(bid)) continue;
+                            seen.add(bid);
+                            // 找最近的 row 容器(向上 4 层找)
+                            let row = a;
+                            for (let i = 0; i < 6; i++) {
+                                if (!row.parentElement) break;
+                                row = row.parentElement;
+                                // 看这层有没有"万"字(在读数),有就停
+                                if (row.textContent && /\\d+(?:\\.\\d+)?\\s*万/.test(row.textContent)) {
+                                    break;
+                                }
+                            }
+                            const rowText = row.textContent || '';
+                            const readMatch = rowText.match(/(\\d+(?:\\.\\d+)?)\\s*万/);
+                            out.push({
+                                book_id: bid,
+                                read_count_raw: readMatch ? readMatch[0] : '',
+                                read_count_num: readMatch ? Math.round(parseFloat(readMatch[1]) * 10000) : 0,
+                            });
+                            if (out.length >= 10) break;
+                        }
+                        return out;
+                    """) or []
+                    books = list(raw_books) if raw_books else []
+                except Exception as js_err:
+                    self.log_signal.emit(
+                        f"⚠ 扫榜 [{label}] JS 抓取失败({js_err}),"
+                        f"fallback 到 page_source 正则", "warn")
+                    # JS fallback 到 page_source 正则(v2.23.1 老路径)
+                    try:
+                        html = self.driver.page_source or ""
+                    except Exception:
+                        html = ""
+                    books = parse_rank_page_minimal(html, max_books=10)
 
-                books = parse_rank_page_minimal(html, max_books=10)
                 if books:
                     scanned_ok += 1
                 else:
                     scanned_fail += 1
+
+                # v2.23.2 BUG-087: 第一榜 + 失败榜各打一条 DEBUG,方便诊断
+                if i == 1 or (not books and scanned_fail <= 3):
+                    try:
+                        cur_url = self.driver.current_url
+                    except Exception:
+                        cur_url = "?"
+                    self.log_signal.emit(
+                        f"  [DEBUG] {label}: 当前 URL={cur_url[-60:]}, "
+                        f"抓到 {len(books)} 本", "info")
 
             except Exception as e:
                 scanned_fail += 1
