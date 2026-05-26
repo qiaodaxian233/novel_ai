@@ -47,7 +47,7 @@ class FanqieRankTab(QWidget):
     # 用户点"刷新扫榜"发出(主进程 connect 后触发 worker 任务)
     request_rescan = pyqtSignal()
     # 用户点"补抓失败详情"发出(主进程 connect 后触发 detail batch)
-    request_retry_details = pyqtSignal(list)  # [(book_id, label, category), ...]
+    request_retry_details = pyqtSignal(object)  # [(book_id, label, category), ...]
     request_log = pyqtSignal(str, str)
 
     def __init__(self, mw=None, parent=None):

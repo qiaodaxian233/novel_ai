@@ -774,6 +774,24 @@ class BrowserWorker(QObject):
         scanned_ok = 0
         scanned_fail = 0
 
+        # v2.23.4 BUG-B: 开独立标签扫榜(不覆盖 DeepSeek/Qwen)
+        _orig_handle = None
+        _scan_handle = None
+        try:
+            _orig_handle = self.driver.current_window_handle
+            _before = set(self.driver.window_handles)
+            self.driver.execute_script("window.open('about:blank','_blank');")
+            time.sleep(0.3)
+            _after = set(self.driver.window_handles)
+            _new = _after - _before
+            if _new:
+                _scan_handle = _new.pop()
+                self.driver.switch_to.window(_scan_handle)
+            else:
+                _scan_handle = _orig_handle
+        except Exception:
+            _scan_handle = _orig_handle
+
         for i, board in enumerate(all_urls, 1):
             # 取消检查:用户在进度对话框点了"用部分数据生成"
             if self._scan_cancel.is_set():
@@ -907,6 +925,15 @@ class BrowserWorker(QObject):
             f"📊 全榜扫描完成:共扫 {len(scraped)} 榜(成功 {scanned_ok}/失败 {scanned_fail}),"
             f"得到 {stats.get('total_books', 0)} 本(去重后 {stats.get('unique_books', 0)} 本)",
             "info")
+
+        # v2.23.4 BUG-B: 关掉扫榜标签,切回原标签
+        try:
+            if _scan_handle and _scan_handle != _orig_handle:
+                self.driver.switch_to.window(_scan_handle)
+                self.driver.close()
+                self.driver.switch_to.window(_orig_handle)
+        except Exception:
+            pass
 
         self.rank_all_scraped.emit(task_id, stats)
 
@@ -1094,8 +1121,10 @@ class BrowserWorker(QObject):
         if not self._is_alive():
             return
         try:
+            _saved_handle = self.driver.current_window_handle
             ai_hosts = ["chat.deepseek.com", "chat.qwen.ai"]
             found_ai = False
+            ai_handle = None
             for handle in self.driver.window_handles:
                 try:
                     self.driver.switch_to.window(handle)
@@ -1103,6 +1132,7 @@ class BrowserWorker(QObject):
                     for host in ai_hosts:
                         if host in url:
                             found_ai = True
+                            ai_handle = handle
                             break
                 except Exception:
                     continue
@@ -1118,6 +1148,14 @@ class BrowserWorker(QObject):
                 time.sleep(2)
                 self.log_signal.emit(
                     "✓ 已自动恢复 DeepSeek 标签", "info")
+            else:
+                # 切回调用前的标签(不破坏调用者的上下文)
+                try:
+                    self.driver.switch_to.window(_saved_handle)
+                except Exception:
+                    # _saved_handle 可能已被关闭,切到 AI 标签
+                    if ai_handle:
+                        self.driver.switch_to.window(ai_handle)
         except Exception:
             pass
 
