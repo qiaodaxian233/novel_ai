@@ -12103,23 +12103,37 @@ def main():
                 win._update_window_title()
                 print(f"[launcher] 加载项目: {_e}", flush=True)
 
-        # 自动识别 1K/2K/4K 分辨率
-        from PyQt5.QtWidgets import QDesktopWidget
-        screen = QDesktopWidget().screenGeometry()
+        # 自动识别 1K/2K/4K 分辨率(v2.23.4: 读窗口所在屏幕,不是默认屏)
         dpi = app.primaryScreen().logicalDotsPerInch() if hasattr(app, 'primaryScreen') else 96
-        sw, sh = screen.width(), screen.height()
+        try:
+            # 先 showMaximized 让窗口到它该去的屏幕上
+            win.showMaximized()
+            app.processEvents()
+            # 然后读窗口所在屏幕的几何
+            _win_screen = win.screen() if hasattr(win, 'screen') else None
+            if _win_screen:
+                _geo = _win_screen.geometry()
+                sw, sh = _geo.width(), _geo.height()
+                dpi = _win_screen.logicalDotsPerInch()
+            else:
+                from PyQt5.QtWidgets import QDesktopWidget
+                _geo = QDesktopWidget().screenGeometry()
+                sw, sh = _geo.width(), _geo.height()
+        except Exception:
+            from PyQt5.QtWidgets import QDesktopWidget
+            _geo = QDesktopWidget().screenGeometry()
+            sw, sh = _geo.width(), _geo.height()
         win.setMinimumSize(800, 600)
 
-        if sw >= 3840:
-            # 4K (3840×2160+)
+        # v2.23.4: 用 max(sw,sh) 判断分辨率(支持竖屏如 1080×1920)
+        _max_dim = max(sw, sh)
+        if _max_dim >= 3840:
             _res = "4K"
             _font_scale = 1.5
-        elif sw >= 2560:
-            # 2K (2560×1440+)
+        elif _max_dim >= 2560:
             _res = "2K"
             _font_scale = 1.2
         else:
-            # 1K (1920×1080 及以下)
             _res = "1K"
             _font_scale = 1.0
 

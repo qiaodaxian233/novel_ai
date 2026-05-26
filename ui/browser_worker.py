@@ -971,6 +971,26 @@ class BrowserWorker(QObject):
         self.log_signal.emit(
             f"📚 v2.23.3 后台开始抓详情:{total} 本(磁盘缓存 7 天)", "info")
 
+        # v2.23.4: 开新标签抓详情,不覆盖 DeepSeek/Qwen 标签
+        _original_handle = None
+        _detail_handle = None
+        try:
+            _original_handle = self.driver.current_window_handle
+            _handles_before = set(self.driver.window_handles)
+            self.driver.execute_script("window.open('about:blank','_blank');")
+            time.sleep(0.3)
+            _handles_after = set(self.driver.window_handles)
+            _new = _handles_after - _handles_before
+            if _new:
+                _detail_handle = _new.pop()
+                self.driver.switch_to.window(_detail_handle)
+                self.log_signal.emit(
+                    "📚 已开独立标签抓详情(不影响 AI 标签)", "info")
+            else:
+                _detail_handle = _original_handle
+        except Exception:
+            _detail_handle = _original_handle
+
         for i, (bid, label, category) in enumerate(book_ids, 1):
             # 取消检查
             if self._scan_cancel.is_set():
@@ -1046,7 +1066,60 @@ class BrowserWorker(QObject):
         self.log_signal.emit(
             f"📚 详情抓取完成:总 {total}(成功 {success} / 跳过 {skipped} / 失败 {fail})",
             "info")
+
+        # v2.23.4: 关掉详情标签,切回原标签
+        try:
+            if _detail_handle and _detail_handle != _original_handle:
+                self.driver.switch_to.window(_detail_handle)
+                self.driver.close()
+                self.driver.switch_to.window(_original_handle)
+                self.log_signal.emit(
+                    "📚 详情标签已关闭,切回 AI 标签", "info")
+        except Exception:
+            pass
+
+        # v2.23.4: 检查 DeepSeek 标签是否还在,不在就恢复
+        try:
+            self._ensure_ai_tab_alive()
+        except Exception:
+            pass
+
         self.detail_batch_done.emit(task_id, success, fail)
+
+    def _ensure_ai_tab_alive(self):
+        """
+        v2.23.4: 检查 AI 标签(DeepSeek / Qwen)是否还在打开状态。
+        如果被详情抓取覆盖或关闭了,自动重新打开。
+        """
+        if not self._is_alive():
+            return
+        try:
+            ai_hosts = ["chat.deepseek.com", "chat.qwen.ai"]
+            found_ai = False
+            for handle in self.driver.window_handles:
+                try:
+                    self.driver.switch_to.window(handle)
+                    url = self.driver.current_url or ""
+                    for host in ai_hosts:
+                        if host in url:
+                            found_ai = True
+                            break
+                except Exception:
+                    continue
+                if found_ai:
+                    break
+
+            if not found_ai:
+                # DeepSeek 标签不在了,重新打开
+                self.log_signal.emit(
+                    "⚠ AI 标签(DeepSeek)不见了,自动重新打开...", "warn")
+                self.driver.execute_script(
+                    "window.open('https://chat.deepseek.com/','_blank');")
+                time.sleep(2)
+                self.log_signal.emit(
+                    "✓ 已自动恢复 DeepSeek 标签", "info")
+        except Exception:
+            pass
 
     def _goto(self, url):
         if not self._is_alive():
