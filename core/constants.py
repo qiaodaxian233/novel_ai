@@ -15,7 +15,7 @@ AI_URLS = {
     "DeepSeek": "https://chat.deepseek.com/",
     "Qwen":     "https://chat.qwen.ai/",
     "元宝":     "https://yuanbao.tencent.com/",
-    "小米AI":   "https://www.xiaomi.com/",
+    # 小米AI 暂无专用 profile，已移除，避免用户选了跑 _default 兜底 selector 失效
 }
 
 GENRES = [

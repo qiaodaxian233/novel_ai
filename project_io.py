@@ -29,11 +29,30 @@ project_io.py · v1.30 — 文件夹格式项目存档 IO 层
 """
 from __future__ import annotations
 import json
+import os
 import re
 import shutil
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
+
+
+def _atomic_write(path: Path, data: str, encoding: str = "utf-8") -> None:
+    """写文件前先写临时文件，再 os.replace 原子替换，防止写到一半崩溃丢数据。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
 
 PROJECT_SCHEMA_VERSION = 1
 
@@ -78,8 +97,7 @@ def save_project_folder(folder: str | Path, payload: dict) -> Path:
         "title": payload.get("title", ""),
         "saved_at": datetime.now().isoformat(),
     }
-    (folder / "project.json").write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write(folder / "project.json", json.dumps(meta, ensure_ascii=False, indent=2))
 
     # 2. settings.json(创作设置 + critique + conv_slots)
     settings = {
@@ -89,8 +107,7 @@ def save_project_folder(folder: str | Path, payload: dict) -> Path:
         "critique": payload.get("critique", {}),
         "conv_slots": payload.get("conv_slots", {}),
     }
-    (folder / "settings.json").write_text(
-        json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write(folder / "settings.json", json.dumps(settings, ensure_ascii=False, indent=2))
 
     # 3. outline/*.md(prose 大纲六件套)
     outline_dir = folder / "outline"
@@ -109,7 +126,7 @@ def save_project_folder(folder: str | Path, payload: dict) -> Path:
     for key, filename in OUTLINE_KEYS:
         content = (payload.get(key) or "").strip()
         if content:
-            (outline_dir / filename).write_text(content, encoding="utf-8")
+            _atomic_write(outline_dir / filename, content)
 
     # 4. memory/(prose + config)
     memory_dir = folder / "memory"
@@ -125,14 +142,13 @@ def save_project_folder(folder: str | Path, payload: dict) -> Path:
     for key, filename in MEMORY_PROSE:
         content = (mem.get(key) or "").strip()
         if content:
-            (memory_dir / filename).write_text(content, encoding="utf-8")
+            _atomic_write(memory_dir / filename, content)
     # 配置(auto_summarize / auto_inject / recent_n / summary_len)
     config = {k: mem[k] for k in
               ("auto_summarize", "auto_inject", "recent_n", "summary_len")
               if k in mem}
     if config:
-        (memory_dir / "config.json").write_text(
-            json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write(memory_dir / "config.json", json.dumps(config, ensure_ascii=False, indent=2))
 
     # 5. chapters/(每章一个 .md 纯正文 + _meta.json 元信息)
     chapters_dir = folder / "chapters"
@@ -148,43 +164,34 @@ def save_project_folder(folder: str | Path, payload: dict) -> Path:
         filename = f"{i:03d}-{safe}.md"
         # 纯正文写 .md
         content = ch.get("content") or ""
-        (chapters_dir / filename).write_text(content, encoding="utf-8")
+        _atomic_write(chapters_dir / filename, content)
         # 元信息(除 content 外的所有字段)写到 _meta.json
         rest = {k: v for k, v in ch.items() if k != "content"}
         meta_map[str(i)] = rest
     if meta_map:
-        (chapters_dir / "_meta.json").write_text(
-            json.dumps(meta_map, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write(chapters_dir / "_meta.json", json.dumps(meta_map, ensure_ascii=False, indent=2))
     elif (chapters_dir / "_meta.json").exists():
         (chapters_dir / "_meta.json").unlink()
 
     # 6. world.json(6 库)
     charlib = payload.get("charlib") or {}
     if charlib:
-        (folder / "world.json").write_text(
-            json.dumps(charlib, ensure_ascii=False, indent=2),
-            encoding="utf-8")
+        _atomic_write(folder / "world.json", json.dumps(charlib, ensure_ascii=False, indent=2))
 
     # 7. canon.json
     canon = payload.get("canon") or {}
     if canon:
-        (folder / "canon.json").write_text(
-            json.dumps(canon, ensure_ascii=False, indent=2),
-            encoding="utf-8")
+        _atomic_write(folder / "canon.json", json.dumps(canon, ensure_ascii=False, indent=2))
 
     # 8. skills.json
     skills = payload.get("skills") or {}
     if skills:
-        (folder / "skills.json").write_text(
-            json.dumps(skills, ensure_ascii=False, indent=2),
-            encoding="utf-8")
+        _atomic_write(folder / "skills.json", json.dumps(skills, ensure_ascii=False, indent=2))
 
     # 9. lifespan.json(可选)
     lifespan = payload.get("lifespan_loops") or {}
     if lifespan:
-        (folder / "lifespan.json").write_text(
-            json.dumps(lifespan, ensure_ascii=False, indent=2),
-            encoding="utf-8")
+        _atomic_write(folder / "lifespan.json", json.dumps(lifespan, ensure_ascii=False, indent=2))
 
     return folder
 

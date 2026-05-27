@@ -38,7 +38,7 @@ from PyQt5.QtGui import (
     QBrush, QPen, QIcon,
 )
 
-SERVER_BASE   = "http://upd.qiaodaxian233.cloud"
+SERVER_BASE   = "https://upd.qiaodaxian233.cloud"
 APP_SECRET    = "a8f3k2m9x7q1w6e4r5t0y2u8i3o9p7l1a8f3k2m9x7q1w6e4r5t0y2u8i3o9p7"
 APP_VERSION   = "7.1.0"
 APP_NAME      = "AI 写作工作台"
@@ -48,10 +48,12 @@ TIMEOUT       = 10
 HEARTBEAT_SEC = 1800
 
 # ──────────────────────────────────────────────────────────
-#  开发模式开关: True = 跳过所有网络验证，直接进入主窗口
-#  正式发布前务必改回 False
+#  开发模式开关: 通过环境变量控制，不写死在源码里
+#  本地开发: export NOVEL_AI_DEV_MODE=1
+#  正式发布: 不设此变量即为 False，无需改源码
 # ──────────────────────────────────────────────────────────
-DEV_MODE = True
+import os as _os
+DEV_MODE = _os.getenv("NOVEL_AI_DEV_MODE", "0") == "1"
 
 
 # ─────────────────────────────────────────────────────────
