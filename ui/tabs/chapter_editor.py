@@ -69,8 +69,38 @@ class ChapterEditor(QWidget):
         self.btn_laodao.setToolTip(
             "请 AI 扮演十五年资深网文编辑老刀,毒舌点评当前章节。\n"
             "8 维度 + 致命伤 / 三章弃书率预估。\n"
-            "如果点评不通过,会自动再跑一次。")
+            "若弃书率超过目标值,自动重写并再点评,直到达标或到最大轮数。")
         self.btn_laodao.clicked.connect(self._on_laodao_critique)
+
+        # ── 弃书率目标设置 ──
+        from PyQt5.QtWidgets import QSpinBox, QLabel
+        from PyQt5.QtCore import QSettings
+        self._laodao_target_lbl = QLabel("目标弃书率≤")
+        self._laodao_target_lbl.setStyleSheet("font-size:11px; color:#8fa3c4;")
+        self.spn_laodao_target = QSpinBox()
+        self.spn_laodao_target.setRange(10, 80)
+        self.spn_laodao_target.setSuffix("%")
+        self.spn_laodao_target.setFixedWidth(72)
+        self.spn_laodao_target.setToolTip(
+            "老刀点评后自动重写的弃书率门槛。\n"
+            "弃书率 > 此值 → 自动重写再点评，直到达标或满 5 轮。\n"
+            "建议 30-40%。")
+        _saved = QSettings("NovelAI", "Laodao").value("target_quit_rate", 35, type=int)
+        self.spn_laodao_target.setValue(_saved)
+        self.spn_laodao_target.valueChanged.connect(
+            lambda v: QSettings("NovelAI", "Laodao").setValue("target_quit_rate", v))
+
+        self._laodao_max_lbl = QLabel("最多")
+        self._laodao_max_lbl.setStyleSheet("font-size:11px; color:#8fa3c4;")
+        self.spn_laodao_max = QSpinBox()
+        self.spn_laodao_max.setRange(1, 8)
+        self.spn_laodao_max.setSuffix("轮")
+        self.spn_laodao_max.setFixedWidth(60)
+        self.spn_laodao_max.setToolTip("自动重写最多循环几轮，防止死循环。")
+        _saved_max = QSettings("NovelAI", "Laodao").value("max_autofix_rounds", 3, type=int)
+        self.spn_laodao_max.setValue(_saved_max)
+        self.spn_laodao_max.valueChanged.connect(
+            lambda v: QSettings("NovelAI", "Laodao").setValue("max_autofix_rounds", v))
         self.btn_pangu_spiral = QPushButton("🌀 螺旋诊断")
         self.btn_pangu_spiral.setStyleSheet(
             "background:#253352;color:white;padding:4px 10px;border-radius:3px;")
@@ -92,6 +122,10 @@ class ChapterEditor(QWidget):
                   self.btn_pangu_spiral, self.btn_pangu_preview,
                   self.btn_style_check, self.btn_regen_alt):
             btn_row.addWidget(b)
+        btn_row.addWidget(self._laodao_target_lbl)
+        btn_row.addWidget(self.spn_laodao_target)
+        btn_row.addWidget(self._laodao_max_lbl)
+        btn_row.addWidget(self.spn_laodao_max)
         btn_row.addStretch()
         # v1.10:TTS 朗读控件 — 单独一组,右侧对齐
         self.btn_tts_play = QPushButton("🔊 朗读本章")

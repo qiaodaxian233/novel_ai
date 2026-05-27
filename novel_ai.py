@@ -3196,28 +3196,51 @@ class MainWindow(QMainWindow):
         prompt = get_default_engine().build_quality_check_prompt(content)
         self._send_to_ai(prompt, "盘古30项质检", target="pangu_qcheck")
 
-    def _on_laodao_critique(self, content, retry_round=1):
+
+    @staticmethod
+    def _parse_laodao_quit_rate(critique_text):
+        """从老刀点评里解析弃书率，返回 int 或 None"""
+        import re as _re
+        for pat in [r'三章弃书率预估[：:：]\s*(\d+)\s*%',
+                    r'弃书率[^\d]{0,5}(\d+)\s*%',
+                    r'弃书率预估[：:：]\s*(\d+)\s*%']:
+            m = _re.search(pat, critique_text)
+            if m:
+                return int(m.group(1))
+        return None
+
+    def _on_laodao_critique(self, content, retry_round=1,
+                             autofix_round=0, max_rounds=3, target_rate=35):
         """🔪 老刀毒舌点评:让 AI 扮老刀给当前章节开刀。
-        retry_round=N 表示第 N 轮(不通过会自动跑下一轮,最多 3 轮)"""
+        retry_round: 格式重试轮次(最多3次)
+        autofix_round: 自动重写循环计数(0=未进入循环)"""
         if not self.worker.is_ready():
             QMessageBox.warning(self, "请先启动浏览器", "请先启动浏览器并完成登录")
             return
         # 安全截断:老刀 prompt 本身就 ~1.5k,加章节正文要控制总长
         snippet = content[:6000] if len(content) > 6000 else content
         prompt = PROMPTS["critique_laodao"].format(content=snippet)
+        loop_info = f" [自动循环第{autofix_round}轮]" if autofix_round > 0 else ""
         self.tab_generation.log(
-            f"▶ 召唤老刀 (第 {retry_round} 轮),约 1 分钟回填...", "info")
+            f"▶ 召唤老刀 (第 {retry_round} 轮){loop_info},约 1 分钟回填...", "info")
         self._send_to_ai(
             prompt, f"老刀毒舌点评-第{retry_round}轮",
             target="laodao_critique",
             retry_round=retry_round,
             original_content=content,
+            autofix_round=autofix_round,
+            max_rounds=max_rounds,
+            target_rate=target_rate,
         )
 
     def _on_laodao_critique_response(self, content, meta):
-        """老刀点评返回 → 弹窗展示 + 如点评不通过 → 自动再跑一轮(最多 3 轮)"""
-        retry_round = meta.get("retry_round", 1)
+        """老刀点评返回 → 解析弃书率 → 自动重写循环 → 弹窗展示"""
+        retry_round   = meta.get("retry_round", 1)
         original_content = meta.get("original_content", "")
+        autofix_round = meta.get("autofix_round", 0)   # 已重写几轮
+        from PyQt5.QtCore import QSettings as _QS_ld
+        target_rate = _QS_ld("NovelAI", "Laodao").value("target_quit_rate", 35, type=int)
+        max_rounds  = _QS_ld("NovelAI", "Laodao").value("max_autofix_rounds", 3, type=int)
         # 简单的"成功"判定:老刀回复要包含【逐条开刀】或❌或【综合诊断】才算成功格式
         success_markers = ("逐条开刀", "综合诊断", "❌", "🔪", "存活概率", "致命伤")
         is_valid = any(m in content for m in success_markers)
@@ -3240,15 +3263,44 @@ class MainWindow(QMainWindow):
                     self, "老刀点评失败",
                     f"3 轮都没拿到合格点评。最后返回(前 500 字):\n\n{content[:500]}")
                 return
+        # ── 弃书率解析 + 自动重写循环 ──
+        quit_rate = self._parse_laodao_quit_rate(content)
+        if quit_rate is not None:
+            self.tab_generation.log(
+                f"📊 老刀弃书率: {quit_rate}%  目标: ≤{target_rate}%"
+                f"  (已重写: {autofix_round}/{max_rounds}轮)", "info")
+        if (quit_rate is not None
+                and quit_rate > target_rate
+                and autofix_round < max_rounds):
+            self.tab_generation.log(
+                f"🔄 弃书率 {quit_rate}% 超目标 {target_rate}%，"
+                f"触发第 {autofix_round + 1} 轮自动重写...", "warn")
+            self._on_laodao_autofix_request(
+                content, original_content,
+                autofix_round=autofix_round + 1,
+                max_rounds=max_rounds,
+                target_rate=target_rate,
+            )
+            return
+        if quit_rate is not None and autofix_round > 0:
+            if quit_rate <= target_rate:
+                self.tab_generation.log(
+                    f"✅ 弃书率达标! {quit_rate}% ≤ {target_rate}%，共重写 {autofix_round} 轮", "success")
+            else:
+                self.tab_generation.log(
+                    f"⚠ 已达最大轮数 {max_rounds}，最终弃书率 {quit_rate}%，停止", "warn")
+
         # 弹窗展示
         dlg = QDialog(self)
         dlg.setWindowTitle(f"🔪 老刀点评(第 {retry_round} 轮)")
         dlg.resize(900, 700)
         lay = QVBoxLayout(dlg)
+        _rate_html = (f"  弃书率: <b style='color:#f04c5a'>{quit_rate}%</b>"
+                      f" (目标≤{target_rate}%)" if quit_rate is not None else "")
         top = QLabel(
             f"<h3 style='color:#c0392b'>🔪 老刀的开刀报告</h3>"
             f"<p>第 {retry_round} 轮 · {len(content)} 字 · "
-            f"基于 {len(original_content)} 字的章节正文</p>")
+            f"基于 {len(original_content)} 字的章节正文{_rate_html}</p>")
         top.setTextFormat(Qt.RichText)
         lay.addWidget(top)
         txt = QPlainTextEdit()
@@ -3290,8 +3342,10 @@ class MainWindow(QMainWindow):
             f"✓ 老刀第 {retry_round} 轮点评完成,{len(content)} 字", "success")
         dlg.exec_()
 
-    def _on_laodao_autofix_request(self, critique_text, original_chapter):
-        """🔧 按老刀建议重写 — 把点评 + 原文发 AI,让它按建议改"""
+    def _on_laodao_autofix_request(self, critique_text, original_chapter,
+                                    autofix_round=0, max_rounds=3, target_rate=35):
+        """🔧 按老刀建议重写 — 把点评 + 原文发 AI,让它按建议改
+        autofix_round: 当前是第几轮自动重写(0=手动触发)"""
         if not original_chapter or not original_chapter.strip():
             QMessageBox.warning(self, "提示", "原章节内容为空,无法修复")
             return
@@ -3313,17 +3367,23 @@ class MainWindow(QMainWindow):
             critique=critique_snip,
             content=content_snip,
         )
+        loop_info = f" (自动第{autofix_round}轮)" if autofix_round > 0 else ""
         self.tab_generation.log(
-            f"▶ AI 按老刀建议重写第 {ch_idx+1} 章,约 1-2 分钟回填...", "info")
+            f"▶ AI 按老刀建议重写第 {ch_idx+1} 章{loop_info},约 1-2 分钟回填...", "info")
         self._send_to_ai(
             prompt, f"老刀修复-第{ch_idx+1}章",
             target="laodao_autofix",
             ch_idx=ch_idx,
             original_chapter=original_chapter,
+            autofix_round=autofix_round,
+            max_rounds=max_rounds,
+            target_rate=target_rate,
         )
 
-    def _on_laodao_autofix_response(self, content, ch_idx, original_chapter):
-        """老刀修复返回 → 回填当前章节(原版本自动备份到 .backups)"""
+    def _on_laodao_autofix_response(self, content, ch_idx, original_chapter,
+                                     autofix_round=0, max_rounds=3, target_rate=35):
+        """老刀修复返回 → 回填当前章节(原版本自动备份到 .backups)
+        如 autofix_round>0 且未达最大轮，回填后自动再跑老刀点评"""
         if not content or not content.strip():
             QMessageBox.warning(
                 self, "老刀修复失败",
@@ -3374,18 +3434,26 @@ class MainWindow(QMainWindow):
                         f"⚠ 保存失败但内容已回填,可手动保存:{_e_sv}", "warn")
             try:
                 self.tab_generation.log(
-                    f"✓ 老刀建议重写完成第 {ch_idx+1} 章:{orig_len}→{new_len} 字。"
+                    f"✓ 老刀重写完成第 {ch_idx+1} 章:{orig_len}→{new_len} 字。"
                     f"原版本可通过菜单 → 🕓 恢复历史版本 找回",
                     "success")
             except Exception:
                 pass
+            # ── 自动循环：回填完成后再跑老刀点评 ──
+            if autofix_round > 0 and autofix_round < max_rounds:
+                self.tab_generation.log(
+                    f"🔄 第 {autofix_round} 轮重写完成，自动再跑老刀点评检查弃书率...", "info")
+                self._on_laodao_critique(fixed, retry_round=1,
+                                         autofix_round=autofix_round,
+                                         max_rounds=max_rounds,
+                                         target_rate=target_rate)
+                return   # 不弹完成弹窗，等点评回来再判断
             try:
-                QMessageBox.information(
-                    self, "✓ 老刀修复完成",
-                    f"第 {ch_idx+1} 章已按老刀建议重写 + 回填 + 保存。\n\n"
-                    f"字数变化:{orig_len} → {new_len}\n"
-                    f"想要旧版本?菜单 → 文件 → 🕓 恢复历史版本(最近 10 次)\n\n"
-                    f"建议:再点一次「🔪 老刀毒舌点评」看新版评价 / 「📊 30项质检」看新得分。")
+                msg = (f"第 {ch_idx+1} 章已按老刀建议重写 + 回填 + 保存。\n\n"
+                       f"字数变化:{orig_len} → {new_len}\n"
+                       f"想要旧版本?菜单 → 文件 → 🕓 恢复历史版本(最近 10 次)\n\n"
+                       f"建议:再点一次「🔪 老刀毒舌点评」看新版评价 / 「📊 30项质检」看新得分。")
+                QMessageBox.information(self, "✓ 老刀修复完成", msg)
             except Exception:
                 pass
         else:
