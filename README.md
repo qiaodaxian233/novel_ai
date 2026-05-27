@@ -45,7 +45,7 @@ python novel_ai.py
 
 ```
 novel_ai/
-├── novel_ai.py             # 主程序(9653 行,MainWindow 装配中心 + main())
+├── novel_ai.py             # 主程序(12380 行,MainWindow 装配中心 + main())
 │
 ├── core/                   # 数据 + 配置层(9 个文件)
 │   ├── constants.py        # AI_URLS / GENRES / PLATFORMS / 等 8 个常量
@@ -55,7 +55,7 @@ novel_ai/
 │   └── stylesheet.py       # STYLESHEET(全局 QSS)
 │
 ├── ui/                     # UI 组件层(7 个文件)
-│   ├── browser_worker.py   # Selenium 浏览器自动化 worker(2475 行)
+│   ├── browser_worker.py   # Selenium 浏览器自动化 worker(3610 行)
 │   ├── theme.py            # 主题管理(白/黑切换)
 │   ├── highlighters.py     # 盘古禁用词实时高亮
 │   ├── threads.py          # TTS 合成后台线程
@@ -95,7 +95,7 @@ novel_ai/
 └── 项目对接记忆.md         # AI 接班手册(给下一代 Claude)
 ```
 
-**累计模块化进展:** 主程序从 20740 行(1.0 MB)→ 9653 行(470 KB),瘦 53.5%。详见 `项目对接记忆.md` 里 v2.00~v2.05 的 P1~P6 段。
+**累计模块化进展:** 主程序从 20740 行(1.0 MB)→ 12380 行(v2.23.5 含番茄榜单系统)。详见 `项目对接记忆.md` 里 v2.00~v2.05 的 P1~P6 段。
 
 ---
 
@@ -247,15 +247,15 @@ AI_URLS = {
 ### 测试
 
 ```bash
-# 全套测试(822 个)
-QT_QPA_PLATFORM=offscreen python3 -m pytest test_bug*.py test_site_preferences.py -q
+# 全套测试(1178 个)
+QT_QPA_PLATFORM=offscreen python3 -m pytest tests/ -q
 QT_QPA_PLATFORM=offscreen python3 test_full_integration.py    # 48 集成测试
 QT_QPA_PLATFORM=offscreen python3 test_lifespan_loops.py       # 68
 QT_QPA_PLATFORM=offscreen python3 test_research_report_skills.py  # 123
 QT_QPA_PLATFORM=offscreen python3 test_workflow_panel.py       # 31
 ```
 
-49 个测试文件覆盖:全部 BUG-065~074 回归 + 各模块单元测试 + 完整 UI 集成测试。
+67 个测试文件(统一在 tests/ 目录)覆盖:全部 BUG-065~074 回归 + 各模块单元测试 + 完整 UI 集成测试。
 
 ### 接入新 AI 站点
 

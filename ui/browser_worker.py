@@ -185,8 +185,17 @@ class BrowserWorker(QObject):
             candidates.append(Path(
                 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"))
         else:
+            # 先用 shutil.which() 探测 PATH，兼容 Flatpak/AppImage/自定义安装
+            import shutil
+            for name in ("google-chrome", "google-chrome-stable",
+                         "chromium-browser", "chromium", "chrome"):
+                found = shutil.which(name)
+                if found:
+                    return found
+            # 再兜底硬编码路径（snap 等不在 PATH 里的场景）
             for p in ("/usr/bin/google-chrome", "/usr/bin/chromium-browser",
-                      "/usr/bin/chromium", "/snap/bin/chromium"):
+                      "/usr/bin/chromium", "/snap/bin/chromium",
+                      "/var/lib/flatpak/exports/bin/com.google.Chrome"):
                 candidates.append(Path(p))
         for c in candidates:
             if c.exists():
@@ -204,6 +213,11 @@ class BrowserWorker(QObject):
             candidates.append(Path(
                 "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"))
         else:
+            import shutil
+            for name in ("microsoft-edge", "microsoft-edge-stable", "msedge"):
+                found = shutil.which(name)
+                if found:
+                    return found
             candidates.append(Path("/usr/bin/microsoft-edge"))
         for c in candidates:
             if c.exists():

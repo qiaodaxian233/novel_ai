@@ -1,0 +1,6 @@
+# 开发/测试依赖（不打包进发布版）
+# 安装: pip install -r requirements.txt -r requirements-dev.txt
+
+pytest>=7.0
+pytest-qt>=4.0          # PyQt5 UI 测试支持（需要 QT_QPA_PLATFORM=offscreen）
+pytest-cov>=4.0         # 覆盖率报告
