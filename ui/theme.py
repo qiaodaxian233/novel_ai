@@ -33,11 +33,11 @@ QLabel {{ color: {text}; background: transparent; }}
 /* ── 按钮 ── */
 QPushButton {{
     background-color: {btn_bg}; color: {btn_fg};
-    border: none; padding: 8px 16px;
-    border-radius: 6px; font-weight: bold; font-size: 12px;
+    border: none; padding: 9px 18px;
+    border-radius: 10px; font-weight: bold; font-size: 12px;
 }}
 QPushButton:hover {{ background-color: {primary_dark}; }}
-QPushButton:pressed {{ background-color: {primary}; }}
+QPushButton:pressed {{ background-color: {primary}; padding-top: 10px; padding-bottom: 8px; }}
 QPushButton:disabled {{ background-color: {border}; color: {text_hint}; }}
 
 /* ── 输入框 ── */
@@ -180,25 +180,31 @@ QFrame#nav_sidebar {{
 }}
 QPushButton#nav_primary_btn {{
     background: {primary}; color: {btn_fg};
-    padding: 10px; font-size: 12px; font-weight: bold;
-    border-radius: 6px; text-align: left;
+    padding: 10px 14px; font-size: 12px; font-weight: bold;
+    border-radius: 10px; text-align: left;
 }}
 QPushButton#nav_primary_btn:hover {{ background: {primary_dark}; }}
 QPushButton#nav_side_btn {{
     background: transparent; color: {text_sec};
-    padding: 8px; font-size: 12px; border-radius: 6px;
+    padding: 8px 12px; font-size: 12px; border-radius: 8px; text-align: left;
 }}
 QPushButton#nav_side_btn:hover {{ background: {bg_hover}; color: {primary}; }}
 QPushButton#nav_step_btn {{
     background: transparent; color: {text_sec};
-    padding: 7px 8px; font-size: 12px; border-radius: 6px;
+    padding: 7px 12px; font-size: 12px;
+    border-radius: 0px 8px 8px 0px;
+    border-left: 2px solid transparent; text-align: left;
 }}
-QPushButton#nav_step_btn:hover {{ background: {bg_hover}; color: {primary}; }}
+QPushButton#nav_step_btn:hover {{
+    background: {bg_hover}; color: {primary};
+    border-left: 2px solid {primary};
+}}
 QPushButton#nav_danger_btn {{
-    background: #e74c3c; color: white;
-    padding: 4px; font-size: 14px; border-radius: 4px;
+    background: rgba(231,76,60,0.18); color: #e74c3c;
+    border: 1px solid rgba(231,76,60,0.35);
+    padding: 4px 8px; font-size: 12px; border-radius: 8px;
 }}
-QPushButton#nav_danger_btn:hover {{ background: #c0392b; }}
+QPushButton#nav_danger_btn:hover {{ background: rgba(231,76,60,0.28); }}
 
 {extra_qss}
 """
@@ -221,23 +227,23 @@ class ThemeManager:
             ),
         },
         "dark": {
-            "label": "🌙 暗黑",
+            "label": "🌙 深海暗黑",
             "icon": "🌙",
             "qss_args": dict(
-                bg="#1a1a2e", bg_white="#222240", bg_hover="#2a2a4a",
-                bg_selected="#333366", primary="#6eb5ff",
-                primary_dark="#5a9ae0", primary_light="#1e2040",
-                text="#d4d4e8", text_sec="#a0a0b8", text_hint="#707088",
-                border="#3a3a5c", border_focus="#6eb5ff",
-                tab_bg="#22223a", statusbar_bg="#1a1a2e",
-                btn_bg="#3a3a6a",
+                bg="#0a0e1a", bg_white="#141d35", bg_hover="#1e2d50",
+                bg_selected="#1e3a6e", primary="#5b8dee",
+                primary_dark="#3d6fd4", primary_light="#0f1628",
+                text="#e8ecf4", text_sec="#8fa3c4", text_hint="#4d6080",
+                border="#1e2d50", border_focus="#5b8dee",
+                tab_bg="#0f1628", statusbar_bg="#0a0e1a",
+                btn_bg="#5b8dee",
             ),
             "palette": {
-                "Window": "#1a1a2e", "WindowText": "#d4d4e8",
-                "Base": "#222240", "AlternateBase": "#2a2a4a",
-                "Text": "#d4d4e8", "Button": "#3a3a6a",
-                "ButtonText": "#d4d4e8", "Highlight": "#6eb5ff",
-                "HighlightedText": "#1a1a2e",
+                "Window": "#0a0e1a", "WindowText": "#e8ecf4",
+                "Base": "#141d35", "AlternateBase": "#1a2540",
+                "Text": "#e8ecf4", "Button": "#5b8dee",
+                "ButtonText": "#ffffff", "Highlight": "#5b8dee",
+                "HighlightedText": "#ffffff",
             },
         },
         "green": {
@@ -357,7 +363,7 @@ QProgressBar::chunk {
     @classmethod
     def current(cls):
         try:
-            return QSettings("NovelAI", "UI").value("theme", "light", type=str)
+            return QSettings("NovelAI", "UI").value("theme", "dark", type=str)
         except Exception:
             return "light"
 

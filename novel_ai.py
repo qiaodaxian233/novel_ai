@@ -342,8 +342,12 @@ class MainWindow(QMainWindow):
             pass
         if _scale > 1.0:
             import re as _re
-            # v2.23.4: 用主题系统代替硬编码 STYLESHEET
+            # 用主题系统代替硬编码 STYLESHEET；旧 light 自动升级到 dark
             _cur_theme = ThemeManager.current()
+            if _cur_theme == "light":
+                from PyQt5.QtCore import QSettings as _QS2
+                _QS2("NovelAI", "UI").setValue("theme", "dark")
+                _cur_theme = "dark"
             ThemeManager.apply(_QA.instance(), _cur_theme)
             # 再做 font-size 缩放
             _cur_qss = _QA.instance().styleSheet()
@@ -353,8 +357,12 @@ class MainWindow(QMainWindow):
             scaled_qss = _re.sub(r'font-size:\s*(\d+)px', _sz, _cur_qss)
             _QA.instance().setStyleSheet(scaled_qss)
         else:
-            # v2.23.4: 启动时恢复用户上次选择的主题
+            # 启动时恢复用户上次选择的主题；light 是旧默认值，自动升级到 dark
             _cur_theme = ThemeManager.current()
+            if _cur_theme == "light":
+                from PyQt5.QtCore import QSettings as _QS2
+                _QS2("NovelAI", "UI").setValue("theme", "dark")
+                _cur_theme = "dark"
             ThemeManager.apply(_QA.instance(), _cur_theme)
 
         # 恢复上次窗口大小和位置
