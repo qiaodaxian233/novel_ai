@@ -40,7 +40,7 @@ class AIToolboxTab(QWidget):
             "选择一个章节,输入修改指令,AI 会根据指令重写该章节内容。"
             "修改后预览确认,再一键填充回去。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#666; font-size:12px; padding-bottom:4px;")
+        hint.setStyleSheet("color:#8fa3c4; font-size:12px; padding-bottom:4px;")
         lay.addWidget(hint)
 
         # ── 章节选择行 ──
@@ -137,7 +137,7 @@ class AIToolboxTab(QWidget):
 
         # ── 状态 ──
         self.lbl_status = QLabel("")
-        self.lbl_status.setStyleSheet("color:#888; font-size:11px;")
+        self.lbl_status.setStyleSheet("color:#8fa3c4; font-size:11px;")
         lay.addWidget(self.lbl_status)
 
     # ──────────── 数据 ────────────

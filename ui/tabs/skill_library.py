@@ -107,7 +107,7 @@ class SkillLibrary(QWidget):
         save_row = QHBoxLayout()
         self.btn_save = QPushButton("💾 保存当前修改")
         self.btn_save.setStyleSheet(
-            "background:#1a73e8;color:white;padding:6px 14px;font-weight:bold;border-radius:3px;")
+            "background:#3d6fd4;color:white;padding:6px 14px;font-weight:bold;border-radius:3px;")
         self.btn_test = QPushButton("🧪 测试运行(对当前章节)")
         self.btn_reset = QPushButton("恢复出厂技能")
         save_row.addWidget(self.btn_save); save_row.addWidget(self.btn_test)

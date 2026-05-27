@@ -93,7 +93,7 @@ class AINamingDialog(QDialog):
         btn_row = QHBoxLayout()
         self.btn_generate = QPushButton("🎲 AI 生成 10 个名字")
         self.btn_generate.setStyleSheet(
-            "QPushButton { background:#1a73e8; color:white; padding:8px 16px;"
+            "QPushButton { background:#3d6fd4; color:white; padding:8px 16px;"
             "font-weight:bold; border-radius:4px; } "
             "QPushButton:hover { background:#1557b0; }")
         self.btn_generate.clicked.connect(self._on_generate)
@@ -113,7 +113,7 @@ class AINamingDialog(QDialog):
         self._name_buttons = []
         gen_lay.addLayout(self.names_layout)
         self.lbl_status = QLabel("填好角色信息后点生成,或直接手动输入")
-        self.lbl_status.setStyleSheet("color:#888; font-size:11px;")
+        self.lbl_status.setStyleSheet("color:#8fa3c4; font-size:11px;")
         gen_lay.addWidget(self.lbl_status)
         layout.addWidget(gen_box)
 
@@ -249,7 +249,7 @@ class AINamingDialog(QDialog):
                 "border-radius:6px; } "
                 "QPushButton:checked { border-color:#1a73e8; background:#e3f0ff;"
                 "font-weight:bold; } "
-                "QPushButton:hover { border-color:#888; }")
+                "QPushButton:hover { border-color:#8fa3c4; }")
             btn.clicked.connect(
                 lambda _, n=name, b=btn: self._on_name_clicked(n, b))
             self.names_layout.addWidget(btn, i // 5, i % 5)

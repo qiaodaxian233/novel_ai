@@ -79,7 +79,7 @@ class ConversationSwitcher(QWidget):
         self.btn_switch = QPushButton("🔄 切换")
         self.btn_switch.setToolTip("切换到选中槽 URL,并可选同步记忆")
         self.btn_switch.setStyleSheet(
-            "QPushButton { background:#1a73e8; color:white; font-weight:bold; "
+            "QPushButton { background:#3d6fd4; color:white; font-weight:bold; "
             "padding:5px 10px; border-radius:3px; }} "
             "QPushButton:hover { background:#1557b0; }")
         self.btn_del_slot = QPushButton("🗑 删除")

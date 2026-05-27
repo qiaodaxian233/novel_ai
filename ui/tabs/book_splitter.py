@@ -40,13 +40,13 @@ class BookSplitterTab(QWidget):
         self.btn_load_file.clicked.connect(self._on_load_file)
         top_row.addWidget(self.btn_load_file)
         self.lbl_loaded = QLabel("(未加载)")
-        self.lbl_loaded.setStyleSheet("color:#888; padding:0 8px;")
+        self.lbl_loaded.setStyleSheet("color:#8fa3c4; padding:0 8px;")
         top_row.addWidget(self.lbl_loaded, 1)
         lay.addLayout(top_row)
 
         # 统计条
         self.lbl_stats = QLabel("")
-        self.lbl_stats.setStyleSheet("color:#666; font-size:11px; padding:2px;")
+        self.lbl_stats.setStyleSheet("color:#8fa3c4; font-size:11px; padding:2px;")
         lay.addWidget(self.lbl_stats)
 
         # ── 主区 ──

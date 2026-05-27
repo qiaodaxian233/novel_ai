@@ -69,7 +69,7 @@ class GenerationControl(QWidget):
         b1.addStretch()
         self.btn_launch = QPushButton("🚀 启动浏览器(首次请登录)")
         self.btn_launch.setStyleSheet(
-            "background:#1a73e8; color:white; padding:6px 14px;"
+            "background:#3d6fd4; color:white; padding:6px 14px;"
             "font-weight:bold; border-radius:3px;")
         self.btn_close = QPushButton("⛔ 关闭浏览器")
         self.btn_close.setEnabled(False)
@@ -181,7 +181,7 @@ class GenerationControl(QWidget):
 
         self.status_label = QLabel("状态:未启动")
         self.status_label.setStyleSheet(
-            "padding:4px 10px; background:#eee; border-radius:3px; color:#666;")
+            "padding:4px 10px; background:#eee; border-radius:3px; color:#8fa3c4;")
         blay.addWidget(self.status_label)
         layout.addWidget(bbox)
         self.site_combo.currentTextChanged.connect(self._on_site_changed)
@@ -374,7 +374,7 @@ class GenerationControl(QWidget):
 
         self.prev_ctx_estimate = QLabel("📊 预估注入字数:—(写完第 1 章后实时显示)")
         self.prev_ctx_estimate.setStyleSheet(
-            "color:#1a4480; font-weight:bold;"
+            "color:#5b8dee; font-weight:bold;"
             "padding:3px 8px; background:#eef4fb; border-radius:3px;")
         self.prev_ctx_estimate.setWordWrap(True)
         ctx_lay.addWidget(self.prev_ctx_estimate)

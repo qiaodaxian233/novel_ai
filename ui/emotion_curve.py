@@ -206,7 +206,7 @@ class EmotionCurvePanel(QWidget):
 
         # 底部说明
         hint = QLabel("💡 连续3章紧张度<4=节奏太平 | 连续3章爽感<3=缺爽点 | 四线全低=需要加戏")
-        hint.setStyleSheet("color:#888; font-size:11px;")
+        hint.setStyleSheet("color:#8fa3c4; font-size:11px;")
         layout.addWidget(hint)
 
     def load_from_chapters(self, chapters):

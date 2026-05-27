@@ -43,7 +43,7 @@ class DialogMemory(QWidget):
             "「角色档案 + 章节摘要 + 最近 N 章详细回顾 + 长期伏笔」打包注入到提示词,"
             "保证 AI 持续掌握剧情脉络,人设不崩、伏笔不断。"
         )
-        intro.setStyleSheet("color: #666; padding: 4px;")
+        intro.setStyleSheet("color: #8fa3c4; padding: 4px;")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -58,7 +58,7 @@ class DialogMemory(QWidget):
             "适合首次使用、导入旧项目、或长篇小说里手动整理记忆。"
         )
         full_tip.setWordWrap(True)
-        full_tip.setStyleSheet("color: #666; padding: 4px;")
+        full_tip.setStyleSheet("color: #8fa3c4; padding: 4px;")
         full_lay.addWidget(full_tip)
 
         full_btn_row = QHBoxLayout()
@@ -167,7 +167,7 @@ class DialogMemory(QWidget):
         self.btn_preview = QPushButton("🔍 刷新预览")
         prow.addWidget(self.btn_preview); prow.addStretch()
         info = QLabel("(下次生成章节时会自动注入这段内容)")
-        info.setStyleSheet("color: #888;")
+        info.setStyleSheet("color: #8fa3c4;")
         prow.addWidget(info)
         pvl.addLayout(prow)
         self.preview_edit = QPlainTextEdit()

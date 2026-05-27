@@ -36,7 +36,7 @@ class ForeshadowTab(QWidget):
             "跟踪所有埋下的伏笔,超过设定章数未回收的自动标红。"
             "写章节时自动扫描关键词,检测是否已触及。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#666; font-size:13px; padding-bottom:8px;")
+        hint.setStyleSheet("color:#8fa3c4; font-size:13px; padding-bottom:8px;")
         lay.addWidget(hint)
 
         # 配置行
@@ -121,7 +121,7 @@ class ForeshadowTab(QWidget):
         btn_row.setSpacing(10)
         for text, style, handler in [
             ("➕ 添加", "background:#27ae60; color:white;", self._on_add),
-            ("✓ 标记已回收", "background:#1a73e8; color:white;", self._on_close),
+            ("✓ 标记已回收", "background:#3d6fd4; color:white;", self._on_close),
             ("↺ 重开", "background:#e67e22; color:white;", self._on_reopen),
             ("🔍 检查逾期", "background:#e74c3c; color:white;", self._on_check),
             ("🗑 删除", "background:#c0392b; color:white;", self._on_delete),

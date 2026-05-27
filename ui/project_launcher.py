@@ -104,7 +104,7 @@ class ProjectCard(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("""
             #project_card {
-                background: white;
+                background: #141d35;
                 border: 1px solid #e0e6ed;
                 border-radius: 8px;
             }
@@ -158,7 +158,7 @@ class ProjectCard(QFrame):
 
         stats_lbl = QLabel("   ·   ".join(stat_text) or "(空项目)")
         stats_lbl.setStyleSheet(
-            "color:#888; font-size:11px; padding-left:24px;")
+            "color:#8fa3c4; font-size:11px; padding-left:24px;")
         lay.addWidget(stats_lbl)
 
         # 路径(灰色小字,截断)
@@ -169,7 +169,7 @@ class ProjectCard(QFrame):
             short = full_str
         path_lbl = QLabel(short)
         path_lbl.setStyleSheet(
-            "color:#bbb; font-size:10px; padding-left:24px;")
+            "color:#4d6080; font-size:10px; padding-left:24px;")
         path_lbl.setToolTip(full_str)
         lay.addWidget(path_lbl)
 
@@ -214,7 +214,7 @@ class ProjectLauncher(QDialog):
         if os.path.exists(_icon):
             self.setWindowIcon(QIcon(_icon))
 
-        self.setStyleSheet("QDialog { background: #f5f7fa; }")
+        self.setStyleSheet("QDialog { background: #0f1628; }")
 
         main_lay = QVBoxLayout(self)
         main_lay.setContentsMargins(0, 0, 0, 0)
@@ -270,7 +270,7 @@ class ProjectLauncher(QDialog):
         btn_about.setFlat(True)
         btn_about.setCursor(Qt.PointingHandCursor)
         btn_about.setStyleSheet(
-            "QPushButton { color:#555; font-size:12px; padding:4px 8px;"
+            "QPushButton { color:#8fa3c4; font-size:12px; padding:4px 8px;"
             "border:none; background:transparent; }"
             "QPushButton:hover { color:#1a73e8; }")
         btn_about.clicked.connect(self._on_about)
@@ -284,7 +284,7 @@ class ProjectLauncher(QDialog):
         panel = QFrame()
         panel.setFixedWidth(220)
         panel.setStyleSheet(
-            "QFrame { background: white; border-right: 1px solid #e0e4ef; }"
+            "QFrame { background: #141d35; border-right: 1px solid #e0e4ef; }"
             "QFrame > QLabel { background:transparent; border:none; }")
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(16, 20, 16, 16)
@@ -326,7 +326,7 @@ class ProjectLauncher(QDialog):
         btn_open.setCursor(Qt.PointingHandCursor)
         btn_open.setStyleSheet("""
             QPushButton {
-                background: white; color: #555;
+                background: #141d35; color: #555;
                 padding: 12px; font-size: 13px;
                 border-radius: 8px; border: 1px solid #e0e6ed;
                 text-align: left;
@@ -342,7 +342,7 @@ class ProjectLauncher(QDialog):
         # 项目目录信息
         dir_lbl = QLabel("📁 项目目录")
         dir_lbl.setStyleSheet(
-            "color:#888; font-size:11px; padding:4px 0;")
+            "color:#8fa3c4; font-size:11px; padding:4px 0;")
         lay.addWidget(dir_lbl)
 
         dir_path = str(self.project_dir)
@@ -376,7 +376,7 @@ class ProjectLauncher(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setStyleSheet("""
-            QScrollArea { border: none; background: #f5f7fa; }
+            QScrollArea { border: none; background: #0f1628; }
             QScrollBar:vertical {
                 width: 8px; background: transparent;
             }
@@ -448,7 +448,7 @@ class ProjectLauncher(QDialog):
         section_row.addWidget(section_title)
         section_row.addStretch()
         self._lbl_section_hint = QLabel("双击卡片打开 · 单击选择")
-        self._lbl_section_hint.setStyleSheet("color:#999; font-size:11px;")
+        self._lbl_section_hint.setStyleSheet("color:#6a85a8; font-size:11px;")
         section_row.addWidget(self._lbl_section_hint)
         lay.addLayout(section_row)
 
@@ -471,7 +471,7 @@ class ProjectLauncher(QDialog):
         footer.setFixedHeight(28)
         footer.setStyleSheet("""
             QFrame {
-                background: white;
+                background: #141d35;
                 border-top: 1px solid #e0e4ef;
             }
             QFrame > QLabel { background:transparent; border:none; }
@@ -485,7 +485,7 @@ class ProjectLauncher(QDialog):
         f_lay.addStretch()
 
         ver_lbl = QLabel(self._app_version)
-        ver_lbl.setStyleSheet("font-size:11px; color:#999;")
+        ver_lbl.setStyleSheet("font-size:11px; color:#6a85a8;")
         f_lay.addWidget(ver_lbl)
 
         parent_lay.addWidget(footer)
@@ -537,7 +537,7 @@ class ProjectLauncher(QDialog):
             empty_widget = QFrame()
             empty_widget.setStyleSheet("""
                 QFrame {
-                    background: white; border: 2px dashed #e0e6ed;
+                    background: #141d35; border: 2px dashed #253352;
                     border-radius: 12px;
                 }
                 QFrame > QLabel { background:transparent; border:none; }
@@ -548,18 +548,18 @@ class ProjectLauncher(QDialog):
 
             empty_icon = QLabel("📚")
             empty_icon.setAlignment(Qt.AlignCenter)
-            empty_icon.setStyleSheet("font-size:40px; color:#bbb;")
+            empty_icon.setStyleSheet("font-size:40px; color:#4d6080;")
             ev.addWidget(empty_icon)
 
             empty_title = QLabel("还没有项目")
             empty_title.setAlignment(Qt.AlignCenter)
             empty_title.setStyleSheet(
-                "color:#666; font-size:14px; font-weight:bold; padding:4px;")
+                "color:#8fa3c4; font-size:14px; font-weight:bold; padding:4px;")
             ev.addWidget(empty_title)
 
             empty_sub = QLabel('点击左侧"新建项目"开始你的第一个故事')
             empty_sub.setAlignment(Qt.AlignCenter)
-            empty_sub.setStyleSheet("color:#999; font-size:11px;")
+            empty_sub.setStyleSheet("color:#6a85a8; font-size:11px;")
             ev.addWidget(empty_sub)
 
             self.cards_grid.addWidget(empty_widget, 0, 0, 1, 2)
@@ -581,7 +581,7 @@ class ProjectLauncher(QDialog):
         if self._selected_card is not None:
             self._selected_card.setStyleSheet("""
                 #project_card {
-                    background: white;
+                    background: #141d35;
                     border: 1px solid #e0e6ed;
                     border-radius: 8px;
                 }

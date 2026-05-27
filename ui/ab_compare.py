@@ -31,7 +31,7 @@ class ABCompareDialog(QDialog):
         len_b = len(text_b.replace(" ", "").replace("\n", ""))
         stats = QLabel(f"A 版 {len_a} 字 | B 版 {len_b} 字")
         stats.setAlignment(Qt.AlignCenter)
-        stats.setStyleSheet("color:#888; font-size:12px; padding:4px;")
+        stats.setStyleSheet("color:#8fa3c4; font-size:12px; padding:4px;")
         layout.addWidget(stats)
 
         # 左右分栏

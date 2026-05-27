@@ -80,7 +80,7 @@ h1 {{ text-align:center; color:#e94560; margin-bottom:20px; font-size:18px; }}
 .filter button.active {{ background:#e94560; }}
 .alert {{ background:#4a1a1a; border-left-color:#e74c3c !important; }}
 .alert::before {{ background:#e74c3c !important; color:white !important; }}
-.stats {{ text-align:center; margin-bottom:12px; font-size:13px; color:#888; }}
+.stats {{ text-align:center; margin-bottom:12px; font-size:13px; color:#8fa3c4; }}
 </style></head><body>
 <h1>🗺️ 剧情线地图</h1>
 <div class="legend">
@@ -135,7 +135,7 @@ function render(filter) {{
     html += '<div class="bar bar-emotion" style="width:' + (ch.emotion*maxW/10) + 'px" title="虐心 ' + ch.emotion + '"></div>';
     html += '<div class="bar bar-warmth" style="width:' + (ch.warmth*maxW/10) + 'px" title="温馨 ' + ch.warmth + '"></div>';
     html += '</div>';
-    if (ch.emo_summary) html += '<div style="font-size:11px;color:#888;margin-top:2px">' + ch.emo_summary + '</div>';
+    if (ch.emo_summary) html += '<div style="font-size:11px;color:#8fa3c4;margin-top:2px">' + ch.emo_summary + '</div>';
     
     div.innerHTML = html;
     tl.appendChild(div);

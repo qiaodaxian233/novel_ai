@@ -142,7 +142,7 @@ class CharacterLibrary(QWidget):
             "  已有章节请点旁边的「🔄 立即从所有章节提取」按钮补抽。\n\n"
             "代价:每章多 1 次 AI 调用。如果你 AI 额度有限,可以关掉,\n"
             "改成手动批量提取(旁边那个按钮)。")
-        self.chk_auto_extract.setStyleSheet("QCheckBox { color:#b4884e; font-weight:bold; }")
+        self.chk_auto_extract.setStyleSheet("QCheckBox { color:#c9956b; font-weight:bold; }")
         # 状态变化时持久化保存
         self.chk_auto_extract.stateChanged.connect(
             lambda s: _QS("NovelAI", "UserPrefs").setValue(
@@ -160,7 +160,7 @@ class CharacterLibrary(QWidget):
             "✗ 取消:AI 不抽,你可以点上方『🔄 从时间线同步』按钮手动同步\n"
             "       (本地正则,不烧 token)\n\n"
             "提示:用户切到『✏️ 手动改』模式时,自动同步会被跳过,保护手填值。")
-        self.chk_auto_sync_hero.setStyleSheet("QCheckBox { color:#666; }")
+        self.chk_auto_sync_hero.setStyleSheet("QCheckBox { color:#8fa3c4; }")
         self.chk_auto_sync_hero.stateChanged.connect(
             lambda s: _QS("NovelAI", "CreationSettings").setValue(
                 "auto_sync_hero_state", bool(s)))
@@ -248,7 +248,7 @@ class CharacterLibrary(QWidget):
             "💡 提示: 双击单元格直接编辑。【角色定位】填:主角/女主/配角/导师/反派/路人。\n"
             "    【当前状态】会随剧情更新,写章节时自动注入此字段保证前后一致。\n"
             "    【退场章节】留空表示尚未退场;AI 不会自动填,需手动标记(用于长篇人物管理)。")
-        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
         
@@ -354,7 +354,7 @@ class CharacterLibrary(QWidget):
         
         tip = QLabel(
             "💡 关系类型示例: 师父/师弟/师妹/对手/暗恋对象/恋人/血缘/宿敌/同盟/上下级")
-        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         lay.addWidget(tip)
         
         self.sub_tabs.addTab(w, "🔗 关系图谱")
@@ -415,7 +415,7 @@ class CharacterLibrary(QWidget):
         # 来源 label
         self.lbl_hero_source = QLabel("📌 数据来源:未同步(可点🔄按钮自动抽取,或✏️手动填)")
         self.lbl_hero_source.setStyleSheet(
-            "color: #888; font-size: 11px; padding: 2px 4px;")
+            "color: #8fa3c4; font-size: 11px; padding: 2px 4px;")
         self.lbl_hero_source.setWordWrap(True)
         state_box_lay.addWidget(self.lbl_hero_source)
         
@@ -546,7 +546,7 @@ class CharacterLibrary(QWidget):
         lay.addWidget(self.tbl_items)
         
         self.lbl_item_types = QLabel("")
-        self.lbl_item_types.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        self.lbl_item_types.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         self.lbl_item_types.setWordWrap(True)
         lay.addWidget(self.lbl_item_types)
         self._refresh_item_type_hint()
@@ -584,7 +584,7 @@ class CharacterLibrary(QWidget):
         intro = QLabel(
             "📌 设定故事的境界/等级体系,写章节时自动注入,防止『小喽啰一拳打飞主角』『跨级越打越奇怪』"
         )
-        intro.setStyleSheet("color:#666;padding:4px;")
+        intro.setStyleSheet("color:#8fa3c4;padding:4px;")
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
@@ -735,7 +735,7 @@ class CharacterLibrary(QWidget):
         self.btn_reeval_fore.setToolTip(
             "把所有 plan_pay_at=0 的伏笔交给 AI 评估合理回收章节,自动回填")
         self.btn_reeval_fore.setStyleSheet(
-            "QPushButton { background:#fff3e0; color:#5d4037; border:1px solid #ffa726; }")
+            "QPushButton { background:#141d353e0; color:#5d4037; border:1px solid #ffa726; }")
         top.addWidget(btn_add); top.addWidget(btn_del)
         top.addWidget(btn_check); top.addWidget(btn_clear_fore)
         top.addWidget(self.btn_reeval_fore); top.addStretch()
@@ -759,7 +759,7 @@ class CharacterLibrary(QWidget):
             "💡 v1.76 起,程序会在每章生成后自动检查回收(AI 看本章正文回收了哪些伏笔)\n"
             "    『已回收?』填 是/否,回收后填上回收章节号。\n"
             "    plan_pay_at=0 的伏笔会触发误报超期,可用上方按钮一键 AI 重评估。")
-        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
         
@@ -867,7 +867,7 @@ class CharacterLibrary(QWidget):
         self.btn_reeval_promise.setToolTip(
             "把所有 deadline=0 的承诺/威胁/约定交给 AI 评估合理截止章节,自动回填")
         self.btn_reeval_promise.setStyleSheet(
-            "QPushButton { background:#fff3e0; color:#5d4037; border:1px solid #ffa726; }")
+            "QPushButton { background:#141d353e0; color:#5d4037; border:1px solid #ffa726; }")
         top.addWidget(btn_add); top.addWidget(btn_del)
         top.addWidget(self.btn_reeval_promise); top.addStretch()
         lay.addLayout(top)
@@ -893,7 +893,7 @@ class CharacterLibrary(QWidget):
             "    每章生成后,AI 自动检查本章正文是否兑现/触发/到期了清单中的条目。\n"
             "    类型:承诺(许诺) / 威胁(下最后通牒) / 约定(双方约赴某事)。\n"
             "    已兑现? 填 是/否;到期未兑现会触发【本章硬性必须兑现】强约束注入。")
-        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
         
@@ -967,7 +967,7 @@ class CharacterLibrary(QWidget):
             "💡 故事弧线(主线/支线/金手指线)的整体推进百分比。\n"
             "    阶段:开端/铺垫/转折/高潮/收束(5 选 1)。\n"
             "    每章生成后,AI 自动评估本章推进了哪几条弧线、推进了多少 progress,自动累加(封顶 100)。")
-        tip_arcs.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip_arcs.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip_arcs.setWordWrap(True)
         lay_arcs.addWidget(tip_arcs)
         inner_tabs.addTab(w_arcs, "📊 故事弧线")
@@ -1003,7 +1003,7 @@ class CharacterLibrary(QWidget):
             "+50=朋友 / +80=至交 / +100=至亲。\n"
             "    AI 每章评估本章互动让哪些关系值变化,自动累加(封顶 ±100)。\n"
             "    注入 prompt 时,|value|≥50 的会作为『关系热点』提示 AI 写出符合该关系的反应。")
-        tip_rels.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip_rels.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip_rels.setWordWrap(True)
         lay_rels.addWidget(tip_rels)
         inner_tabs.addTab(w_rels, "💞 关系值矩阵")
@@ -1038,7 +1038,7 @@ class CharacterLibrary(QWidget):
             "💡 主角当前最关心什么。\n"
             "    优先级:主线/支线/紧急。状态:进行中/已达成/已放弃。\n"
             "    注入 prompt 时,只把【进行中】的目标喂给 AI,避免主角行动偏离当前目标。")
-        tip_goals.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip_goals.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip_goals.setWordWrap(True)
         lay_goals.addWidget(tip_goals)
         inner_tabs.addTab(w_goals, "🎯 当前目标")
@@ -1143,7 +1143,7 @@ class CharacterLibrary(QWidget):
             "💡 全文唯一可被反复引用的关键信息(角色身份秘密/金手指本质/势力暗线/血脉来历)。\n"
             "    id 用 INFO-001/INFO-002... 顺序编号(系统自动去重续号)。\n"
             "    来源类型 = 设定(出生即有)/事件揭露(场景里被揭穿)/角色透露(亲口说出)。")
-        tip_infos.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip_infos.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip_infos.setWordWrap(True)
         lay_infos.addWidget(tip_infos)
         inner_tabs.addTab(w_infos, "📋 信息条目")
@@ -1177,7 +1177,7 @@ class CharacterLibrary(QWidget):
             "💡 谁知道哪条信息 + 怎么知道的(信息 id 必须在【信息条目】里存在,系统自动校验)。\n"
             "    AI 章末自动:① 扫描穿帮(不该知道的人用了某 info)② 追踪新披露事件(谁告诉了谁)。\n"
             "    每章生成时,注入会只向【出场角色】告知他们的【已知信息边界】,严防 OOC。")
-        tip_kb.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip_kb.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip_kb.setWordWrap(True)
         lay_kb.addWidget(tip_kb)
         inner_tabs.addTab(w_kb, "👁 知情人表")
@@ -1306,7 +1306,7 @@ class CharacterLibrary(QWidget):
             "    支持拖拽重排;每章注入时,系统会找到当前章节所在的最近祖先节点。\n"
             "    v1.85:章节生成后,AI 自动判定『本章写到了哪个节点』,把章号回流到对应节点的『已挂章号』列。\n"
             "    v1.86:右键节点 → 『🔍 反查相关数据』查看该节点关联的角色/伏笔/承诺/关系/信息。")
-        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
 
@@ -1582,7 +1582,7 @@ class CharacterLibrary(QWidget):
             box_lay = QVBoxLayout(box)
             if not rows:
                 lbl = QLabel(empty_hint)
-                lbl.setStyleSheet("color:#999;padding:8px;font-style:italic;")
+                lbl.setStyleSheet("color:#6a85a8;padding:8px;font-style:italic;")
                 box_lay.addWidget(lbl)
             else:
                 lw = QListWidget()
@@ -1732,7 +1732,7 @@ class CharacterLibrary(QWidget):
             "    边的含义:连同章号(剧情节点 chapter_links/ch_range + 其他库的章号字段)。\n"
             "    交互:鼠标拖拽节点 / 滚轮缩放视图 / 顶部勾选过滤类别。\n"
             "    布局:力导向算法(纯 Python 实现,无外部依赖)。空白图请点【🔄 重新生成布局】。")
-        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
 
@@ -2165,7 +2165,7 @@ class CharacterLibrary(QWidget):
             "💡 每章生成完后,AI 输出的【断章钩子】自动入这里。\n"
             "    用途:全书钩子审计 — 看强度分布、避免连用同类型(对话没说完 + 对话没说完 = 重复)。\n"
             "    类型常见:对话没说完 / 人物出现 / 秘密暴露 / 倒计时 / 关键动作")
-        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
         
@@ -2217,7 +2217,7 @@ class CharacterLibrary(QWidget):
             "💡 每章 AI 输出的【本章爽点】自动入这里。\n"
             "    用途:全书爽点审计 — 看类型分布,避免连续 3 章都是同种(全是打脸=审美疲劳)。\n"
             "    类型常见:打脸 / 反转 / 碾压 / 揭秘 / 救场 / 装逼 / 复仇")
-        tip.setStyleSheet("color:#666;font-size:11px;padding:4px;")
+        tip.setStyleSheet("color:#8fa3c4;font-size:11px;padding:4px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
         
@@ -2252,7 +2252,7 @@ class CharacterLibrary(QWidget):
         top.addStretch()
         lbl_hint = QLabel(
             "提示:切换子页会自动刷新。鼠标拖节点 / 滚轮缩放 / 悬停看详情。")
-        lbl_hint.setStyleSheet("color:#888;font-size:11px;")
+        lbl_hint.setStyleSheet("color:#8fa3c4;font-size:11px;")
         top.addWidget(lbl_hint)
         lay.addLayout(top)
 
@@ -2270,7 +2270,7 @@ class CharacterLibrary(QWidget):
                 "🕸️ 关系网模块未加载。\n"
                 "请确认项目根目录有 relation_graph.py 文件。")
             fallback.setStyleSheet(
-                "padding:24px;color:#999;font-size:13px;text-align:center;")
+                "padding:24px;color:#6a85a8;font-size:13px;text-align:center;")
             fallback.setAlignment(Qt.AlignCenter)
             lay.addWidget(fallback)
 
@@ -3472,7 +3472,7 @@ class CharacterLibrary(QWidget):
                     "border:1px solid #ccc; padding:3px; }")
             else:
                 ed.setStyleSheet(
-                    "QLineEdit { background:white; color:#000; "
+                    "QLineEdit { background:#141d35; color:#000; "
                     "border:1px solid #1a4480; padding:3px; }")
     
     def _on_hero_unlock_toggled(self, checked):
@@ -3491,7 +3491,7 @@ class CharacterLibrary(QWidget):
             self.lbl_hero_source.setText(
                 "📌 数据来源:派生模式(可点🔄按钮自动抽取)")
             self.lbl_hero_source.setStyleSheet(
-                "color: #888; font-size: 11px; padding: 2px 4px;")
+                "color: #8fa3c4; font-size: 11px; padding: 2px 4px;")
     
     # 关键词正则(类属性,便于测试访问)
     # 5 个字段各自的"识别 + 提取"正则

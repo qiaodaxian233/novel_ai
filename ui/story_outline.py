@@ -41,7 +41,7 @@ class StoryOutline(QWidget):
         self.btn_regen_all = QPushButton("不满意?重新生成整套大纲")
         self.btn_rename = QPushButton("🔄 改名工具 (角色/地名/门派一键替换)")
         self.btn_rename.setStyleSheet(
-            "background:#9b59b6;color:white;padding:4px 10px;border-radius:3px;font-weight:bold;")
+            "background:#7c5cbf;color:white;padding:4px 10px;border-radius:3px;font-weight:bold;")
         self.btn_rename.setToolTip(
             "扫描大纲全部文本(简介/种子/世界观/LO层/结构/章节大纲/特殊需求/角色设定),\n"
             "把指定的旧名换成新名。支持多个对应关系一次替换。\n"

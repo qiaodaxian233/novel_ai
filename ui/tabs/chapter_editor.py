@@ -73,7 +73,7 @@ class ChapterEditor(QWidget):
         self.btn_laodao.clicked.connect(self._on_laodao_critique)
         self.btn_pangu_spiral = QPushButton("🌀 螺旋诊断")
         self.btn_pangu_spiral.setStyleSheet(
-            "background:#34495e;color:white;padding:4px 10px;border-radius:3px;")
+            "background:#253352;color:white;padding:4px 10px;border-radius:3px;")
         self.btn_pangu_spiral.setToolTip("AI 诊断当前章节处于 P1-P7 哪个螺旋阶段")
         self.btn_pangu_spiral.clicked.connect(self._on_pangu_spiral)
         self.btn_pangu_preview = QPushButton("👁️ 预览Prompt")
@@ -83,10 +83,10 @@ class ChapterEditor(QWidget):
         self.btn_pangu_preview.clicked.connect(lambda: self.pangu_preview_prompt_requested.emit())
         self.btn_style_check = QPushButton("🎨 风格一致性检测")
         self.btn_style_check.setStyleSheet(
-            "background:#9b59b6;color:white;padding:4px 10px;border-radius:3px;")
+            "background:#7c5cbf;color:white;padding:4px 10px;border-radius:3px;")
         self.btn_regen_alt = QPushButton("🎲 生成备选版本")
         self.btn_regen_alt.setStyleSheet(
-            "background:#16a085;color:white;padding:4px 10px;border-radius:3px;")
+            "background:#1a8a72;color:white;padding:4px 10px;border-radius:3px;")
         for b in (self.btn_save, self.btn_optimize, self.btn_save_all,
                   self.btn_pangu_lint, self.btn_pangu_qcheck, self.btn_laodao,
                   self.btn_pangu_spiral, self.btn_pangu_preview,
@@ -110,7 +110,7 @@ class ChapterEditor(QWidget):
         self.btn_tts_stop.setEnabled(False)  # 没在朗读时禁用
         # 速度滑块
         self.lbl_tts_speed = QLabel("速度 1.0x")
-        self.lbl_tts_speed.setStyleSheet("color:#666;font-size:11px;")
+        self.lbl_tts_speed.setStyleSheet("color:#8fa3c4;font-size:11px;")
         self.slider_tts_speed = QSlider(Qt.Horizontal)
         self.slider_tts_speed.setRange(50, 200)  # 0.5x ~ 2.0x
         self.slider_tts_speed.setValue(100)       # 默认 1.0x
@@ -182,7 +182,7 @@ class ChapterEditor(QWidget):
             "📌 本章元信息(钩子/爽点/伏笔/下一章选项)— 已自动从正文剥离,会引导下一章生成")
         self.pangu_meta_box.setStyleSheet(
             "QGroupBox { border: 2px solid #b4884e; margin-top: 8px; padding-top: 14px; "
-            "  background: #fffbf2; }} "
+            "  background: #141d35bf2; }} "
             "QGroupBox::title { color: #b4884e; font-weight: bold; left: 10px; "
             "  font-size: 13px; }")
         pml = QVBoxLayout(self.pangu_meta_box)
@@ -194,7 +194,7 @@ class ChapterEditor(QWidget):
             "你也可以点下方按钮手动指定下一章开局。")
         tip.setWordWrap(True)
         tip.setStyleSheet(
-            "color:#1a4480; padding:4px 6px; background:#eaf3ff; "
+            "color:#5b8dee; padding:4px 6px; background:#eaf3ff; "
             "border-left:3px solid #1a4480; font-size:11px;")
         pml.addWidget(tip)
         self.pangu_hook_label = QLabel("断章钩子: —")
@@ -210,7 +210,7 @@ class ChapterEditor(QWidget):
         pml.addWidget(self.pangu_seeds_label)
         # 下一章选项区:3 个按钮,点哪个就用哪个开局生成下一章
         nl = QLabel("下一章选项(点按钮用此选项作为下一章开局指引):")
-        nl.setStyleSheet("color:#666; padding:4px 4px 0; font-size:11px;")
+        nl.setStyleSheet("color:#8fa3c4; padding:4px 4px 0; font-size:11px;")
         pml.addWidget(nl)
         self.pangu_next_opt_row = QHBoxLayout()
         self.pangu_next_opt_row.setSpacing(4)
@@ -406,7 +406,7 @@ class ChapterEditor(QWidget):
                 btn.setStyleSheet(
                     "QPushButton { text-align:left; padding:4px 8px; "
                     "color:#3a2a10; "                                   # 深棕,配米色背景对比度 >7:1
-                    "background:#fff8ea; border:1px solid #e0c896; }} "
+                    "background:#141d358ea; border:1px solid #e0c896; }} "
                     "QPushButton:hover { background:#ffe9b8; color:#000; }")  # hover 更深
                 btn.setToolTip(opt)
                 btn.clicked.connect(lambda _, x=opt: self.next_option_picked.emit(x))

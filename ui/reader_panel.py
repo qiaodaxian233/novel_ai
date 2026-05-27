@@ -105,7 +105,7 @@ class ReaderSelectDialog(QDialog):
         btn_row.addStretch()
         btn_ok = QPushButton("✅ 开始评审")
         btn_ok.setStyleSheet(
-            "QPushButton { background:#1a73e8; color:white; padding:8px 20px;"
+            "QPushButton { background:#3d6fd4; color:white; padding:8px 20px;"
             "font-weight:bold; border-radius:4px; } "
             "QPushButton:hover { background:#1557b0; }")
         btn_ok.clicked.connect(self._on_ok)

@@ -65,7 +65,7 @@ class DebugPanel(QWidget):
         btn_copy = QPushButton("📋 复制全部")
         btn_copy.clicked.connect(self._copy_all)
         btn_copy.setStyleSheet(
-            "QPushButton { background:#1a73e8; color:white; padding:4px 12px;"
+            "QPushButton { background:#3d6fd4; color:white; padding:4px 12px;"
             "border-radius:3px; } "
             "QPushButton:hover { background:#1557b0; }")
         toolbar.addWidget(btn_copy)

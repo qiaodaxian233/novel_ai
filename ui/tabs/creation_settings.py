@@ -40,7 +40,7 @@ class CreationSettings(QWidget):
             "font-weight:bold; border-radius:4px; }"
             "QPushButton:checked { background:#e74c3c; }"
             "QPushButton:!checked { background:#27ae60; }"
-            "QPushButton:hover { opacity:0.9; }")
+            "QPushButton:hover { background:#c0392b; }")
         self.btn_lock.clicked.connect(self._toggle_lock)
         lock_row.addWidget(self.btn_lock)
         lock_row.addStretch()
@@ -86,7 +86,7 @@ class CreationSettings(QWidget):
         from PyQt5.QtCore import QSettings as _QS_dt
         self.chk_deep_think.setChecked(
             _QS_dt("NovelAI", "UserPrefs").value("deepseek_deep_think", True, type=bool))
-        self.chk_deep_think.setStyleSheet("color:#7d3c98;font-weight:bold;")
+        self.chk_deep_think.setStyleSheet("color:#9b72cf;font-weight:bold;")
         self.chk_deep_think.setToolTip(
             "勾选后,每次发送消息前自动点击 DeepSeek 的「深度思考」按钮(R1 模式)。\n"
             "效果:\n"
@@ -104,7 +104,7 @@ class CreationSettings(QWidget):
         self.pangu_check = QCheckBox(
             "启用【盘古超级系统】(禁用词过滤 + 感官铁律 + 压爆震 + 黄金三章公式)")
         self.pangu_check.setChecked(True)
-        self.pangu_check.setStyleSheet("color:#1a4480;font-weight:bold;")
+        self.pangu_check.setStyleSheet("color:#5b8dee;font-weight:bold;")
         self.pangu_check.setToolTip(
             "勾选后,每个章节 prompt 会被盘古铁律自动包裹:\n"
             "• 116 个禁用词强制过滤(顿时/连忙/眼神深邃 等)\n"
@@ -119,11 +119,11 @@ class CreationSettings(QWidget):
         prow = QHBoxLayout()
         self.btn_prelogin = QPushButton("预登录所选模型")
         self.btn_prelogin.setStyleSheet(
-            "background:#1a73e8;color:white;padding:6px 14px;"
+            "background:#3d6fd4;color:white;padding:6px 14px;"
             "font-weight:bold;border-radius:3px;")
         prow.addWidget(self.btn_prelogin)
         hint = QLabel("(也可以到「生成控制」Tab 顶部直接挂载浏览器)")
-        hint.setStyleSheet("color:#888;")
+        hint.setStyleSheet("color:#8fa3c4;")
         prow.addWidget(hint)
         prow.addStretch()
         ai_layout.addLayout(prow)
@@ -189,7 +189,7 @@ class CreationSettings(QWidget):
         custom_row = QHBoxLayout()
         self.btn_genre_custom = QPushButton("✏️ 自定义题材")
         self.btn_genre_custom.setStyleSheet(
-            "QPushButton { color:#1a4480; padding:4px 8px; border:1px dashed #1a4480; }"
+            "QPushButton { color:#5b8dee; padding:4px 8px; border:1px dashed #1a4480; }"
             "QPushButton:hover { background:#eaf3ff; }")
         self.btn_genre_custom.clicked.connect(self._add_custom_genre)
         custom_row.addWidget(self.btn_genre_custom)
@@ -247,7 +247,7 @@ class CreationSettings(QWidget):
         wl_btn_row = QHBoxLayout()
         self.btn_pangu_wl_apply = QPushButton("✓ 应用白名单")
         self.btn_pangu_wl_apply.setStyleSheet(
-            "background:#16a085;color:white;padding:4px 10px;border-radius:3px;")
+            "background:#1a8a72;color:white;padding:4px 10px;border-radius:3px;")
         wl_btn_row.addWidget(self.btn_pangu_wl_apply)
         wl_btn_row.addStretch()
         wl_lay.addLayout(wl_btn_row)
@@ -368,7 +368,7 @@ class CreationSettings(QWidget):
         _hint_dc = QLabel(
             "ℹ 章节编辑器顶部 🔬 13法诊断 按钮(或 F9)触发深度 AI 评分。\n"
             "  自动扫描是本地的,不发 AI 不耗 token,只看『说/道』密度和套词。")
-        _hint_dc.setStyleSheet("color: #888; font-size: 11px;")
+        _hint_dc.setStyleSheet("color: #8fa3c4; font-size: 11px;")
         _hint_dc.setWordWrap(True)
         dc_lay.addWidget(_hint_dc)
         layout.addWidget(dc_box)
@@ -379,7 +379,7 @@ class CreationSettings(QWidget):
         p_row1 = QHBoxLayout()
         self.btn_pangu_style = QPushButton("🎯 风格匹配(基于关键词)")
         self.btn_pangu_style.setStyleSheet(
-            "background:#16a085;color:white;padding:6px 12px;border-radius:3px;")
+            "background:#1a8a72;color:white;padding:6px 12px;border-radius:3px;")
         self.btn_pangu_style.setToolTip(
             "输入题材/灵感关键词,匹配主辅风格 + 女角色基调 + 适合平台")
         p_row1.addWidget(self.btn_pangu_style)
@@ -412,7 +412,7 @@ class CreationSettings(QWidget):
 
         def _add_radio_row(grid, row, label, group_attr, options, default, parent):
             lbl = QLabel(label)
-            lbl.setStyleSheet("font-weight:bold; font-size:11px; color:#555;")
+            lbl.setStyleSheet("font-weight:bold; font-size:11px; color:#8fa3c4;")
             grid.addWidget(lbl, row, 0)
             grp = QButtonGroup(parent)
             for i, text in enumerate(options):
@@ -558,7 +558,7 @@ class CreationSettings(QWidget):
         sw_lay.setColumnStretch(1, 1)
         # 总计标签
         self._style_total_label = QLabel("总计: 100%")
-        self._style_total_label.setStyleSheet("font-weight:bold; color:#27ae60;")
+        self._style_total_label.setStyleSheet("font-weight:bold; color:#30d988;")
         sw_lay.addWidget(self._style_total_label, len(STYLE_DIMENSIONS), 0, 1, 3)
         layout.addWidget(sw_box)
 
@@ -640,7 +640,7 @@ class CreationSettings(QWidget):
         self._golden_grid = gf_grid
         btn_gf_custom = QPushButton("✏️ 自定义金手指")
         btn_gf_custom.setStyleSheet(
-            "QPushButton { color:#1a4480; padding:4px 8px; border:1px dashed #1a4480; }} "
+            "QPushButton { color:#5b8dee; padding:4px 8px; border:1px dashed #1a4480; }} "
             "QPushButton:hover { background:#eaf3ff; }")
         btn_gf_custom.clicked.connect(self._add_custom_golden)
         gf_outer.addWidget(btn_gf_custom)
@@ -670,7 +670,7 @@ class CreationSettings(QWidget):
         self._persona_grid = pe_grid
         btn_pe_custom = QPushButton("✏️ 自定义主角人设")
         btn_pe_custom.setStyleSheet(
-            "QPushButton { color:#1a4480; padding:4px 8px; border:1px dashed #1a4480; }} "
+            "QPushButton { color:#5b8dee; padding:4px 8px; border:1px dashed #1a4480; }} "
             "QPushButton:hover { background:#eaf3ff; }")
         btn_pe_custom.clicked.connect(self._add_custom_persona)
         pe_outer.addWidget(btn_pe_custom)
@@ -840,7 +840,7 @@ class CreationSettings(QWidget):
                 total = 100
             self._style_total_label.setText(f"总计: {total}%")
             self._style_total_label.setStyleSheet(
-                "font-weight:bold; color:#27ae60;" if total == 100
+                "font-weight:bold; color:#30d988;" if total == 100
                 else "font-weight:bold; color:#e74c3c;")
         finally:
             self._style_balancing = False
@@ -1243,7 +1243,7 @@ class CreationSettings(QWidget):
             return  # 重复忽略
         cb = QCheckBox(name)
         cb.setChecked(True)
-        cb.setStyleSheet("QCheckBox { color:#b4884e; }")  # 自定义条目用米色区分
+        cb.setStyleSheet("QCheckBox { color:#c9956b; }")  # 自定义条目用米色区分
         target_dict[name] = cb
         # 找空格子追加(末行末尾)
         from PyQt5.QtCore import QSettings
@@ -1311,7 +1311,7 @@ class CreationSettings(QWidget):
                 if name in target_dict:
                     continue
                 cb = QCheckBox(name)
-                cb.setStyleSheet("QCheckBox { color:#b4884e; }")
+                cb.setStyleSheet("QCheckBox { color:#c9956b; }")
                 target_dict[name] = cb
                 n = len(target_dict) - 1
                 r, c = n // 4, n % 4

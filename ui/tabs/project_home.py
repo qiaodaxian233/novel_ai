@@ -43,11 +43,11 @@ class ProjectHomeTab(QWidget):
         tl.setContentsMargins(0, 0, 0, 0)
         self.lbl_app_title = QLabel("🐉 盘古超级写作助手")
         self.lbl_app_title.setStyleSheet(
-            "font-size:24px; font-weight:bold; color:#b4884e;")
+            "font-size:24px; font-weight:bold; color:#c9956b;")
         tl.addWidget(self.lbl_app_title)
         self.lbl_current_project = QLabel("(暂无打开的项目)")
         self.lbl_current_project.setStyleSheet(
-            "font-size:14px; color:#888;")
+            "font-size:14px; color:#8fa3c4;")
         tl.addWidget(self.lbl_current_project)
         lay.addWidget(title_box)
 
@@ -127,7 +127,7 @@ class ProjectHomeTab(QWidget):
         # 简短文字统计(最近一章信息)
         self.lbl_latest = QLabel("(还没写任何章节)")
         self.lbl_latest.setStyleSheet(
-            "color:#666; font-size:12px; padding:4px;")
+            "color:#8fa3c4; font-size:12px; padding:4px;")
         self.lbl_latest.setWordWrap(True)
         stats_lay.addWidget(self.lbl_latest)
         stats_lay.addStretch()
@@ -203,7 +203,7 @@ class ProjectHomeTab(QWidget):
         else:
             self.lbl_current_project.setText("(暂无打开的项目 — 请新建或打开)")
             self.lbl_current_project.setStyleSheet(
-                "font-size:14px; color:#888;")
+                "font-size:14px; color:#8fa3c4;")
 
         # 统计
         chapters = mw.chapters or []
