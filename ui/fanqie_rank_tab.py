@@ -112,7 +112,6 @@ class FanqieRankTab(QWidget):
         cfg_row.addWidget(self.chk_auto_scan)
 
         # ── 简介抓取间隔(1-5 分钟) ──
-        from PyQt5.QtWidgets import QLabel, QSpinBox
         cfg_row.addSpacing(20)
         cfg_row.addWidget(QLabel("简介抓取间隔:"))
         self.spn_detail_interval = QSpinBox()
