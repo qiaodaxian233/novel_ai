@@ -3199,14 +3199,32 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _parse_laodao_quit_rate(critique_text):
-        """从老刀点评里解析弃书率，返回 int 或 None"""
+        """从老刀点评里解析弃书率，返回 int 或 None。
+        兼容多种 AI 输出格式。"""
         import re as _re
-        for pat in [r'三章弃书率预估[：:：]\s*(\d+)\s*%',
-                    r'弃书率[^\d]{0,5}(\d+)\s*%',
-                    r'弃书率预估[：:：]\s*(\d+)\s*%']:
+        # 按优先级尝试多种匹配模式
+        patterns = [
+            # 精确匹配"三章弃书率预估：XX%"（中文冒号或英文冒号）
+            r'三章弃书率预估\s*[：:]\s*(\d{1,3})\s*%',
+            # "当前版本三章弃书率预估：XX%"
+            r'当前版本三章弃书率预估\s*[：:]\s*(\d{1,3})\s*%',
+            # "弃书率预估：XX%"
+            r'弃书率预估\s*[：:]\s*(\d{1,3})\s*%',
+            # "弃书率：XX%"
+            r'弃书率\s*[：:]\s*(\d{1,3})\s*%',
+            # "弃书率约XX%" 或 "弃书率大约XX%"
+            r'弃书率[约大概预估]{0,4}\s*(\d{1,3})\s*%',
+            # "XX%的弃书率"
+            r'(\d{1,3})\s*%\s*的弃书率',
+            # 宽松：附近有"弃书"两字的百分数
+            r'弃书.{0,20}?(\d{1,3})\s*%',
+        ]
+        for pat in patterns:
             m = _re.search(pat, critique_text)
             if m:
-                return int(m.group(1))
+                val = int(m.group(1))
+                if 0 <= val <= 100:   # 合理范围
+                    return val
         return None
 
     def _on_laodao_critique(self, content, retry_round=1,
@@ -3439,15 +3457,20 @@ class MainWindow(QMainWindow):
                     "success")
             except Exception:
                 pass
-            # ── 自动循环：回填完成后再跑老刀点评 ──
-            if autofix_round > 0 and autofix_round < max_rounds:
+            # ── 自动循环：重写完立即再跑老刀点评检查弃书率 ──
+            if autofix_round > 0:
+                # 在循环中(包括最后一轮)：一律再跑点评，让用户看到最终弃书率
+                round_info = (f"第 {autofix_round}/{max_rounds} 轮"
+                              if autofix_round <= max_rounds
+                              else f"第 {autofix_round} 轮(已超最大)")
                 self.tab_generation.log(
-                    f"🔄 第 {autofix_round} 轮重写完成，自动再跑老刀点评检查弃书率...", "info")
+                    f"🔄 {round_info} 重写完成，自动再跑老刀点评检查弃书率...", "info")
                 self._on_laodao_critique(fixed, retry_round=1,
                                          autofix_round=autofix_round,
                                          max_rounds=max_rounds,
                                          target_rate=target_rate)
-                return   # 不弹完成弹窗，等点评回来再判断
+                return   # 不弹完成弹窗，等点评回来判断是否继续
+            # 纯手动触发(autofix_round=0)：弹完成弹窗
             try:
                 msg = (f"第 {ch_idx+1} 章已按老刀建议重写 + 回填 + 保存。\n\n"
                        f"字数变化:{orig_len} → {new_len}\n"
