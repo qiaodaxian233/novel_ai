@@ -11444,9 +11444,13 @@ class MainWindow(QMainWindow):
             return
         ch_idx = getattr(self.tab_editor, "current_index", 0)
         ch_title = self.chapters[ch_idx]["title"] if ch_idx < len(self.chapters) else "未知"
-        self.tab_generation.log(f"🎬 正在把「{ch_title}」转为短剧剧本...", "info")
-        prompt = PROMPTS["novel_to_script"].format(content=text[:8000])
-        self._send_to_ai(prompt, f"转剧本-{ch_title}", target="novel_to_script")
+        word_count = len(text)
+        content = text[:12000] if len(text) > 12000 else text
+        self.tab_generation.log(
+            f"🎬 正在把「{ch_title}」({word_count}字)转为 AI 分镜脚本...", "info")
+        prompt = PROMPTS["novel_to_script"].format(
+            content=content, word_count=word_count)
+        self._send_to_ai(prompt, f"AI分镜-{ch_title}", target="novel_to_script")
 
     def _on_script_response(self, content):
         """处理剧本转换结果"""
@@ -11455,23 +11459,48 @@ class MainWindow(QMainWindow):
             return
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QPushButton, QHBoxLayout
         dlg = QDialog(self)
-        dlg.setWindowTitle("🎬 短剧剧本")
-        dlg.resize(700, 600)
+        dlg.setWindowTitle("🎬 AI 分镜脚本")
+        dlg.resize(1100, 750)
         lay = QVBoxLayout(dlg)
+        # 顶部提示
+        from PyQt5.QtWidgets import QLabel
+        tip = QLabel("✅ 分镜脚本生成完成。场景 JSON 可直接用于 AI 生图，视频提示词可用于可灵/Sora/Runway。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color:#5b8dee; font-size:12px; padding:4px;")
+        lay.addWidget(tip)
         edit = QPlainTextEdit()
         edit.setPlainText(content.strip())
         edit.setReadOnly(False)
-        edit.setStyleSheet("font-family: Consolas, 'Microsoft YaHei'; font-size: 13px;")
+        edit.setStyleSheet(
+            "font-family: Consolas, 'Courier New', 'Microsoft YaHei'; font-size: 12px;")
         lay.addWidget(edit)
         btn_row = QHBoxLayout()
-        btn_copy = QPushButton("📋 复制到剪贴板")
+        btn_copy = QPushButton("📋 复制全部")
         btn_copy.clicked.connect(lambda: (
             QApplication.clipboard().setText(edit.toPlainText()),
-            self.tab_generation.log("📋 剧本已复制到剪贴板", "info")))
+            self.tab_generation.log("📋 分镜脚本已复制", "info")))
+        btn_save = QPushButton("💾 保存为 .txt")
+        def _save_script():
+            import os
+            from PyQt5.QtWidgets import QFileDialog
+            ch_idx_ = getattr(self.tab_editor, "current_index", 0)
+            default_name = f"分镜脚本_{self.chapters[ch_idx_].get('title','第X章') if ch_idx_ < len(self.chapters) else '未命名'}.txt"
+            path, _ = QFileDialog.getSaveFileName(
+                dlg, "保存分镜脚本", default_name, "文本文件 (*.txt);;所有文件 (*)")
+            if path:
+                with open(path, "w", encoding="utf-8") as f_:
+                    f_.write(edit.toPlainText())
+                self.tab_generation.log(f"💾 分镜脚本已保存: {path}", "success")
+        btn_save.clicked.connect(_save_script)
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dlg.accept)
         btn_row.addWidget(btn_copy)
+        btn_row.addWidget(btn_save)
         btn_row.addStretch()
+        btn_row.addWidget(btn_close)
         lay.addLayout(btn_row)
-        self.tab_generation.log(f"🎬 剧本生成完成({len(content)}字符)", "success")
+        self.tab_generation.log(
+            f"🎬 AI 分镜脚本生成完成({len(content)} 字符，含场景 JSON + 分镜表格)", "success")
         dlg.exec_()
 
     # ── A/B 对比 ──
