@@ -36,7 +36,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QColor, QBrush
 from PyQt5.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QMessageBox,
-    QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
+    QPushButton, QSplitter, QSpinBox, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget, QGroupBox, QProgressBar, QAbstractItemView,
 )
 
