@@ -80,11 +80,15 @@ def test_08_sync_on_project_open():
 
 
 def test_09_app_version_v2_23_4():
-    """APP_VERSION 已升到 v2.23.4"""
+    """APP_VERSION 已升到 v2.23.4+(允许后续版本升级)"""
     src = open("novel_ai.py", encoding="utf-8").read()
     m = re.search(r'APP_VERSION\s*=\s*"(v[\d.]+)"', src)
     assert m, "APP_VERSION 未找到"
-    assert m.group(1) == "v2.23.4", f"版本应为 v2.23.4, 实际 {m.group(1)}"
+    v = m.group(1)
+    # 至少 v2.23.4(允许后续小版本升)
+    parts = [int(x) for x in v[1:].split(".")]
+    assert parts[0] >= 2 and parts[1] >= 23 and parts[2] >= 4, \
+        f"版本应至少 v2.23.4,实际 {v}"
 
 
 # ── 3. Tab 数据渲染(纯逻辑测试,不需要 Qt) ──

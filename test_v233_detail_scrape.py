@@ -164,8 +164,10 @@ def test_09_enriched_prompt_uses_samples():
         }
         p = build_v233_enriched_prompt(stats, ["玄幻"], tmpdir, "请生成 5 个创意")
         assert "已扫到的真实爆款样本" in p
-        # 不应该泄漏书名
-        assert "样本一" not in p, "v2.23.3 prompt 不能泄漏书名"
+        # v2.23.5: 设计已变更为发送书名(配合"不许复制"约束)
+        # 不再要求"不能泄漏书名",改为要求 prompt 含约束语
+        assert "不直接复制" in p or "绝不复制" in p or "不能复制" in p \
+            or "不许复制" in p, "prompt 必须含'不许复制'约束"
         # 应该有题材名
         assert "传统玄幻" in p or "玄幻" in p
         # 应该有标签组合

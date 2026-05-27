@@ -965,12 +965,15 @@ def build_v233_enriched_prompt(stats: Dict, user_genres: List[str],
                                 project_root: str,
                                 base_prompt: str = "") -> str:
     """
-    v2.23.3 增强 prompt:用磁盘缓存的详情数据补充统计
-
-    跟 v2.23.1 的区别:
-    - 统计部分保留(男女频 Top10 题材热度)
-    - 加"已抓样本(用户题材相关)"段:列 5-10 个真实爆款的 [标签组合 + 简介一句话]
-    - 仍然不传具体书名(防 AI 抄)
+    v2.23.5 增强 prompt:用磁盘缓存的详情数据补充统计 + 智能题材匹配
+    
+    跟 v2.23.3 的区别:
+    - 用智能题材匹配(fanqie_genre_provider)把用户题材扩展到番茄真实分类
+    - 样本数从 8 → 20(更多参考)
+    - 样本简介从 80 字 → 300 字(让 AI 看清爆款卖点)
+    - 显示书名(给 AI 真实标尺,但 prompt 强制约束"不许复制")
+    - 显示在读数(让 AI 判断爆款热度等级)
+    - 样本按分类分组展示(便于 AI 看出每个题材的钩子手法)
     """
     if not stats or stats.get("total_books", 0) == 0:
         return base_prompt or ""
@@ -1002,20 +1005,56 @@ def build_v233_enriched_prompt(stats: Dict, user_genres: List[str],
             parts.append(f"  {i}. {cat}({avg // 10000} 万在读)")
         parts.append("")
 
-    # v2.23.3 新增:用户题材相关的爆款样本(详情数据)
-    matched = _gather_matched_samples(project_root, user_genres, max_samples=8)
+    # v2.23.5:用户题材 → 番茄分类智能映射展示
+    try:
+        from core.fanqie_genre_provider import match_user_genres_to_fanqie
+        mapped_cats = match_user_genres_to_fanqie(user_genres or [])
+        if mapped_cats and user_genres:
+            parts.append(f"🎯 你选的题材 [{' / '.join(user_genres)}] 在番茄对应分类:")
+            parts.append(f"   {' / '.join(mapped_cats)}")
+            parts.append("")
+    except Exception:
+        pass
+
+    # v2.23.5:用户题材相关的爆款样本(详情数据,增强版)
+    matched = _gather_matched_samples(project_root, user_genres, max_samples=20)
     if matched:
-        parts.append(f"📚 已扫到的真实爆款样本({len(matched)} 本,与你题材相关):")
-        for i, sample in enumerate(matched, 1):
-            tags_str = "+".join(sample.get("tags", [])[:5]) or "(无标签)"
-            abstract = sample.get("abstract", "")[:80]
-            cat = sample.get("source_category", "")
-            parts.append(f"  样本{i} [{cat}] 标签组合:{tags_str}")
-            if abstract:
-                parts.append(f"    简介摘要:{abstract}...")
+        # 按分类分组展示(便于 AI 看出每个题材的钩子手法)
+        from collections import OrderedDict
+        groups = OrderedDict()
+        for sample in matched:
+            cat = sample.get("source_category", "未分类")
+            groups.setdefault(cat, []).append(sample)
+        
+        parts.append(f"📚 已扫到的真实爆款样本({len(matched)} 本,与你题材相关,按分类分组):")
         parts.append("")
-        parts.append("  ↑ 这些是当前在榜的爆款,请观察它们的 **标签组合规律** 和 **钩子手法**,")
-        parts.append("    但**绝不直接复制简介内容**,你的创意要差异化。")
+        
+        for cat, samples in groups.items():
+            parts.append(f"  ▼ 【{cat}】({len(samples)} 本)")
+            for j, sample in enumerate(samples, 1):
+                title = sample.get("title", "") or "(书名未抓到)"
+                read = sample.get("read_count", "")
+                tags = sample.get("tags", [])
+                tags_str = "+".join(tags[:6]) if tags else "(无标签)"
+                # v2.23.5: 简介长度 80 → 300
+                abstract = sample.get("abstract", "")[:300]
+                wc = sample.get("word_count", "")
+                
+                read_str = f" · {read}" if read else ""
+                wc_str = f" · {wc}" if wc else ""
+                parts.append(f"    {j}. 《{title}》{read_str}{wc_str}")
+                parts.append(f"       标签:{tags_str}")
+                if abstract:
+                    # 去除多余空白
+                    abstract = " ".join(abstract.split())
+                    parts.append(f"       简介:{abstract}...")
+                parts.append("")
+        
+        parts.append("  ↑ 这些是当前在榜的真实爆款,观察它们的:")
+        parts.append("    1. **标签组合规律**(哪几个标签经常一起出现)")
+        parts.append("    2. **钩子手法**(简介开头怎么吸引人)")
+        parts.append("    3. **卖点提炼**(为什么能爆)")
+        parts.append("    但**绝不直接复制书名或简介**,你的创意要差异化。")
         parts.append("")
 
     if user_genres:
@@ -1023,8 +1062,8 @@ def build_v233_enriched_prompt(stats: Dict, user_genres: List[str],
         parts.append("")
 
     parts.append("【硬性约束】")
-    parts.append("1. 基于上述真实榜单数据出 5 个差异化创意")
-    parts.append("2. 绝不复制书名或简介,只借鉴标签组合规律")
+    parts.append("1. 基于上述真实榜单数据(尤其是爆款样本的标签 + 简介)出 5 个差异化创意")
+    parts.append("2. **绝不复制书名、简介内容、人物名字**,只借鉴标签组合规律和钩子手法")
     parts.append("3. **每个创意必须用 AI 自己想的具体卖点词当标签**,例如:")
     parts.append("   ✓ 正确:`1. 【厨子修仙】主角拿菜刀斩妖,一身锅气压魂魄...`")
     parts.append("   ✗ 错误:`1. 【一句话卖点】xxx`(不要复制'一句话卖点'这五个字!)")
@@ -1039,31 +1078,63 @@ def build_v233_enriched_prompt(stats: Dict, user_genres: List[str],
 
 
 def _gather_matched_samples(project_root: str, user_genres: List[str],
-                             max_samples: int = 8) -> List[Dict]:
-    """从磁盘缓存里挑跟用户题材相关的爆款样本"""
+                             max_samples: int = 20) -> List[Dict]:
+    """v2.23.5: 从磁盘缓存里挑跟用户题材相关的爆款样本
+    
+    改进点(对比 v2.23.3):
+    - max_samples 从 8 → 20(给 AI 更多样本参考)
+    - 引入 fanqie_genre_provider.match_user_genre 智能匹配
+      (用户选"玄幻"会匹配"传统玄幻"/"玄幻脑洞"等多个番茄真实分类)
+    - 返回 title(让 AI 能看到具体爆款书名,但 prompt 里有"不许直接复制"约束)
+    - 样本里多带 read_count(在读数)便于 AI 判断爆款等级
+    """
     out = []
     cached_ids = list_cached_book_ids(project_root)
+    
+    # v2.23.5: 用智能匹配把用户题材扩展到番茄真实分类
+    matched_cats = set()
+    try:
+        from core.fanqie_genre_provider import match_user_genres_to_fanqie
+        fanqie_cats = match_user_genres_to_fanqie(user_genres or [])
+        matched_cats = set(c.lower() for c in fanqie_cats)
+    except Exception:
+        # 退回到 v2.23.3 的简单 lower 包含匹配
+        pass
     user_genre_set = set(g.lower() for g in (user_genres or []))
 
-    # 第一轮:source_category hard match
+    def _category_matches(cat: str) -> bool:
+        """检查番茄分类(来自 source_category)是否匹配用户题材"""
+        if not cat:
+            return False
+        cat_lower = cat.lower()
+        # 1. 智能匹配命中
+        if cat_lower in matched_cats:
+            return True
+        # 2. 简单包含匹配(原 v2.23.3 逻辑作为兜底)
+        return any(g in cat_lower or cat_lower in g for g in user_genre_set)
+
+    # 第一轮:source_category 智能匹配
     for bid in cached_ids:
         if len(out) >= max_samples:
             break
         data = load_book_detail(project_root, bid)
         if not data:
             continue
-        cat = (data.get("source_category", "") or "").lower()
+        cat = data.get("source_category", "") or ""
         detail = data.get("detail", {})
-        # hard match:用户题材跟分类相互包含
-        if any(g in cat or cat in g for g in user_genre_set):
+        if _category_matches(cat):
             out.append({
-                "source_category": data.get("source_category", ""),
-                "abstract": detail.get("abstract", ""),
-                "tags": detail.get("tags", []),
+                "title": detail.get("title", "") or "",
+                "source_category": cat,
+                "abstract": detail.get("abstract", "") or "",
+                "tags": detail.get("tags", []) or [],
+                "word_count": detail.get("word_count", "") or "",
+                "read_count": data.get("read_count_text", "") or "",
             })
 
-    # 第二轮:不够 max_samples 时补充任意爆款
+    # 第二轮:不够 max_samples 时补充其它分类的爆款样本(多样性)
     if len(out) < max_samples:
+        seen_cats = set(s["source_category"] for s in out)
         for bid in cached_ids:
             if len(out) >= max_samples:
                 break
@@ -1071,14 +1142,17 @@ def _gather_matched_samples(project_root: str, user_genres: List[str],
             if not data:
                 continue
             cat = data.get("source_category", "")
-            already = any(s["source_category"] == cat for s in out)
-            if already:
+            if cat in seen_cats:
                 continue
+            seen_cats.add(cat)
             detail = data.get("detail", {})
             out.append({
+                "title": detail.get("title", "") or "",
                 "source_category": cat,
-                "abstract": detail.get("abstract", ""),
-                "tags": detail.get("tags", []),
+                "abstract": detail.get("abstract", "") or "",
+                "tags": detail.get("tags", []) or [],
+                "word_count": detail.get("word_count", "") or "",
+                "read_count": data.get("read_count_text", "") or "",
             })
 
     return out

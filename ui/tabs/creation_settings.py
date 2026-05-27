@@ -148,28 +148,60 @@ class CreationSettings(QWidget):
         trow.addWidget(self.btn_gen_title); trow.addWidget(self.btn_regen_title)
         layout.addLayout(trow)
 
-        # ---- 题材 ----
-        gbox = QGroupBox("题材选择")
+        # ---- 题材选择(v2.23.5 重写:根据番茄真实分类分组展示)----
+        gbox = QGroupBox("题材选择(番茄真实分类)")
         self.box_genre = gbox  # 第 7 项:用于折叠链
-        glay = QGridLayout(gbox)
+        gbox_lay = QVBoxLayout(gbox)
+        gbox_lay.setContentsMargins(8, 6, 8, 6)
+        gbox_lay.setSpacing(4)
         self.genre_checks = {}
-        for r, row_data in enumerate(GENRES):
-            for c, name in enumerate(row_data):
+
+        # v2.23.5: 用 fanqie_genre_provider 提供分组数据
+        try:
+            from core.fanqie_genre_provider import get_genre_groups
+            genre_groups = get_genre_groups()
+        except Exception:
+            # 退回到老 GENRES(扁平)作为单一组
+            genre_groups = [("题材", [n for row in GENRES for n in row])]
+
+        # 默认勾选的题材(尽量挑番茄上有热度的)
+        defaults = {"都市日常", "都市修真", "豪门总裁", "玄幻言情"}
+
+        # 主 grid layout(子分组用 QGroupBox + QGridLayout)
+        for group_name, items in genre_groups:
+            sub = QGroupBox(group_name)
+            sub.setStyleSheet(
+                "QGroupBox { font-weight: normal; margin-top: 6px; padding-top: 8px;}"
+                "QGroupBox::title { subcontrol-position: top left; padding: 0 4px; }")
+            sublay = QGridLayout(sub)
+            sublay.setContentsMargins(6, 4, 6, 4)
+            sublay.setSpacing(4)
+            for i, name in enumerate(items):
                 cb = QCheckBox(name)
-                if name in ("都市", "言情"):
+                if name in defaults:
                     cb.setChecked(True)
                 self.genre_checks[name] = cb
-                glay.addWidget(cb, r, c)
-        # 第 3 项:加 "✏️ 自定义" 按钮(末行),弹 QInputDialog 输入新题材
-        self._genre_custom_row = len(GENRES)
-        self._genre_custom_col = 0
+                r, c = i // 4, i % 4
+                sublay.addWidget(cb, r, c)
+            gbox_lay.addWidget(sub)
+
+        # 第 3 项:加 "✏️ 自定义" 按钮
+        custom_row = QHBoxLayout()
         self.btn_genre_custom = QPushButton("✏️ 自定义题材")
         self.btn_genre_custom.setStyleSheet(
-            "QPushButton { color:#1a4480; padding:4px 8px; border:1px dashed #1a4480; }} "
+            "QPushButton { color:#1a4480; padding:4px 8px; border:1px dashed #1a4480; }"
             "QPushButton:hover { background:#eaf3ff; }")
         self.btn_genre_custom.clicked.connect(self._add_custom_genre)
-        glay.addWidget(self.btn_genre_custom, self._genre_custom_row, 0, 1, 4)
-        self._genre_layout = glay  # 留引用,自定义条目时往里加
+        custom_row.addWidget(self.btn_genre_custom)
+        custom_row.addStretch()
+        gbox_lay.addLayout(custom_row)
+
+        # _genre_layout: 老代码 (_add_custom_checkbox) 期望它是 QGridLayout
+        # 这里用最后一个分组的 sub layout 充当"自定义题材落地点"
+        # (实际新自定义题材都会加到最后一个"通用题材"组)
+        self._genre_layout = sublay  # 指向最后一个 sub(通用题材)
+        self._genre_custom_row = (len(items) + 3) // 4  # 通用组下一空行
+        self._genre_custom_col = 0
         layout.addWidget(gbox)
 
         # ---- 主角名字(生成大纲时使用) ----
