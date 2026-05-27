@@ -1088,6 +1088,21 @@ class BrowserWorker(QObject):
                     f"📚 详情抓取进度 {i}/{total}"
                     f"(成功 {success}, 跳过 {skipped}, 失败 {fail})", "info")
 
+            # 抓完一本后按用户设置等待(1-5 分钟)，防止被番茄封锁
+            # 最后一本不用等
+            if i < total and not self._scan_cancel.is_set():
+                try:
+                    from ui.fanqie_rank_tab import FanqieRankTab
+                    _interval_sec = FanqieRankTab.get_detail_interval_sec()
+                except Exception:
+                    _interval_sec = 120  # 默认 2 分钟
+                self.log_signal.emit(
+                    f"📚 等待 {_interval_sec // 60} 分钟后抓下一本...", "info")
+                _waited = 0
+                while _waited < _interval_sec and not self._scan_cancel.is_set():
+                    time.sleep(1)
+                    _waited += 1
+
             # 实时更新 INDEX.md(每 5 本)
             if i % 5 == 0 and stats_for_index:
                 try:

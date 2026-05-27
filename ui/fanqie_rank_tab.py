@@ -110,6 +110,24 @@ class FanqieRankTab(QWidget):
         self.chk_auto_scan.setChecked(_auto)
         self.chk_auto_scan.toggled.connect(self._on_auto_scan_toggled)
         cfg_row.addWidget(self.chk_auto_scan)
+
+        # ── 简介抓取间隔(1-5 分钟) ──
+        from PyQt5.QtWidgets import QLabel, QSpinBox
+        cfg_row.addSpacing(20)
+        cfg_row.addWidget(QLabel("简介抓取间隔:"))
+        self.spn_detail_interval = QSpinBox()
+        self.spn_detail_interval.setRange(1, 5)
+        self.spn_detail_interval.setSuffix(" 分钟")
+        self.spn_detail_interval.setFixedWidth(90)
+        self.spn_detail_interval.setToolTip(
+            "每抓完一本简介后等待的时长(1-5 分钟)\n"
+            "调慢可降低被番茄封锁的风险")
+        _interval = QSettings("NovelAI", "UI").value(
+            "fanqie_detail_interval_min", 2, type=int)
+        self.spn_detail_interval.setValue(max(1, min(5, _interval)))
+        self.spn_detail_interval.valueChanged.connect(self._on_detail_interval_changed)
+        cfg_row.addWidget(self.spn_detail_interval)
+
         cfg_row.addStretch()
         lay.addLayout(cfg_row)
 
@@ -580,6 +598,19 @@ class FanqieRankTab(QWidget):
         """保存自动扫榜设置"""
         from PyQt5.QtCore import QSettings
         QSettings("NovelAI", "UI").setValue("fanqie_auto_scan", checked)
+
+    def _on_detail_interval_changed(self, value):
+        """保存简介抓取间隔设置"""
+        from PyQt5.QtCore import QSettings
+        QSettings("NovelAI", "UI").setValue("fanqie_detail_interval_min", value)
+
+    @staticmethod
+    def get_detail_interval_sec() -> int:
+        """返回简介抓取间隔秒数(供 browser_worker 调用)"""
+        from PyQt5.QtCore import QSettings
+        minutes = QSettings("NovelAI", "UI").value(
+            "fanqie_detail_interval_min", 2, type=int)
+        return max(60, min(300, minutes * 60))
 
     @staticmethod
     def is_auto_scan_enabled() -> bool:
