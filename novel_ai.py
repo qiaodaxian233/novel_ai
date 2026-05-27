@@ -865,11 +865,11 @@ class MainWindow(QMainWindow):
 
         # ──── 左侧导航栏 (v2.23.4 — 无硬编码颜色,跟随主题) ────
         left = QFrame()
-        left.setFixedWidth(200)
+        left.setFixedWidth(220)
         left.setObjectName("nav_sidebar")
         ll = QVBoxLayout(left)
-        ll.setContentsMargins(12, 12, 12, 8)
-        ll.setSpacing(4)
+        ll.setContentsMargins(14, 16, 14, 10)
+        ll.setSpacing(6)
 
         # ── 项目操作按钮 ──
         btn_new_proj = QPushButton("＋  新建项目")
