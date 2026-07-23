@@ -640,7 +640,7 @@ class CreationSettings(QWidget):
         self._golden_grid = gf_grid
         btn_gf_custom = QPushButton("✏️ 自定义金手指")
         btn_gf_custom.setStyleSheet(
-            "QPushButton { color:#5b8dee; padding:4px 8px; border:1px dashed #1a4480; }} "
+            "QPushButton { color:#5b8dee; padding:4px 8px; border:1px dashed #1a4480; } "
             "QPushButton:hover { background:#eaf3ff; }")
         btn_gf_custom.clicked.connect(self._add_custom_golden)
         gf_outer.addWidget(btn_gf_custom)
@@ -670,7 +670,7 @@ class CreationSettings(QWidget):
         self._persona_grid = pe_grid
         btn_pe_custom = QPushButton("✏️ 自定义主角人设")
         btn_pe_custom.setStyleSheet(
-            "QPushButton { color:#5b8dee; padding:4px 8px; border:1px dashed #1a4480; }} "
+            "QPushButton { color:#5b8dee; padding:4px 8px; border:1px dashed #1a4480; } "
             "QPushButton:hover { background:#eaf3ff; }")
         btn_pe_custom.clicked.connect(self._add_custom_persona)
         pe_outer.addWidget(btn_pe_custom)
@@ -1366,7 +1366,7 @@ class CreationSettings(QWidget):
             btn = QPushButton("✓ 完成此项,自动跳到下一项")
             btn.setStyleSheet(
                 "QPushButton { color:white; background:#2ecc71; padding:6px 14px; "
-                "border-radius:3px; font-weight:bold; margin-top:6px; }} "
+                "border-radius:3px; font-weight:bold; margin-top:6px; } "
                 "QPushButton:hover { background:#27ae60; }")
             def make_next(cur_box=cur, nxt_box=nxt):
                 def _f():

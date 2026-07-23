@@ -398,7 +398,7 @@ class CharacterLibrary(QWidget):
             "(纯本地正则,不调 AI 不烧 token)")
         self.btn_sync_hero.setStyleSheet(
             "QPushButton { background:#3498db; color:white; padding:5px 10px; "
-            "border-radius:3px; font-weight:bold; }} "
+            "border-radius:3px; font-weight:bold; } "
             "QPushButton:hover { background:#2980b9; }")
         sync_row.addWidget(self.btn_sync_hero)
         
@@ -735,7 +735,7 @@ class CharacterLibrary(QWidget):
         self.btn_reeval_fore.setToolTip(
             "把所有 plan_pay_at=0 的伏笔交给 AI 评估合理回收章节,自动回填")
         self.btn_reeval_fore.setStyleSheet(
-            "QPushButton { background:#141d353e0; color:#5d4037; border:1px solid #ffa726; }")
+            "QPushButton { background:#fff3e0; color:#5d4037; border:1px solid #ffa726; }")
         top.addWidget(btn_add); top.addWidget(btn_del)
         top.addWidget(btn_check); top.addWidget(btn_clear_fore)
         top.addWidget(self.btn_reeval_fore); top.addStretch()
@@ -867,7 +867,7 @@ class CharacterLibrary(QWidget):
         self.btn_reeval_promise.setToolTip(
             "把所有 deadline=0 的承诺/威胁/约定交给 AI 评估合理截止章节,自动回填")
         self.btn_reeval_promise.setStyleSheet(
-            "QPushButton { background:#141d353e0; color:#5d4037; border:1px solid #ffa726; }")
+            "QPushButton { background:#fff3e0; color:#5d4037; border:1px solid #ffa726; }")
         top.addWidget(btn_add); top.addWidget(btn_del)
         top.addWidget(self.btn_reeval_promise); top.addStretch()
         lay.addLayout(top)
@@ -3472,7 +3472,7 @@ class CharacterLibrary(QWidget):
                     "border:1px solid #ccc; padding:3px; }")
             else:
                 ed.setStyleSheet(
-                    "QLineEdit { background:#141d35; color:#000; "
+                    "QLineEdit { background:#141d35; color:#e8ecf4; "
                     "border:1px solid #1a4480; padding:3px; }")
     
     def _on_hero_unlock_toggled(self, checked):

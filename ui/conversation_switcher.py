@@ -40,7 +40,7 @@ class ConversationSwitcher(QWidget):
 
         box = QGroupBox("对话槽管理 — 随时换对话,自动同步记忆")
         box.setStyleSheet(
-            "QGroupBox { border: 2px solid #1a73e8; margin-top: 8px; }} "
+            "QGroupBox { border: 2px solid #1a73e8; margin-top: 8px; } "
             "QGroupBox::title { color: #1a73e8; font-weight: bold; }"
         )
         lay = QVBoxLayout(box)
@@ -80,7 +80,7 @@ class ConversationSwitcher(QWidget):
         self.btn_switch.setToolTip("切换到选中槽 URL,并可选同步记忆")
         self.btn_switch.setStyleSheet(
             "QPushButton { background:#3d6fd4; color:white; font-weight:bold; "
-            "padding:5px 10px; border-radius:3px; }} "
+            "padding:5px 10px; border-radius:3px; } "
             "QPushButton:hover { background:#1557b0; }")
         self.btn_del_slot = QPushButton("🗑 删除")
         self.btn_del_slot.setToolTip("删除选中槽(不影响实际对话)")

@@ -169,7 +169,7 @@ class ProjectHomeTab(QWidget):
         w = QGroupBox()
         w.setStyleSheet(
             f"QGroupBox {{ border:2px solid {color}; border-radius:6px; "
-            "padding:8px; background:rgba(0,0,0,0.02); }}")
+            "padding:8px; background:rgba(0,0,0,0.02); }")
         l = QVBoxLayout(w)
         l.setContentsMargins(8, 4, 8, 4)
         t = QLabel(title)

@@ -104,7 +104,7 @@ class CanonGuard(QWidget):
         self.audit_log.setReadOnly(True)
         self.audit_log.setMaximumHeight(120)
         self.audit_log.setStyleSheet(
-            "font-family: Consolas, monospace; font-size: 12px; background: #141d357f0;")
+            "font-family: Consolas, monospace; font-size: 12px; background: #fff7f0;")
         ll.addWidget(self.audit_log)
         layout.addWidget(log_box)
 

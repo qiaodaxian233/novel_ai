@@ -216,7 +216,7 @@ class ChapterEditor(QWidget):
             "📌 本章元信息(钩子/爽点/伏笔/下一章选项)— 已自动从正文剥离,会引导下一章生成")
         self.pangu_meta_box.setStyleSheet(
             "QGroupBox { border: 2px solid #b4884e; margin-top: 8px; padding-top: 14px; "
-            "  background: #141d35bf2; }} "
+            "  background: #fffbf2; } "
             "QGroupBox::title { color: #b4884e; font-weight: bold; left: 10px; "
             "  font-size: 13px; }")
         pml = QVBoxLayout(self.pangu_meta_box)
@@ -440,7 +440,7 @@ class ChapterEditor(QWidget):
                 btn.setStyleSheet(
                     "QPushButton { text-align:left; padding:4px 8px; "
                     "color:#3a2a10; "                                   # 深棕,配米色背景对比度 >7:1
-                    "background:#141d358ea; border:1px solid #e0c896; }} "
+                    "background:#fff8ea; border:1px solid #e0c896; } "
                     "QPushButton:hover { background:#ffe9b8; color:#000; }")  # hover 更深
                 btn.setToolTip(opt)
                 btn.clicked.connect(lambda _, x=opt: self.next_option_picked.emit(x))

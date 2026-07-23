@@ -326,7 +326,7 @@ class ProjectLauncher(QDialog):
         btn_open.setCursor(Qt.PointingHandCursor)
         btn_open.setStyleSheet("""
             QPushButton {
-                background: #141d35; color: #555;
+                background: #141d35; color: #8fa3c4;
                 padding: 12px; font-size: 13px;
                 border-radius: 8px; border: 1px solid #e0e6ed;
                 text-align: left;

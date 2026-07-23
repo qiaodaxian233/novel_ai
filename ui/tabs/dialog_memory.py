@@ -50,7 +50,7 @@ class DialogMemory(QWidget):
         # ---- 一键生成对话记忆(主入口) ----
         full_box = QGroupBox("一键生成对话记忆 (推荐)")
         full_box.setStyleSheet(
-            "QGroupBox { border: 2px solid #cc3333; }} "
+            "QGroupBox { border: 2px solid #cc3333; } "
             "QGroupBox::title { color: #cc3333; }")
         full_lay = QVBoxLayout(full_box)
         full_tip = QLabel(
