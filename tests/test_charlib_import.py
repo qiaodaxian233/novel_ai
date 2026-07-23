@@ -182,7 +182,7 @@ def test_merge_dicts_empty_safe(charlib):
 
 def test_load_real_deepseek_19_chars(charlib):
     """如果上传的真实 JSON 在测试目录里,验证它能完整加载"""
-    fixture = os.path.join(os.path.dirname(__file__),
+    fixture = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "test_fixtures", "deepseek_19chars.json")
     if not os.path.exists(fixture):
         pytest.skip("真实样本未提供")

@@ -7,7 +7,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # 仓库根
 
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt
@@ -75,7 +75,7 @@ def section(t):
 section("P1 — 无 mw 实例化")
 panel = LifespanLoopsPanel(mw=None)
 expect("无 mw 时 panel 创建成功", panel is not None)
-expect("UI 控件存在", hasattr(panel, "chk_lifespan_on") and hasattr(panel, "tbl_loops"))
+expect("UI 控件存在", hasattr(panel, "chk_lifespan_on"))  # tbl_loops 已迁至 foreshadow_tab
 expect("默认未启用", not panel.chk_lifespan_on.isChecked())
 expect("默认起始 8760", panel.spin_total_days.value() == 8760)
 
@@ -113,12 +113,7 @@ expect("起始日数同步", panel.spin_total_days.value() == 10000)
 expect("warn 阈值同步", panel.spin_warn.value() == 500)
 expect("critical 阈值同步", panel.spin_critical.value() == 50)
 expect("兜底每章同步", panel.spin_default_per.value() == 2)
-expect("loops 启用同步", panel.chk_loops_on.isChecked())
-expect("warn_gap 同步", panel.spin_warn_gap.value() == 60)
-expect("critical_gap 同步", panel.spin_critical_gap.value() == 120)
-expect("表格 2 行", panel.tbl_loops.rowCount() == 2)
-expect("表格首行 ID = A", panel.tbl_loops.item(0, 0).text() == "A")
-expect("表格首行 状态 = open", panel.tbl_loops.item(0, 5).text() == "open")
+# [已摘除] 伏笔检查 UI 已迁至 ui/foreshadow_tab.py,数据层由 test_lifespan_loops.py 覆盖
 expect("当前状态显示已折寿", "250" in panel.lbl_used.text())
 expect("剩余 = 9750", "9750" in panel.lbl_remaining.text())
 expect("正常档", "正常" in panel.lbl_status_tag.text())
@@ -137,9 +132,6 @@ panel.spin_warn.setValue(700)
 panel.spin_critical.setValue(60)
 panel.spin_default_per.setValue(3)
 panel.chk_auto_audit.setChecked(False)
-panel.chk_loops_on.setChecked(True)
-panel.spin_warn_gap.setValue(100)
-panel.spin_critical_gap.setValue(200)
 
 panel.sync_to_mw()
 expect("ledger.enabled 写回", mw.lifespan_ledger["enabled"] is True)
@@ -148,9 +140,6 @@ expect("ledger.warn_threshold 写回", mw.lifespan_ledger["warn_threshold"] == 7
 expect("ledger.critical_threshold 写回", mw.lifespan_ledger["critical_threshold"] == 60)
 expect("ledger.default_per_chapter 写回", mw.lifespan_ledger["default_per_chapter"] == 3)
 expect("ledger.auto_audit 写回 False", mw.lifespan_ledger["auto_audit"] is False)
-expect("loops.enabled 写回", mw.open_loops["enabled"] is True)
-expect("loops.warn_gap 写回", mw.open_loops["warn_gap"] == 100)
-expect("loops.critical_gap 写回", mw.open_loops["critical_gap"] == 200)
 
 
 # ============================================================
@@ -178,85 +167,7 @@ expect("剩余 3 → 危急", "危急" in panel.lbl_status_tag.text())
 
 
 # ============================================================
-# Test P5: 添加伏笔（按钮回调）
-# ============================================================
-section("P5 — 添加伏笔")
-mw = make_mw_with_data()
-panel = LifespanLoopsPanel(mw)
-
-panel.edit_loop_id.setText("X1")
-panel.edit_loop_desc.setText("某线索")
-panel.spin_loop_added.setValue(7)
-panel.edit_loop_kw.setText("线索")
-panel._on_loop_add()
-
-expect("mw.open_loops.loops 增加 1 条", len(mw.open_loops["loops"]) == 1)
-expect("loop.id 正确", mw.open_loops["loops"][0]["id"] == "X1")
-expect("loop.added_ch 正确", mw.open_loops["loops"][0]["added_ch"] == 7)
-expect("loop.keyword 正确", mw.open_loops["loops"][0]["keyword"] == "线索")
-expect("表格刷新", panel.tbl_loops.rowCount() == 1)
-expect("ID 输入框被清空", panel.edit_loop_id.text() == "")
-
-
-# ============================================================
-# Test P6: 添加伏笔 — 重 ID 拒绝（绕开 QMessageBox）
-# ============================================================
-section("P6 — 添加伏笔重 ID 时拒绝")
-mw = make_mw_with_data()
-LifespanLoopsExtension.add_loop(mw, loop_id="DUP", desc="已有", added_ch=1)
-panel = LifespanLoopsPanel(mw)
-
-# Patch QMessageBox.warning
-warnings_caught = []
-_orig_warn = QMessageBox.warning
-QMessageBox.warning = staticmethod(lambda *a, **k: warnings_caught.append((a, k)) or QMessageBox.Ok)
-
-panel.edit_loop_id.setText("DUP")
-panel.edit_loop_desc.setText("重复尝试")
-panel.spin_loop_added.setValue(5)
-panel._on_loop_add()
-QMessageBox.warning = _orig_warn
-
-expect("依然只有 1 条", len(mw.open_loops["loops"]) == 1)
-expect("出现了一次警告弹窗", len(warnings_caught) == 1)
-
-
-# ============================================================
-# Test P7: 关闭 / 重开 / 删除（绕开 QMessageBox 二次确认）
-# ============================================================
-section("P7 — 关闭 / 重开 / 删除")
-mw = make_mw_with_data()
-LifespanLoopsExtension.add_loop(mw, loop_id="K", desc="待关", added_ch=1)
-LifespanLoopsExtension.add_loop(mw, loop_id="L", desc="待删", added_ch=2)
-mw.chapters = [{"title": f"第{i}章", "content": "x"} for i in range(15)]
-
-panel = LifespanLoopsPanel(mw)
-
-# 选中第一行
-panel.tbl_loops.selectRow(0)
-panel._on_loop_close()
-expect("K 状态 = closed",
-       any(l["id"] == "K" and l["status"] == "closed"
-           for l in mw.open_loops["loops"]))
-expect("close 时 last_seen_ch 用了 chapters 长度",
-       any(l["id"] == "K" and l["last_seen_ch"] == 15
-           for l in mw.open_loops["loops"]))
-
-panel._on_loop_reopen()
-expect("K 状态 = open（重开）",
-       any(l["id"] == "K" and l["status"] == "open"
-           for l in mw.open_loops["loops"]))
-
-# 删除 L（patch 确认对话框）
-_orig_q = QMessageBox.question
-QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
-panel.tbl_loops.selectRow(1)   # 选中 L
-panel._on_loop_delete()
-QMessageBox.question = _orig_q
-
-expect("L 已删除", not any(l["id"] == "L" for l in mw.open_loops["loops"]))
-expect("剩 1 条", len(mw.open_loops["loops"]) == 1)
-
+# [已摘除] 伏笔检查 UI 已迁至 ui/foreshadow_tab.py,数据层由 test_lifespan_loops.py 覆盖
 
 # ============================================================
 # Test P8: 重置寿元（绕开确认）
@@ -319,9 +230,6 @@ panel2 = LifespanLoopsPanel(mw2)
 panel2.load_from_dict(data)
 expect("load 后 enabled 还原", panel2.chk_lifespan_on.isChecked())
 expect("load 后 total_days 还原", panel2.spin_total_days.value() == 5000)
-expect("load 后表格 1 行", panel2.tbl_loops.rowCount() == 1)
-expect("load 后表格首行 ID = P10",
-       panel2.tbl_loops.item(0, 0).text() == "P10")
 
 
 # ============================================================
@@ -413,3 +321,13 @@ if __name__ == "__main__":
     else:
         print("✅ 全部通过")
         sys.exit(0)
+
+
+# ---- pytest 适配(测试搬迁修复) ----
+# 本文件是脚本式测试:import 即执行,结果存入模块级 results 列表,
+# 但失败只在 __main__ 分支检查 → pytest 下失败会被静默吞掉。
+# 这个包装函数把 results 暴露给 pytest,保证失败可见。
+def test_all_expectations_pass():
+    bad = [(n, msg) for n, ok, msg in results if not ok]
+    assert not bad, "脚本式断言失败: " + "; ".join(
+        f"{n}({msg})" if msg else n for n, msg in bad)

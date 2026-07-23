@@ -25,9 +25,7 @@ import sys
 from pathlib import Path
 
 
-HERE = Path(__file__).resolve().parent
-
-
+HERE = Path(__file__).resolve().parent.parent  # tests/ 的上一级 = 仓库根(测试搬迁修复)
 class TestProfileForUrlImportedInBrowserWorker(unittest.TestCase):
     """v2.11 BUG-076 直接验证:_profile_for_url 在 browser_worker.py 里可用"""
 

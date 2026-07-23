@@ -5,7 +5,7 @@ test_research_report_skills.py — 5 个出厂技能配置的单元测试
 from pathlib import Path
 import sys
 import re
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # 仓库根
 
 from research_report_skills import (
     RESEARCH_REPORT_SKILLS,
@@ -337,3 +337,13 @@ if __name__ == "__main__":
     else:
         print("✅ 全部通过")
         sys.exit(0)
+
+
+# ---- pytest 适配(测试搬迁修复) ----
+# 本文件是脚本式测试:import 即执行,结果存入模块级 results 列表,
+# 但失败只在 __main__ 分支检查 → pytest 下失败会被静默吞掉。
+# 这个包装函数把 results 暴露给 pytest,保证失败可见。
+def test_all_expectations_pass():
+    bad = [(n, msg) for n, ok, msg in results if not ok]
+    assert not bad, "脚本式断言失败: " + "; ".join(
+        f"{n}({msg})" if msg else n for n, msg in bad)

@@ -16,9 +16,7 @@ import re
 import unittest
 
 
-ROOT = Path(__file__).resolve().parent
-
-
+ROOT = Path(__file__).resolve().parent.parent  # tests/ 的上一级 = 仓库根(测试搬迁修复)
 class TestParseScore(unittest.TestCase):
     """BUG-003 回归:_parse_score 必须能解析 JSON,不再只识别 8/10。"""
 

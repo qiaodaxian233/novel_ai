@@ -28,7 +28,7 @@ import re
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent  # tests/ 的上一级 = 仓库根(测试搬迁修复)
 UI_DIR = ROOT / "ui"
 
 # 跟踪用的 PyQt5 类(常用,不全也无所谓 — 静态扫描兜底)

@@ -24,12 +24,12 @@ import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 仓库根
 
-WORKER_SRC = open(os.path.join(os.path.dirname(__file__),
+WORKER_SRC = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "ui/browser_worker.py"),
                   encoding="utf-8").read()
-NOVEL_AI_SRC = open(os.path.join(os.path.dirname(__file__),
+NOVEL_AI_SRC = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                   "novel_ai.py"),
                     encoding="utf-8").read()
 

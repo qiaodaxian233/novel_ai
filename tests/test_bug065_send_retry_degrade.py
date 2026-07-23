@@ -36,7 +36,7 @@ def extract_method_source(src_path, class_name, method_name):
     raise LookupError(f"{class_name}.{method_name} not found in {src_path}")
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根(测试搬迁修复)
 NOVEL_AI_PATH = os.path.join(HERE, "novel_ai.py")
 # P6 v2.05:BrowserWorker 类外迁到 ui/browser_worker.py
 BROWSER_WORKER_PATH = os.path.join(HERE, "ui", "browser_worker.py")

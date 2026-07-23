@@ -24,7 +24,7 @@ import os
 import re
 import unittest
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根(测试搬迁修复)
 NOVEL_AI_PATH = os.path.join(HERE, "novel_ai.py")
 CREATION_SETTINGS_PATH = os.path.join(HERE, "ui", "tabs", "creation_settings.py")
 

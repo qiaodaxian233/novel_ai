@@ -231,7 +231,7 @@ def test_13_enriched_prompt_groups_by_category():
 def test_14_app_version_v2_23_5():
     """APP_VERSION 应该升到 v2.23.5"""
     # 文件可能直接在项目根,也可能在子目录,都试
-    root = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根
     candidates = [
         os.path.join(root, "novel_ai.py"),
         os.path.join(root, "..", "novel_ai.py"),
@@ -266,7 +266,7 @@ def test_16_all_genres_flat_no_duplicates():
 
 def test_17_creation_settings_uses_genre_provider():
     """ui/tabs/creation_settings.py 引用 fanqie_genre_provider"""
-    root = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根
     candidates = [
         os.path.join(root, "ui", "tabs", "creation_settings.py"),
         os.path.join(root, "..", "ui", "tabs", "creation_settings.py"),

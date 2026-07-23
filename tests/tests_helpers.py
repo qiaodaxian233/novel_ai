@@ -13,9 +13,7 @@ get 到的是分散在多文件的类/函数 — 行为没变,只是扫描视角
 """
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-
-
+ROOT = Path(__file__).resolve().parent.parent  # tests/ 的上一级 = 仓库根(测试搬迁修复)
 def read_all_sources():
     """返回 novel_ai.py + 所有 ui/ + core/ 子模块 concat 起来的源文本
     

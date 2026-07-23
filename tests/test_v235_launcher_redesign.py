@@ -153,7 +153,7 @@ def test_06_get_app_version_reads_from_main():
 def test_07_launcher_api_compat():
     """ProjectLauncher 类签名跟主程序调用方式兼容"""
     # 静态检查源码 — 不需要真实例化(沙箱 PyQt5 可能问题)
-    root = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根
     if not os.path.exists(os.path.join(root, "ui", "project_launcher.py")):
         root = os.path.dirname(root)
     with open(os.path.join(root, "ui", "project_launcher.py"),
@@ -173,7 +173,7 @@ def test_07_launcher_api_compat():
 
 def test_08_no_marketing_feature_cards():
     """v2.23.5 重写:不再有那 6 个营销卡片(AI辅助创作/盘古世界观系统等)"""
-    root = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根
     if not os.path.exists(os.path.join(root, "ui", "project_launcher.py")):
         root = os.path.dirname(root)
     with open(os.path.join(root, "ui", "project_launcher.py"),
@@ -191,7 +191,7 @@ def test_08_no_marketing_feature_cards():
 def test_09_app_version_constant_matches():
     """模块顶部 APP_VERSION 常量至少 v2.23.5"""
     import re
-    root = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根
     if not os.path.exists(os.path.join(root, "ui", "project_launcher.py")):
         root = os.path.dirname(root)
     with open(os.path.join(root, "ui", "project_launcher.py"),
@@ -212,7 +212,7 @@ def test_10_project_card_has_path_attr():
     except ImportError:
         return
     # 不实际创建(Qt 沙箱可能问题),只静态检查
-    root = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根
     if not os.path.exists(os.path.join(root, "ui", "project_launcher.py")):
         root = os.path.dirname(root)
     with open(os.path.join(root, "ui", "project_launcher.py"),

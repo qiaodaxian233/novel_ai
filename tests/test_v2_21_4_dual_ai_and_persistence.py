@@ -12,7 +12,7 @@ import re
 import unittest
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent  # tests/ 的上一级 = 仓库根(测试搬迁修复)
 NOVEL_AI = HERE / "novel_ai.py"
 CHARLIB = HERE / "ui" / "tabs" / "character_library.py"
 GENCTRL = HERE / "ui" / "tabs" / "generation_control.py"

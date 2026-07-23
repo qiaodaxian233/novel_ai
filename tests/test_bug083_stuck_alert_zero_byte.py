@@ -27,7 +27,7 @@ import ast
 import re
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent
+REPO = Path(__file__).resolve().parent.parent  # tests/ 的上一级 = 仓库根(测试搬迁修复)
 WORKER_FILE = REPO / "ui" / "browser_worker.py"
 MAIN_FILE = REPO / "novel_ai.py"
 

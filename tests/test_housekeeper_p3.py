@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 
 # 确保能 import housekeeper
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # 仓库根
 
 from housekeeper import Housekeeper, HousekeeperReport, get_housekeeper, reset_housekeeper
 
@@ -276,7 +276,7 @@ class TestSetRlRewardCallback(unittest.TestCase):
         用 AST 检查真实 import 语句,绕开 docstring 里的 'from flow_rl import' 代码示例
         """
         import ast
-        src = Path(__file__).parent.joinpath("housekeeper.py").read_text(encoding="utf-8")
+        src = Path(__file__).resolve().parent.parent.joinpath("housekeeper.py").read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -352,7 +352,7 @@ class TestVerifyDefensesBasic(unittest.TestCase):
         result = hk.verify_defenses(fps)  # 不传 source_paths
         # 应该能扫到 novel_ai.py 里的 "chapter"
         # 注意:此测试假定项目根有 novel_ai.py
-        novel_ai_path = Path(__file__).parent / "novel_ai.py"
+        novel_ai_path = Path(__file__).resolve().parent.parent / "novel_ai.py"
         if novel_ai_path.exists():
             self.assertTrue(result["REAL"])
         else:
@@ -519,7 +519,7 @@ class TestNoRegressionOnPreviousMilestones(unittest.TestCase):
 class TestAppVersionBumped(unittest.TestCase):
 
     def test_version_at_least_v209(self):
-        novel_ai_path = Path(__file__).parent / "novel_ai.py"
+        novel_ai_path = Path(__file__).resolve().parent.parent / "novel_ai.py"
         if not novel_ai_path.exists():
             self.skipTest("novel_ai.py not present in test environment")
         src = novel_ai_path.read_text(encoding="utf-8")

@@ -21,7 +21,7 @@ import pytest
 from tests_helpers import read_all_sources
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent  # tests/ 的上一级 = 仓库根(测试搬迁修复)
 NOVEL_AI_PY = ROOT / "novel_ai.py"
 RELATION_GRAPH_PY = ROOT / "relation_graph.py"
 VENDOR_JS = ROOT / "vendor" / "vis-network.min.js"

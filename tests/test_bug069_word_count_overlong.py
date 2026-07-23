@@ -18,7 +18,7 @@ import unittest
 import sys
 import os
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根(测试搬迁修复)
 sys.path.insert(0, HERE)
 
 import housekeeper

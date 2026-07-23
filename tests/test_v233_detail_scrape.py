@@ -22,7 +22,7 @@ import sys
 import tempfile
 import shutil
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 仓库根
 
 
 def test_01_topk_is_5():
@@ -210,7 +210,7 @@ def test_11_prompts_no_占位词():
 
 def test_12_worker_has_detail_action():
     """worker.py 有 scrape_book_details_batch action 路由 + 礼让逻辑"""
-    src = open(os.path.join(os.path.dirname(__file__),
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                               "ui/browser_worker.py"),
                 encoding="utf-8").read()
     # action 路由存在

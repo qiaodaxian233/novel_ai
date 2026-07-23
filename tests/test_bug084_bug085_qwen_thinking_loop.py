@@ -9,9 +9,7 @@ v2.22.3 BUG-084 / BUG-085 守护测试
 import re
 import os
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-
-
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓库根(测试搬迁修复)
 def _read(path):
     with open(os.path.join(ROOT, path), 'r', encoding='utf-8') as f:
         return f.read()

@@ -14,7 +14,7 @@ import re
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent  # tests/ 的上一级 = 仓库根(测试搬迁修复)
 NOVEL_AI = ROOT / "novel_ai.py"
 SOURCE = NOVEL_AI.read_text(encoding="utf-8")
 

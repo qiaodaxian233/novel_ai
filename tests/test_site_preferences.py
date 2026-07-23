@@ -7,7 +7,7 @@ ui/tabs/generation_control.py。扫描源指向新位置。
 import re
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent  # tests/ 的上一级 = 仓库根(测试搬迁修复)
 GEN_CTRL_PATH = HERE / "ui" / "tabs" / "generation_control.py"
 
 

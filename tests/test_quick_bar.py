@@ -9,14 +9,18 @@
   - 与 tab_settings.ai_group 的双向同步
 """
 import sys
-print("⊘ test_quick_bar.py 已废弃(快速操作栏功能已合并到主面板),跳过执行。")
-sys.exit(0)
+import pytest
+# sys.exit(0) 会直接杀死 pytest 进程,改用规范的模块级 skip(测试搬迁修复)
+pytest.skip(
+    "test_quick_bar.py 已废弃(快速操作栏功能已合并到主面板),跳过执行。",
+    allow_module_level=True,
+)
 
 # ---- 以下原测试代码保留作为历史参考,实际不会执行 ----
 from pathlib import Path
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # 仓库根
 from PyQt5.QtWidgets import QApplication
 app = QApplication.instance() or QApplication(sys.argv)
 import novel_ai
