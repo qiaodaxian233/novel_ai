@@ -19,3 +19,42 @@ for _p in (_REPO_ROOT, _TESTS_DIR):
 
 # Qt 离屏渲染(CI/沙箱无显示器)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# QSettings 隔离:重定向到每会话独立的临时目录。
+# 部分控件(CharLib 等)在 __init__ 从 QSettings 恢复状态、析构时写回,
+# 不隔离的话一次 pytest 运行写入 ~/.config/NovelAI/*.conf,
+# 下一次运行"全新"实例就带着上次的 POV/主角状态出生
+# (实证:test_pov_mode 跑过一次后,test_plot_progress D30/D31 与
+#  test_info_isolation D23/D24 因 POV=林悦 过滤而跨进程失败)。
+# 必须在任何 QSettings 实例化之前设置 — conftest 的 import 时机满足。
+import tempfile
+
+_QSETTINGS_DIR = tempfile.mkdtemp(prefix="novel_ai_test_qsettings_")
+os.environ["XDG_CONFIG_HOME"] = _QSETTINGS_DIR
+
+
+# ── 模块间 QSettings 隔离 ──────────────────────────────────────
+# 上面的 XDG 重定向解决了"跨 pytest 进程"的污染;进程内还有一个方向:
+# 某模块的控件析构时把 POV/主角状态写进(临时)QSettings,同一会话里
+# 后跑的模块实例化"干净"控件时又把它恢复出来。字母序批跑恰好安全
+# (info_isolation < plot_progress < pov_mode),但显式指定顺序就会踩雷。
+# 每个测试模块开始前用 Qt 自己的 API 清空 NovelAI 组织下的所有应用配置
+# (必须走 QSettings.clear() 而非直接删文件 — Qt 有 QConfFile 内存缓存,
+# 外部删文件不保证失效)。模块内部的保存→恢复语义不受影响。
+import pytest
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _fresh_novelai_qsettings_per_module():
+    try:
+        from PyQt5.QtCore import QSettings
+        import glob as _glob
+        conf_dir = os.path.join(os.environ["XDG_CONFIG_HOME"], "NovelAI")
+        for conf in _glob.glob(os.path.join(conf_dir, "*.conf")):
+            app_name = os.path.splitext(os.path.basename(conf))[0]
+            s = QSettings("NovelAI", app_name)
+            s.clear()
+            s.sync()
+    except Exception:
+        pass  # PyQt5 不可用的纯逻辑测试模块无需隔离
+    yield

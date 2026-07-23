@@ -178,15 +178,17 @@ def test_extract_realm_whitelist(charlib):
 
 # ────── A:_sync_hero_from_timeline(按钮触发)──────
 
-def test_sync_fills_fields(charlib):
+def test_sync_fills_fields(charlib, monkeypatch):
     """同步后字段被填,只读状态保持"""
     _set_timeline(charlib, [
         ("5", "破境", "晋升金丹中期"),
         ("3", "迁徙", "抵达青云山"),
     ])
-    # 拦截 QMessageBox(避免阻塞)
+    # 拦截 QMessageBox(避免阻塞)— 用 monkeypatch,测试结束自动还原,
+    # 直接赋值会把污染留给同进程后续所有测试
     from PyQt5.QtWidgets import QMessageBox
-    QMessageBox.information = lambda *a, **k: 0
+    monkeypatch.setattr(QMessageBox, "information",
+                        staticmethod(lambda *a, **k: 0))
     
     charlib._sync_hero_from_timeline()
     
@@ -197,10 +199,11 @@ def test_sync_fills_fields(charlib):
     assert charlib.hero_realm.isReadOnly()
 
 
-def test_sync_updates_source_label(charlib):
+def test_sync_updates_source_label(charlib, monkeypatch):
     """同步后 label 显示来源章节"""
     from PyQt5.QtWidgets import QMessageBox
-    QMessageBox.information = lambda *a, **k: 0
+    monkeypatch.setattr(QMessageBox, "information",
+                        staticmethod(lambda *a, **k: 0))
     _set_timeline(charlib, [("5", "破境", "晋升金丹中期")])
     charlib._sync_hero_from_timeline()
     text = charlib.lbl_hero_source.text()
@@ -208,10 +211,11 @@ def test_sync_updates_source_label(charlib):
     assert "时间线" in text or "同步" in text
 
 
-def test_sync_preserves_existing_fields_when_not_matched(charlib):
+def test_sync_preserves_existing_fields_when_not_matched(charlib, monkeypatch):
     """未命中的字段保留原值"""
     from PyQt5.QtWidgets import QMessageBox
-    QMessageBox.information = lambda *a, **k: 0
+    monkeypatch.setattr(QMessageBox, "information",
+                        staticmethod(lambda *a, **k: 0))
     # 提前手填一个值
     charlib.btn_unlock_hero.setChecked(True)
     charlib.hero_faction.setText("已存在势力")

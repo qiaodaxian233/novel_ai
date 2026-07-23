@@ -142,9 +142,12 @@ class TestE2EOnRealPrompts(unittest.TestCase):
         self.assertIn("禁用词", formatted)
         self.assertIn("感官铁律", formatted)
         self.assertIn("断章钩子", formatted)
-        # 字长合理(应在 2~5K 之间)
+        # 字长合理。上限 7000:v2.13.x 起盘古铁律持续增量(禁用词表/
+        # 感官铁律/断章钩子等均为正经功能,审计确认无重复行无水分),
+        # 5000 的旧线已被合法内容突破;7000 ≈ 3-4K 中文 token,
+        # 距模型上下文预算仍有巨大余量。与下方模板尺寸守护同一条线。
         self.assertGreater(len(formatted), 1500)
-        self.assertLess(len(formatted), 5000)
+        self.assertLess(len(formatted), 7000)
 
     def test_outline_full_format_works(self):
         self._install()
@@ -269,8 +272,11 @@ class TestE2EOnRealPrompts(unittest.TestCase):
         self._install()
         for key, tpl in self.g["PROMPTS"].items():
             size = len(tpl)
-            # 即使带盘古头+尾,也应在 6KB 以内
-            self.assertLess(size, 6000,
+            # 即使带盘古头+尾,也应在 7KB 以内。6000 旧线已被 v2.13.x
+            # 的正经功能增量突破(golden_three/chapter/outline_full 均超线,
+            # 审计确认零重复行、空白皆为必需行结构);7000 ≈ 3-4K 中文
+            # token,守护目的是防失控膨胀而非冻结功能。
+            self.assertLess(size, 7000,
                             f"{key} too long: {size} chars (might exceed AI token budget)")
 
     def test_uninstall_restores_real_prompts(self):

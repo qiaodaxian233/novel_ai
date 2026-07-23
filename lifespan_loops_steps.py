@@ -247,6 +247,11 @@ class LifespanAuditStep(PipelineStep):
     def _apply(self, ctx, days: int, source: str):
         ledger = self.mw.lifespan_ledger
         ledger["used_days"] = int(ledger.get("used_days", 0)) + int(days)
+        # 防御：避免共享 DEFAULT_LIFESPAN_LEDGER["history"] 的同一个 list
+        # （与 add_loop 里对 DEFAULT_OPEN_LOOPS_CFG["loops"] 的守卫对称。
+        #   浅拷贝默认配置的调用方会让 append 直接污染模块级默认值）
+        if ledger.get("history") is DEFAULT_LIFESPAN_LEDGER.get("history"):
+            ledger["history"] = list(ledger["history"])
         ledger.setdefault("history", []).append({
             "ch": int(ctx.ch_num),
             "days": int(days),

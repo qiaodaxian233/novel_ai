@@ -116,6 +116,17 @@ class FakeMW:
 # ================================================================
 # 通用工具
 # ================================================================
+
+def _fresh(base, **overrides):
+    """深拷贝默认配置再覆盖。此前用 dict(DEFAULT..., **kw) 浅拷贝,
+    嵌套的 history/loops 列表与模块级默认字典共享同一个对象,
+    入账 append 会污染 DEFAULT_LIFESPAN_LEDGER 本体,
+    使同进程内后续所有测试拿到脏默认值(批内顺序依赖)。"""
+    import copy as _copy
+    d = _copy.deepcopy(base)
+    d.update(overrides)
+    return d
+
 results = []  # (name, ok, msg)
 def expect(name, cond, msg=""):
     results.append((name, bool(cond), msg))
@@ -158,7 +169,7 @@ expect("DEFAULT_OPEN_LOOPS_CFG 含必需字段",
 # ================================================================
 section("Test 2 — LifespanInjectStep 关闭态")
 mw = FakeMW()
-mw.lifespan_ledger = dict(DEFAULT_LIFESPAN_LEDGER, enabled=False)
+mw.lifespan_ledger = _fresh(DEFAULT_LIFESPAN_LEDGER, enabled=False)
 ctx = FakeCtx(ch_num=5)
 done = done_marker()
 LifespanInjectStep(mw).run(ctx, done)
@@ -173,7 +184,7 @@ expect("关闭时不动 extras", "lifespan_injected" not in ctx.extras)
 # ================================================================
 section("Test 3 — LifespanInjectStep 开启态")
 mw = FakeMW()
-mw.lifespan_ledger = dict(
+mw.lifespan_ledger = _fresh(
     DEFAULT_LIFESPAN_LEDGER,
     enabled=True, total_days=8760, used_days=142,
 )
@@ -196,7 +207,7 @@ expect("done() 调用一次", done.box["called"] == 1)
 section("Test 4 — LifespanInjectStep 危急/警戒标记")
 # 警戒
 mw = FakeMW()
-mw.lifespan_ledger = dict(DEFAULT_LIFESPAN_LEDGER, enabled=True,
+mw.lifespan_ledger = _fresh(DEFAULT_LIFESPAN_LEDGER, enabled=True,
                           total_days=8760, used_days=8500,
                           warn_threshold=365, critical_threshold=30)
 ctx = FakeCtx(ch_num=200)
@@ -215,7 +226,7 @@ expect("危急标记触发（剩余 5 ≤ 30）", "🚨 危急" in ctx.prompt)
 # ================================================================
 section("Test 5 — LifespanAuditStep 正则解析")
 mw = FakeMW()
-mw.lifespan_ledger = dict(DEFAULT_LIFESPAN_LEDGER, enabled=True,
+mw.lifespan_ledger = _fresh(DEFAULT_LIFESPAN_LEDGER, enabled=True,
                           total_days=8760, used_days=10)
 ctx = FakeCtx(ch_num=11)
 ctx.content = (
@@ -238,7 +249,7 @@ expect("无危急 issue（剩余 8745）", not ctx.has_issues())
 # ================================================================
 section("Test 6 — LifespanAuditStep AI 兜底")
 mw = FakeMW()
-mw.lifespan_ledger = dict(DEFAULT_LIFESPAN_LEDGER, enabled=True,
+mw.lifespan_ledger = _fresh(DEFAULT_LIFESPAN_LEDGER, enabled=True,
                           total_days=8760, used_days=20, auto_audit=True)
 mw._ai_reply = '{"days": 4, "breakdown": "日落 1 + 越阶术 3"}'
 
@@ -259,7 +270,7 @@ expect("done() 在 AI 回复后调用", done.box["called"] == 1)
 # ================================================================
 section("Test 7 — LifespanAuditStep 关 AI 时走默认兜底")
 mw = FakeMW()
-mw.lifespan_ledger = dict(DEFAULT_LIFESPAN_LEDGER, enabled=True,
+mw.lifespan_ledger = _fresh(DEFAULT_LIFESPAN_LEDGER, enabled=True,
                           total_days=8760, used_days=0,
                           auto_audit=False, default_per_chapter=2)
 ctx = FakeCtx(ch_num=1)
@@ -277,7 +288,7 @@ expect("done() 同步调用", done.box["called"] == 1)
 # ================================================================
 section("Test 8 — LifespanAuditStep 危急阈值")
 mw = FakeMW()
-mw.lifespan_ledger = dict(DEFAULT_LIFESPAN_LEDGER, enabled=True,
+mw.lifespan_ledger = _fresh(DEFAULT_LIFESPAN_LEDGER, enabled=True,
                           total_days=100, used_days=70,
                           critical_threshold=30, auto_audit=False)
 ctx = FakeCtx(ch_num=50)
@@ -297,7 +308,7 @@ expect("issue 文本含'危急'/'寿元'",
 # ================================================================
 section("Test 9 — LifespanAuditStep 关闭态")
 mw = FakeMW()
-mw.lifespan_ledger = dict(DEFAULT_LIFESPAN_LEDGER, enabled=False, used_days=0)
+mw.lifespan_ledger = _fresh(DEFAULT_LIFESPAN_LEDGER, enabled=False, used_days=0)
 ctx = FakeCtx(ch_num=1)
 ctx.content = "[寿元结算: 折寿 100 日 (这条不应被处理)]"
 done = done_marker()
@@ -311,7 +322,7 @@ expect("done() 仍调用", done.box["called"] == 1)
 # ================================================================
 section("Test 10 — OpenLoopsCheckStep 早退")
 mw = FakeMW()
-mw.open_loops = dict(DEFAULT_OPEN_LOOPS_CFG, enabled=False)
+mw.open_loops = _fresh(DEFAULT_OPEN_LOOPS_CFG, enabled=False)
 ctx = FakeCtx(ch_num=100)
 ctx.content = "随便一段."
 done = done_marker()
@@ -319,7 +330,7 @@ OpenLoopsCheckStep(mw).run(ctx, done)
 expect("关闭时 done() 调用", done.box["called"] == 1)
 expect("关闭时无 issue", not ctx.has_issues())
 
-mw.open_loops = dict(DEFAULT_OPEN_LOOPS_CFG, enabled=True, loops=[])
+mw.open_loops = _fresh(DEFAULT_OPEN_LOOPS_CFG, enabled=True, loops=[])
 ctx2 = FakeCtx(ch_num=100)
 done2 = done_marker()
 OpenLoopsCheckStep(mw).run(ctx2, done2)
