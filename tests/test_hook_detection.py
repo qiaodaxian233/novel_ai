@@ -138,7 +138,7 @@ def test_workflow_pipeline_uses_pangu_check():
 def test_app_version_at_least_v1_73():
     """v1.73 是钩子扩词修复版本,APP_VERSION 必须 ≥ v1.73"""
     src = NOVEL_AI_PY.read_text(encoding="utf-8")
-    m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)["\']', src)
+    m = re.search(r'APP_VERSION\s*=\s*["\']v(\d+)\.(\d+)(?:\.\d+)?["\']', src)
     assert m, "找不到 APP_VERSION 声明"
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 73), f"APP_VERSION 应 ≥ v1.73,实际 v{major}.{minor}"

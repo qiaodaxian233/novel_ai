@@ -377,7 +377,7 @@ def test_X2_on_foreshadow_check_guards_non_dict_item(src):
 
 def test_X3_version_bumped_to_1_76_or_higher(src):
     """APP_VERSION 必须 ≥ v1.76(v1.76 引入了 foreshadow auto close)"""
-    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', src)
     assert m, "APP_VERSION 未找到"
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 76), \

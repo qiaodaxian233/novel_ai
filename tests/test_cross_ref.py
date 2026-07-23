@@ -386,7 +386,7 @@ def test_X5_lib_row_with_empty_ch_field_no_crash(charlib_with_node):
 
 
 def test_X6_version_bumped(src):
-    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', src)
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 86), \
         f"v1.86 多视角反查不应被低版本退回,当前 v{major}.{minor}"

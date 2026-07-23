@@ -331,7 +331,7 @@ def test_C6_tooltip_mentions_v181_calibration(src):
 # ─────────────────────────────────────
 
 def test_X1_version_bumped(src):
-    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', src)
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 81)
 

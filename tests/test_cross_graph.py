@@ -461,7 +461,7 @@ def test_X5_render_after_data_change(populated_charlib):
 
 
 def test_X6_version_bumped(src):
-    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', src)
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 87), \
         f"v1.87 跨表关联可视化不应被低版本退回,当前 v{major}.{minor}"

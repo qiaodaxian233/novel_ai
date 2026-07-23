@@ -689,7 +689,7 @@ def test_X6_run_info_check_guards_empty_infos(src):
 
 def test_X7_version_bumped_to_1_79_or_higher(src):
     """APP_VERSION ≥ v1.79"""
-    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', src)
     assert m
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 79), \

@@ -470,7 +470,7 @@ def test_X3_on_promise_reeval_guards_non_list(src):
 
 def test_X4_version_bumped_to_1_77_or_higher(src):
     """APP_VERSION 必须 ≥ v1.77(v1.77 引入了 promise auto close)"""
-    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', src)
     assert m, "APP_VERSION 未找到"
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 77), \

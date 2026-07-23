@@ -242,7 +242,8 @@ class GenerationControl(QWidget):
         self.quality_threshold.setRange(0, 100); self.quality_threshold.setValue(75)
         self.quality_threshold.setSuffix(" 分")
         self.quality_threshold.setToolTip(
-            "盘古质量评分阈值。75=宽松 85=推荐 95=严苛 0=关闭")
+            "盘古质量评分阈值。75=宽松 85=推荐 95=严苛 0=关闭\n"
+            "评分已校准:质量良好的章节通常 90+ 分,95 分门可达但需 AI 死磕。")
         row2.addWidget(self.quality_threshold)
         row2.addSpacing(16)
         self.btn_start = QPushButton("  ▶▶ 开始连续生成  ")

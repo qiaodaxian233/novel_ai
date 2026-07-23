@@ -353,7 +353,7 @@ def test_X3_inject_off_pov_no_effect(charlib_with_data):
 
 
 def test_X4_version_bumped(src):
-    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', src)
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 84), \
         f"v1.84 POV 模式版本号没升,当前 v{major}.{minor}"

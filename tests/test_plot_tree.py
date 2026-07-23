@@ -576,7 +576,7 @@ def test_D28_inject_no_emission_without_chapter(charlib):
 # ─────────────────────────────────────
 
 def test_X1_version_bumped_to_1_80_or_higher(src):
-    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', src)
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 80), \
         f"v1.80 剧情树不应被低版本退回,当前 v{major}.{minor}"

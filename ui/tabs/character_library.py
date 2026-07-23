@@ -1933,7 +1933,13 @@ class CharacterLibrary(QWidget):
             return {}
         n = len(nodes)
         # 理想间距:节点越多,画布越大
-        k = max(80, math.sqrt(width * height / max(n, 1)) * 1.5)
+        k = max(80.0, math.sqrt(width * height / max(n, 1)) * 1.5)
+        # 上限:理想间距不超过画布短边的 1/4。v2.21.0 重写只设了下限,
+        # 节点少时 k 逼近画布尺寸 → 连通平衡距离(≈1.49k)超出画布,
+        # 斥力全程压倒引力,相连节点也被推到角落 — 连通性对布局失效
+        # (test_cross_graph B5 守护抓到的回归)。防重叠由网格初始化 +
+        # MIN_DIST 强斥力负责,与 k 上限无关,"大间距不重叠"的本意保留。
+        k = min(k, min(width, height) / 4.0)
         # 初始:均匀散布在整个画布(不只中心)
         random.seed(42)
         pos = {}
@@ -1983,8 +1989,10 @@ class CharacterLibrary(QWidget):
                 pos[nid][0] += (dx / dlen) * step
                 pos[nid][1] += (dy / dlen) * step
                 # 边界约束(不要跑出画布)
-                pos[nid][0] = max(20, min(width - 20, pos[nid][0]))
-                pos[nid][1] = max(20, min(height - 20, pos[nid][1]))
+                # 20.0 而非 20:节点触边时 max/min 会返回 int 字面量,
+                # 坐标被截成 int(test_cross_graph B2 守护抓到)
+                pos[nid][0] = max(20.0, min(width - 20.0, pos[nid][0]))
+                pos[nid][1] = max(20.0, min(height - 20.0, pos[nid][1]))
             # 降温
             t *= 0.95
 

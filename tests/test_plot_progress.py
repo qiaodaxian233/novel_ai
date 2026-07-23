@@ -837,7 +837,7 @@ def test_X6_run_relation_change_check_guards_no_tbl(src):
 
 def test_X7_version_bumped_to_1_78_or_higher(src):
     """APP_VERSION 必须 ≥ v1.78"""
-    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)"', src)
+    m = re.search(r'APP_VERSION = "v(\d+)\.(\d+)(?:\.\d+)?"', src)
     assert m, "APP_VERSION 未找到"
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 78), \

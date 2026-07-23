@@ -188,7 +188,7 @@ def test_merge_dicts_tolerates_list_of_list(char_lib):
 
 def test_app_version_at_least_v1_74():
     """APP_VERSION 至少升到 v1.74"""
-    m = re.search(r'APP_VERSION\s*=\s*"v(\d+)\.(\d+)"', SRC)
+    m = re.search(r'APP_VERSION\s*=\s*"v(\d+)\.(\d+)(?:\.\d+)?"', SRC)
     assert m, "找不到 APP_VERSION"
     major, minor = int(m.group(1)), int(m.group(2))
     assert (major, minor) >= (1, 74), \
