@@ -32,6 +32,15 @@ import tempfile
 _QSETTINGS_DIR = tempfile.mkdtemp(prefix="novel_ai_test_qsettings_")
 os.environ["XDG_CONFIG_HOME"] = _QSETTINGS_DIR
 
+# HOME 隔离:MainWindow 的 project_dir = Path.home()/"NovelAI_Projects" 是
+# 固定家目录路径,closeEvent → _autosave() 会把测试造的章节写进真实用户的
+# 项目目录;下一次运行 _autoload 又把它们恢复进"全新"主窗口
+# (实证:一次带 teardown 的运行后 ~/NovelAI_Projects/autosave 出现 3 章残留,
+#  test_full_integration 的"self.chapters 为空"守护跨进程失败)。
+# 与 QSettings 同类,双向隔离:测试不读真实项目、也不写坏真实项目。
+_HOME_DIR = tempfile.mkdtemp(prefix="novel_ai_test_home_")
+os.environ["HOME"] = _HOME_DIR
+
 
 # ── 模块间 QSettings 隔离 ──────────────────────────────────────
 # 上面的 XDG 重定向解决了"跨 pytest 进程"的污染;进程内还有一个方向:

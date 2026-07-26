@@ -353,7 +353,12 @@ QProgressBar::chunk {
             qss = _build_modern_qss(**qss_args)
         else:
             qss = ""
-        app.setStyleSheet(qss)
+        # 幂等守卫:QApplication.setStyleSheet 会触发全部存活控件的样式
+        # 重算(即使内容一字未变),控件树大时代价随控件数爆炸——
+        # 同一进程反复构造 MainWindow(如测试)会在这里挂死;
+        # 真实应用里"重复应用同一主题"也白付全量重算。内容没变就跳过。
+        if app.styleSheet() != qss:
+            app.setStyleSheet(qss)
 
         try:
             QSettings("NovelAI", "UI").setValue("theme", name)

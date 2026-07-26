@@ -46,11 +46,24 @@ def mw(app, monkeypatch, tmp_path):
     w.current_chapter_index = -1
     
     # 确保 spinbox 也是默认值(以防 init 时被覆盖)
-    w.tab_settings.prev_chapters_n.setValue(1)
-    w.tab_settings.prev_tail_chars.setValue(2500)
-    w.tab_settings.prev_use_summaries.setChecked(True)
-    
-    return w
+    w.tab_generation.prev_chapters_n.setValue(1)
+    w.tab_generation.prev_tail_chars.setValue(2500)
+    w.tab_generation.prev_use_summaries.setChecked(True)
+
+    yield w
+    # 清理:此前 return w 不做任何回收,20 个满配 MainWindow(各自带
+    # QTimer/子控件树)在同进程堆积,第 14 个构造时进程挂死
+    try:
+        w.close()
+        w.deleteLater()
+        # deleteLater 只是投递 DeferredDelete 事件,必须显式派发一次
+        # 才真正析构控件树,否则十几个满配 MainWindow 堆积,
+        # 全局样式重算的代价逐个膨胀
+        from PyQt5.QtCore import QEvent
+        app.sendPostedEvents(None, QEvent.DeferredDelete)
+        app.processEvents()
+    except Exception:
+        pass
 
 
 def _make_chapters(n, words_per_ch=3000):
@@ -64,7 +77,7 @@ def _make_chapters(n, words_per_ch=3000):
 
 def test_get_ctx_config_defaults(mw):
     """默认配置值正确"""
-    cfg = mw.tab_settings.get_ctx_config()
+    cfg = mw.tab_generation.get_ctx_config()
     assert cfg["chapters_n"] == 1
     assert cfg["tail_chars"] == 2500
     assert cfg["use_summaries"] is True
@@ -72,10 +85,10 @@ def test_get_ctx_config_defaults(mw):
 
 def test_get_ctx_config_after_change(mw):
     """改 spin/check 后,config 反映新值"""
-    mw.tab_settings.prev_chapters_n.setValue(5)
-    mw.tab_settings.prev_tail_chars.setValue(4000)
-    mw.tab_settings.prev_use_summaries.setChecked(False)
-    cfg = mw.tab_settings.get_ctx_config()
+    mw.tab_generation.prev_chapters_n.setValue(5)
+    mw.tab_generation.prev_tail_chars.setValue(4000)
+    mw.tab_generation.prev_use_summaries.setChecked(False)
+    cfg = mw.tab_generation.get_ctx_config()
     assert cfg["chapters_n"] == 5
     assert cfg["tail_chars"] == 4000
     assert cfg["use_summaries"] is False
@@ -97,8 +110,8 @@ def test_build_prev_ctx_ch1_returns_empty(mw):
 
 def test_build_prev_ctx_default_one_chapter(mw):
     """默认 1 章 — 注入上一章末尾 2500 字"""
-    mw.tab_settings.prev_chapters_n.setValue(1)
-    mw.tab_settings.prev_tail_chars.setValue(2500)
+    mw.tab_generation.prev_chapters_n.setValue(1)
+    mw.tab_generation.prev_tail_chars.setValue(2500)
     mw.chapters = _make_chapters(3)   # 3 章,每章 3000 字
     ctx = mw._build_prev_context(4)
     
@@ -113,8 +126,8 @@ def test_build_prev_ctx_default_one_chapter(mw):
 
 def test_build_prev_ctx_three_chapters(mw):
     """配置 3 章 — 倒数 3 章完整正文都在"""
-    mw.tab_settings.prev_chapters_n.setValue(3)
-    mw.tab_settings.prev_tail_chars.setValue(8000)  # 不截
+    mw.tab_generation.prev_chapters_n.setValue(3)
+    mw.tab_generation.prev_tail_chars.setValue(8000)  # 不截
     mw.chapters = _make_chapters(5)   # 5 章
     ctx = mw._build_prev_context(6)
     
@@ -129,8 +142,8 @@ def test_build_prev_ctx_three_chapters(mw):
 
 def test_build_prev_ctx_tail_truncation(mw):
     """每章超过 tail_chars 时截尾,末尾标记仍在(末尾切的)"""
-    mw.tab_settings.prev_chapters_n.setValue(2)
-    mw.tab_settings.prev_tail_chars.setValue(1000)  # 截
+    mw.tab_generation.prev_chapters_n.setValue(2)
+    mw.tab_generation.prev_tail_chars.setValue(1000)  # 截
     mw.chapters = _make_chapters(3, words_per_ch=5000)  # 每章 5000+ 字
     ctx = mw._build_prev_context(4)
     
@@ -141,7 +154,7 @@ def test_build_prev_ctx_tail_truncation(mw):
 
 def test_build_prev_ctx_n_larger_than_avail(mw):
     """配置 5 章但只有 2 章 — 取实际能拿的 2 章"""
-    mw.tab_settings.prev_chapters_n.setValue(5)
+    mw.tab_generation.prev_chapters_n.setValue(5)
     mw.chapters = _make_chapters(2)
     ctx = mw._build_prev_context(3)
     assert "|EOF1" in ctx
@@ -150,8 +163,8 @@ def test_build_prev_ctx_n_larger_than_avail(mw):
 
 def test_build_prev_ctx_summaries_when_enabled(mw):
     """开启摘要 → 早期章节带 summary 的会注入"""
-    mw.tab_settings.prev_chapters_n.setValue(1)
-    mw.tab_settings.prev_use_summaries.setChecked(True)
+    mw.tab_generation.prev_chapters_n.setValue(1)
+    mw.tab_generation.prev_use_summaries.setChecked(True)
     mw.chapters = _make_chapters(4)
     # 给第 1、2 章加 summary
     mw.chapters[0]["summary"] = "第一章发生了重要事件 A"
@@ -165,8 +178,8 @@ def test_build_prev_ctx_summaries_when_enabled(mw):
 
 def test_build_prev_ctx_summaries_disabled(mw):
     """关闭摘要 → 早期章节 summary 不注入"""
-    mw.tab_settings.prev_chapters_n.setValue(1)
-    mw.tab_settings.prev_use_summaries.setChecked(False)
+    mw.tab_generation.prev_chapters_n.setValue(1)
+    mw.tab_generation.prev_use_summaries.setChecked(False)
     mw.chapters = _make_chapters(4)
     mw.chapters[0]["summary"] = "不该出现的摘要内容 XYZ"
     
@@ -177,8 +190,8 @@ def test_build_prev_ctx_summaries_disabled(mw):
 
 def test_build_prev_ctx_no_summary_field_safe(mw):
     """章节没有 summary 字段也不崩"""
-    mw.tab_settings.prev_chapters_n.setValue(1)
-    mw.tab_settings.prev_use_summaries.setChecked(True)
+    mw.tab_generation.prev_chapters_n.setValue(1)
+    mw.tab_generation.prev_use_summaries.setChecked(True)
     mw.chapters = _make_chapters(3)
     # 不给任何章节加 summary
     ctx = mw._build_prev_context(4)
@@ -210,44 +223,44 @@ def test_update_ctx_estimate_no_chapters(mw):
     """0 章 → label 显示 0"""
     mw.chapters = []
     mw._update_ctx_estimate()
-    text = mw.tab_settings.prev_ctx_estimate.text()
+    text = mw.tab_generation.prev_ctx_estimate.text()
     assert "0" in text
     assert "还没有章节" in text
 
 
 def test_update_ctx_estimate_one_chapter_default(mw):
     """1 章 + 默认配置 → 字数约等于该章实际字数(或 tail 上限)"""
-    mw.tab_settings.prev_chapters_n.setValue(1)
-    mw.tab_settings.prev_tail_chars.setValue(2500)
-    mw.tab_settings.prev_use_summaries.setChecked(True)
+    mw.tab_generation.prev_chapters_n.setValue(1)
+    mw.tab_generation.prev_tail_chars.setValue(2500)
+    mw.tab_generation.prev_use_summaries.setChecked(True)
     mw.chapters = _make_chapters(1, words_per_ch=1500)  # 1 章 1500 字
     mw._update_ctx_estimate()
-    text = mw.tab_settings.prev_ctx_estimate.text()
+    text = mw.tab_generation.prev_ctx_estimate.text()
     # 应包含 1,5xx 之类(min(1500, 2500) = 1500 加点末尾标记)
     assert "1,50" in text or "1,51" in text
 
 
 def test_update_ctx_estimate_tail_capped(mw):
     """章节远大于 tail_chars → 取 tail 上限"""
-    mw.tab_settings.prev_chapters_n.setValue(1)
-    mw.tab_settings.prev_tail_chars.setValue(1000)
-    mw.tab_settings.prev_use_summaries.setChecked(False)
+    mw.tab_generation.prev_chapters_n.setValue(1)
+    mw.tab_generation.prev_tail_chars.setValue(1000)
+    mw.tab_generation.prev_use_summaries.setChecked(False)
     mw.chapters = _make_chapters(1, words_per_ch=5000)
     mw._update_ctx_estimate()
-    text = mw.tab_settings.prev_ctx_estimate.text()
+    text = mw.tab_generation.prev_ctx_estimate.text()
     # 应为 1,000 字
     assert "1,000" in text
 
 
 def test_update_ctx_estimate_matches_actual_injection(mw):
     """预估字数应≈实际 _build_prev_context 输出字数(允许 header/标题误差)"""
-    mw.tab_settings.prev_chapters_n.setValue(2)
-    mw.tab_settings.prev_tail_chars.setValue(3000)
-    mw.tab_settings.prev_use_summaries.setChecked(False)
+    mw.tab_generation.prev_chapters_n.setValue(2)
+    mw.tab_generation.prev_tail_chars.setValue(3000)
+    mw.tab_generation.prev_use_summaries.setChecked(False)
     mw.chapters = _make_chapters(3, words_per_ch=2000)
     
     mw._update_ctx_estimate()
-    estimate_text = mw.tab_settings.prev_ctx_estimate.text()
+    estimate_text = mw.tab_generation.prev_ctx_estimate.text()
     
     # 实际生成 ctx 时,正文字数(粗略 — 不算 header)
     ctx = mw._build_prev_context(4)
@@ -267,11 +280,11 @@ def test_update_ctx_estimate_matches_actual_injection(mw):
 
 def test_update_ctx_estimate_warning_color(mw):
     """超 30k 字 → 警示色"""
-    mw.tab_settings.prev_chapters_n.setValue(10)
-    mw.tab_settings.prev_tail_chars.setValue(8000)
+    mw.tab_generation.prev_chapters_n.setValue(10)
+    mw.tab_generation.prev_tail_chars.setValue(8000)
     mw.chapters = _make_chapters(10, words_per_ch=8000)  # 10 × 8000 = 80000
     mw._update_ctx_estimate()
-    style = mw.tab_settings.prev_ctx_estimate.styleSheet()
+    style = mw.tab_generation.prev_ctx_estimate.styleSheet()
     assert "#cc3333" in style or "cc3333" in style.lower()
 
 
@@ -279,7 +292,7 @@ def test_update_ctx_estimate_called_on_refresh(mw):
     """_refresh_chapter_list 应触发预估更新"""
     mw.chapters = _make_chapters(2)
     mw._refresh_chapter_list()
-    text = mw.tab_settings.prev_ctx_estimate.text()
+    text = mw.tab_generation.prev_ctx_estimate.text()
     # 应已经显示预估(不再是初始空状态)
     assert "0" not in text or "字" in text  # 至少有字数显示
 
@@ -289,8 +302,8 @@ def test_update_ctx_estimate_called_on_refresh(mw):
 def test_ctx_settings_changed_signal_emitted(mw):
     """改 spin → 发出 ctx_settings_changed 信号"""
     received = []
-    mw.tab_settings.ctx_settings_changed.connect(lambda: received.append(True))
-    mw.tab_settings.prev_chapters_n.setValue(3)
+    mw.tab_generation.ctx_settings_changed.connect(lambda: received.append(True))
+    mw.tab_generation.prev_chapters_n.setValue(3)
     assert len(received) >= 1
 
 
@@ -298,14 +311,14 @@ def test_ctx_change_triggers_estimate_update(mw):
     """改设置 → label 文本变化"""
     mw.chapters = _make_chapters(3, words_per_ch=2000)
     # 先固定到 1
-    mw.tab_settings.prev_chapters_n.setValue(1)
+    mw.tab_generation.prev_chapters_n.setValue(1)
     mw._update_ctx_estimate()
-    text_before = mw.tab_settings.prev_ctx_estimate.text()
+    text_before = mw.tab_generation.prev_ctx_estimate.text()
     
     # 改成 3 (前后必然不同)
-    mw.tab_settings.prev_chapters_n.setValue(3)
+    mw.tab_generation.prev_chapters_n.setValue(3)
     # 信号触发的更新
-    text_after = mw.tab_settings.prev_ctx_estimate.text()
+    text_after = mw.tab_generation.prev_ctx_estimate.text()
     
     assert text_before != text_after, \
         f"信号未触发预估更新:\nbefore: {text_before}\nafter:  {text_after}"

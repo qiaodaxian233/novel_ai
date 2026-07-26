@@ -2,6 +2,7 @@
 """v1.41 ProjectHomeTab UI 集成防回归(吸取 BUG-046 教训)"""
 import ast
 from pathlib import Path
+import pytest
 from tests_helpers import read_all_sources
 
 
@@ -41,15 +42,19 @@ def test_recent_methods_not_in_other_classes():
                 f"{m} 不应在 {cls},应该在 MainWindow"
 
 
+@pytest.mark.skip(reason="v2.18.4(d1e66aa)有意删除项目主页Tab,启动器替代;"
+                         "启动器由 test_v235_launcher_redesign 守护")
 def test_tab_home_registered():
-    """🏠 项目主页 必须在 tab_list 中第一个"""
+    """🏠 项目主页 必须在 tab_list 中第一个 — 已废弃"""
     src = read_all_sources()  # v2.07
     assert "self.tab_home = ProjectHomeTab()" in src
     assert '"🏠 项目主页"' in src
 
 
+@pytest.mark.skip(reason="v2.18.4(d1e66aa)有意删除项目主页Tab,信号不再接入主窗口;"
+                         "ProjectHomeTab 组件本身的行为由本文件其余用例守护")
 def test_signals_connected():
-    """ProjectHomeTab 4 个信号必须接到 MainWindow handlers"""
+    """ProjectHomeTab 4 个信号必须接到 MainWindow handlers — 已废弃"""
     src = read_all_sources()  # v2.07
     assert "self.tab_home.request_open_project.connect" in src
     assert "self.tab_home.request_new_project.connect" in src

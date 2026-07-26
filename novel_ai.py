@@ -570,6 +570,17 @@ class MainWindow(QMainWindow):
                 if _banner:
                     # 延迟 500ms,等主窗口完全显示后再弹
                     def _show_banner():
+                        # 生命周期守卫:singleShot 捕获了 self,若 500ms 内
+                        # 窗口已销毁(测试环境/秒关应用),在死对象上弹模态
+                        # 会段错误;窗口不可见(离屏测试)时弹模态则无人可点,
+                        # 事件循环一转就永久挂死
+                        try:
+                            _visible = self.isVisible()
+                        except RuntimeError:
+                            return  # C++ 对象已销毁
+                        if not _visible:
+                            _s.setValue("first_seen", True)
+                            return
                         QMessageBox.information(
                             self, "🛕 欢迎使用【盘古超级系统】", _banner)
                         _s.setValue("first_seen", True)
