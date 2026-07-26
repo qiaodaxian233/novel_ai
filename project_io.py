@@ -58,6 +58,21 @@ PROJECT_SCHEMA_VERSION = 1
 
 
 # ───────────── 通用工具 ─────────────
+def _write_if_changed(path: Path, data: str) -> bool:
+    """内容与磁盘一致则跳过(省 IO/省网盘同步),否则原子写。返回是否写了。
+
+    v2.23.7 保存优化:60s 定时 autosave 此前每次全量重写全部章节文件,
+    即使一个字没改 — 大项目在 HDD/网盘同步目录下周期性卡顿。
+    """
+    try:
+        if path.is_file() and path.read_text(encoding="utf-8") == data:
+            return False
+    except Exception:
+        pass  # 读不了就直接写
+    _atomic_write(path, data)
+    return True
+
+
 def _safe_filename(s: str, max_len: int = 80) -> str:
     """文件名安全:去除非法字符"""
     s = re.sub(r'[\\/:*?"<>|]', '_', s or "").strip()
@@ -107,14 +122,12 @@ def save_project_folder(folder: str | Path, payload: dict) -> Path:
         "critique": payload.get("critique", {}),
         "conv_slots": payload.get("conv_slots", {}),
     }
-    _atomic_write(folder / "settings.json", json.dumps(settings, ensure_ascii=False, indent=2))
+    _write_if_changed(folder / "settings.json",
+                      json.dumps(settings, ensure_ascii=False, indent=2))
 
     # 3. outline/*.md(prose 大纲六件套)
     outline_dir = folder / "outline"
     outline_dir.mkdir(exist_ok=True)
-    # 先清空旧 .md(避免删了一个还残留)
-    for f in outline_dir.glob("*.md"):
-        f.unlink()
     OUTLINE_KEYS = [
         ("seed", "seed.md"),
         ("worldview", "worldview.md"),
@@ -123,26 +136,37 @@ def save_project_folder(folder: str | Path, payload: dict) -> Path:
         ("lo", "lo.md"),
         ("intro", "intro.md"),
     ]
+    # v2.23.7 先写后删:此前是"先删光再重写",删除与写完之间崩溃/断电
+    # = 数据永久丢失(单文件原子写救不了整体操作)。改为全部写成后
+    # 只删"不在新集合里的"残留,任何时刻磁盘上都有完整数据。
+    kept = set()
     for key, filename in OUTLINE_KEYS:
         content = (payload.get(key) or "").strip()
         if content:
-            _atomic_write(outline_dir / filename, content)
+            _write_if_changed(outline_dir / filename, content)
+            kept.add(filename)
+    for f in outline_dir.glob("*.md"):
+        if f.name not in kept:
+            f.unlink()
 
     # 4. memory/(prose + config)
     memory_dir = folder / "memory"
     memory_dir.mkdir(exist_ok=True)
-    for f in memory_dir.glob("*.md"):
-        f.unlink()
     mem = payload.get("memory", {}) or {}
     MEMORY_PROSE = [
         ("characters", "characters.md"),
         ("summaries", "summaries.md"),
         ("long_term", "long_term.md"),
     ]
+    kept = set()
     for key, filename in MEMORY_PROSE:
         content = (mem.get(key) or "").strip()
         if content:
-            _atomic_write(memory_dir / filename, content)
+            _write_if_changed(memory_dir / filename, content)
+            kept.add(filename)
+    for f in memory_dir.glob("*.md"):
+        if f.name not in kept:
+            f.unlink()
     # 配置(auto_summarize / auto_inject / recent_n / summary_len)
     config = {k: mem[k] for k in
               ("auto_summarize", "auto_inject", "recent_n", "summary_len")
@@ -153,25 +177,29 @@ def save_project_folder(folder: str | Path, payload: dict) -> Path:
     # 5. chapters/(每章一个 .md 纯正文 + _meta.json 元信息)
     chapters_dir = folder / "chapters"
     chapters_dir.mkdir(exist_ok=True)
-    # 清空旧的 .md(避免删章节后残留)
-    for old in chapters_dir.glob("*.md"):
-        old.unlink()
     chapters = payload.get("chapters", []) or []
     meta_map = {}
+    kept = set()
+    # 先写:全部章节落盘成功之前,一个旧文件都不动
     for i, ch in enumerate(chapters, 1):
         title = ch.get("title") or f"第{i}章"
         safe = _safe_filename(title)
         filename = f"{i:03d}-{safe}.md"
-        # 纯正文写 .md
         content = ch.get("content") or ""
-        _atomic_write(chapters_dir / filename, content)
-        # 元信息(除 content 外的所有字段)写到 _meta.json
+        _write_if_changed(chapters_dir / filename, content)
+        kept.add(filename)
         rest = {k: v for k, v in ch.items() if k != "content"}
         meta_map[str(i)] = rest
     if meta_map:
-        _atomic_write(chapters_dir / "_meta.json", json.dumps(meta_map, ensure_ascii=False, indent=2))
+        _write_if_changed(
+            chapters_dir / "_meta.json",
+            json.dumps(meta_map, ensure_ascii=False, indent=2))
     elif (chapters_dir / "_meta.json").exists():
         (chapters_dir / "_meta.json").unlink()
+    # 后删:只清"不在新集合里"的残留(删章/改名产生)
+    for f in chapters_dir.glob("*.md"):
+        if f.name not in kept:
+            f.unlink()
 
     # 6. world.json(6 库)
     charlib = payload.get("charlib") or {}

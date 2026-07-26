@@ -10513,6 +10513,18 @@ class MainWindow(QMainWindow):
             # v1.31 BUG-043:autosave 也走 project_io 文件夹格式
             # 之前只改了 save_project 没改这个,导致文件夹路径被当文件写,Permission denied
             target = Path(save_path)
+            # v2.23.7 脏哈希短路:payload(除易变的 saved_at)与上次保存
+            # 完全一致且目标已存在 → 跳过。60s 定时器在用户静止时零 IO,
+            # 不再每分钟全量重写整个项目。
+            import hashlib as _hl
+            _dh = _hl.md5(json.dumps(
+                {k: v for k, v in d.items() if k != "saved_at"},
+                ensure_ascii=False, sort_keys=True, default=str
+            ).encode("utf-8")).hexdigest()
+            if (_dh == getattr(self, "_last_autosave_hash", None)
+                    and target.exists()):
+                print("[autosave] 内容未变,跳过", flush=True)
+                return
             if PROJECT_IO_AVAILABLE and (
                     not target.suffix or target.is_dir() or
                     (not target.exists() and not save_path.endswith(".json"))):
@@ -10521,11 +10533,25 @@ class MainWindow(QMainWindow):
                 # autosave 不打 status bar(太频繁),只在 console
                 print(f"[autosave] 已写文件夹: {target}", flush=True)
             else:
-                # 旧 .json 路径
+                # 旧 .json 路径 — v2.23.7 改原子写:此前 write_text 截断写,
+                # 写一半崩溃 = 新旧数据两空
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(
-                    json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+                _payload_text = json.dumps(d, ensure_ascii=False, indent=2)
+                import tempfile as _tf
+                _fd, _tmp = _tf.mkstemp(prefix=target.name + ".",
+                                        dir=str(target.parent))
+                try:
+                    with os.fdopen(_fd, "w", encoding="utf-8") as _fh:
+                        _fh.write(_payload_text)
+                    os.replace(_tmp, target)
+                except Exception:
+                    try:
+                        os.unlink(_tmp)
+                    except OSError:
+                        pass
+                    raise
                 print(f"[autosave] 已写 .json: {target}", flush=True)
+            self._last_autosave_hash = _dh
         except Exception as e:
             import traceback
             self.statusBar().showMessage(f"自动保存失败:{e}", 5000)
