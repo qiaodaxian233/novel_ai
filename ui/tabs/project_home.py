@@ -43,11 +43,11 @@ class ProjectHomeTab(QWidget):
         tl.setContentsMargins(0, 0, 0, 0)
         self.lbl_app_title = QLabel("🐉 盘古超级写作助手")
         self.lbl_app_title.setStyleSheet(
-            "font-size:24px; font-weight:bold; color:#c9956b;")
+            "font-size:24px; font-weight:bold; color:#997151;")
         tl.addWidget(self.lbl_app_title)
         self.lbl_current_project = QLabel("(暂无打开的项目)")
         self.lbl_current_project.setStyleSheet(
-            "font-size:14px; color:#8fa3c4;")
+            "font-size:14px; color:#6d7c95;")
         tl.addWidget(self.lbl_current_project)
         lay.addWidget(title_box)
 
@@ -119,15 +119,16 @@ class ProjectHomeTab(QWidget):
         self.prog_writing.setFormat("%v / %m 章 (%p%)")
         self.prog_writing.setStyleSheet(
             "QProgressBar { border:1px solid #888; border-radius:3px; "
-            "text-align:center; height:24px; }} "
-            "QProgressBar::chunk { background-color:#27ae60; }")
+            # 修复:}} 在普通字符串里是字面双括号(解析报错);
+            # 删除硬编码 chunk,让主题接管(浅色主题主蓝/盘古金渐变自适应)
+            "text-align:center; height:24px; }")
         prog_row.addWidget(self.prog_writing, 1)
         stats_lay.addLayout(prog_row)
 
         # 简短文字统计(最近一章信息)
         self.lbl_latest = QLabel("(还没写任何章节)")
         self.lbl_latest.setStyleSheet(
-            "color:#8fa3c4; font-size:12px; padding:4px;")
+            "color:#6d7c95; font-size:12px; padding:4px;")
         self.lbl_latest.setWordWrap(True)
         stats_lay.addWidget(self.lbl_latest)
         stats_lay.addStretch()
@@ -154,7 +155,7 @@ class ProjectHomeTab(QWidget):
         op_row.addWidget(self.btn_open_recent)
         self.btn_remove_recent = QPushButton("✕ 从列表移除(不删文件)")
         self.btn_remove_recent.setStyleSheet(
-            "QPushButton { background:#95a5a6; color:white; padding:6px 14px; "
+            "QPushButton { background:#6d7b7c; color:white; padding:6px 14px; "
             "border-radius:3px; }")
         self.btn_remove_recent.clicked.connect(self._on_remove_recent)
         op_row.addWidget(self.btn_remove_recent)
@@ -199,11 +200,11 @@ class ProjectHomeTab(QWidget):
             self.lbl_current_project.setText(
                 f"📖 当前项目:{title or '(未命名)'}  →  {_P(mw.current_project_file).name}")
             self.lbl_current_project.setStyleSheet(
-                "font-size:14px; color:#27ae60; font-weight:bold;")
+                "font-size:14px; color:#1f8b4d; font-weight:bold;")
         else:
             self.lbl_current_project.setText("(暂无打开的项目 — 请新建或打开)")
             self.lbl_current_project.setStyleSheet(
-                "font-size:14px; color:#8fa3c4;")
+                "font-size:14px; color:#6d7c95;")
 
         # 统计
         chapters = mw.chapters or []

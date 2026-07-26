@@ -40,7 +40,7 @@ class AIToolboxTab(QWidget):
             "选择一个章节,输入修改指令,AI 会根据指令重写该章节内容。"
             "修改后预览确认,再一键填充回去。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#8fa3c4; font-size:12px; padding-bottom:4px;")
+        hint.setStyleSheet("color:#6d7c95; font-size:12px; padding-bottom:4px;")
         lay.addWidget(hint)
 
         # ── 章节选择行 ──
@@ -71,7 +71,7 @@ class AIToolboxTab(QWidget):
         self.txt_original.setReadOnly(True)
         self.txt_original.setPlaceholderText("选择章节后这里显示原文...")
         self.txt_original.setStyleSheet(
-            "background:#fafbfd; font-size:12px; line-height:1.6;")
+            "background:#fafbfd; color:#3a3f47; font-size:12px; line-height:1.6;")
         left_lay.addWidget(self.txt_original)
         splitter.addWidget(left)
 
@@ -97,11 +97,11 @@ class AIToolboxTab(QWidget):
         self.btn_send = QPushButton("🤖 发送给 AI 修改")
         self.btn_send.setStyleSheet("""
             QPushButton {
-                background: #4a9eff; color: white;
+                background: #3584e4; color: white;
                 padding: 10px 24px; font-size: 13px; font-weight: bold;
                 border-radius: 6px;
             }
-            QPushButton:hover { background: #3584e4; }
+            QPushButton:hover { background: #2563cc; }
         """)
         self.btn_send.clicked.connect(self._on_send)
         btn_row.addWidget(self.btn_send)
@@ -110,12 +110,12 @@ class AIToolboxTab(QWidget):
         self.btn_apply.setEnabled(False)
         self.btn_apply.setStyleSheet("""
             QPushButton {
-                background: #27ae60; color: white;
+                background: #1f8b4d; color: white;
                 padding: 10px 24px; font-size: 13px; font-weight: bold;
                 border-radius: 6px;
             }
-            QPushButton:hover { background: #219a52; }
-            QPushButton:disabled { background: #c0c8d4; }
+            QPushButton:hover { background: #186f3d; }
+            QPushButton:disabled { background: #c0c8d4; color: #5c5c5c; }
         """)
         self.btn_apply.clicked.connect(self._on_apply)
         btn_row.addWidget(self.btn_apply)
@@ -128,7 +128,7 @@ class AIToolboxTab(QWidget):
         self.txt_result.setReadOnly(True)
         self.txt_result.setPlaceholderText("AI 修改后的内容会显示在这里...")
         self.txt_result.setStyleSheet(
-            "background:#f0fff0; font-size:12px; line-height:1.6;")
+            "background:#f0fff0; color:#3a3f47; font-size:12px; line-height:1.6;")
         right_lay.addWidget(self.txt_result)
 
         splitter.addWidget(right)
@@ -137,7 +137,7 @@ class AIToolboxTab(QWidget):
 
         # ── 状态 ──
         self.lbl_status = QLabel("")
-        self.lbl_status.setStyleSheet("color:#8fa3c4; font-size:11px;")
+        self.lbl_status.setStyleSheet("color:#6d7c95; font-size:11px;")
         lay.addWidget(self.lbl_status)
 
     # ──────────── 数据 ────────────

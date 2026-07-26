@@ -24,7 +24,7 @@ class CanonGuard(QWidget):
         layout.setContentsMargins(15, 15, 15, 15)
 
         title = QLabel("Canon 设定守护 — 防止写到 N 章设定崩塌")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #1a4480;")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #2a6dcd;")
         layout.addWidget(title)
 
         intro = QLabel(
@@ -32,7 +32,7 @@ class CanonGuard(QWidget):
             "写完后会自动稽核是否违反。\n"
             "  · 锁定项:绝对不可变(年龄、关键物品归属、女主双重身份等)\n"
             "  · 演化项:可随情节推进改变(修为、关系、心境)")
-        intro.setStyleSheet("color: #555; padding: 6px 0;")
+        intro.setStyleSheet("color: #7a7a7a; padding: 6px 0;")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -60,7 +60,7 @@ class CanonGuard(QWidget):
         # v1.75:自动抽取可见性 label — 每次自动抽取后更新,让用户不用翻日志就能确认
         self.lbl_last_extract = QLabel("📌 自动抽取状态:尚未运行(写完下一章后查看)")
         self.lbl_last_extract.setStyleSheet(
-            "color: #8fa3c4; font-size: 11px; padding: 4px 6px; "
+            "color: #6d7c95; font-size: 11px; padding: 4px 6px; "
             "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
         layout.addWidget(self.lbl_last_extract)
 
@@ -74,7 +74,7 @@ class CanonGuard(QWidget):
             "格式:[L 锁定 / E 演化][H 高 / M 中 / L 低] 键 = 值 (chN)\n"
             "示例:[L][H] 林晚晚.年龄 = 25 (ch1)\n"
             "      [E][M] 顾砚深.修为 = 金丹中期 (ch7)")
-        legend.setStyleSheet("color: #8fa3c4; font-size: 11px;")
+        legend.setStyleSheet("color: #6d7c95; font-size: 11px;")
         glay.addWidget(legend)
 
         self.canon_edit = QPlainTextEdit()
@@ -104,7 +104,7 @@ class CanonGuard(QWidget):
         self.audit_log.setReadOnly(True)
         self.audit_log.setMaximumHeight(120)
         self.audit_log.setStyleSheet(
-            "font-family: Consolas, monospace; font-size: 12px; background: #fff7f0;")
+            "font-family: Consolas, monospace; font-size: 12px; background: #fff7f0; color:#3a3f47;")
         ll.addWidget(self.audit_log)
         layout.addWidget(log_box)
 

@@ -213,6 +213,8 @@ QPushButton#nav_danger_btn:hover {{ background: rgba(231,76,60,0.28); }}
 class ThemeManager:
     """多主题管理器"""
 
+    # v2.23.6 对比度审计:text_hint 统一校正为对 bg/bg_white 双向 ≥3.0
+    # (WCAG 大字下限;此前 2.6~2.9,小字提示在全部主题下都偏淡"看不清")
     THEMES = {
         "light": {
             "label": "☀️ 浅色",
@@ -221,7 +223,7 @@ class ThemeManager:
                 bg="#f5f7fa", bg_white="#ffffff", bg_hover="#f0f4ff",
                 bg_selected="#e8f0fe", primary="#4a9eff",
                 primary_dark="#3584e4", primary_light="#eef5ff",
-                text="#1a1a2e", text_sec="#555555", text_hint="#999999",
+                text="#1a1a2e", text_sec="#555555", text_hint="#878787",
                 border="#e0e6ed", border_focus="#4a9eff",
                 tab_bg="#f8f9fc", statusbar_bg="#ffffff",
             ),
@@ -233,7 +235,7 @@ class ThemeManager:
                 bg="#0a0e1a", bg_white="#141d35", bg_hover="#1e2d50",
                 bg_selected="#1e3a6e", primary="#5b8dee",
                 primary_dark="#3d6fd4", primary_light="#0f1628",
-                text="#e8ecf4", text_sec="#8fa3c4", text_hint="#4d6080",
+                text="#e8ecf4", text_sec="#8fa3c4", text_hint="#576c90",
                 border="#1e2d50", border_focus="#5b8dee",
                 tab_bg="#0f1628", statusbar_bg="#0a0e1a",
                 btn_bg="#5b8dee",
@@ -253,7 +255,7 @@ class ThemeManager:
                 bg="#f0f5e6", bg_white="#f7faf0", bg_hover="#e8f0d8",
                 bg_selected="#d4e8b8", primary="#5a8c32",
                 primary_dark="#4a7828", primary_light="#e8f5d0",
-                text="#2d3319", text_sec="#5a6640", text_hint="#8a9970",
+                text="#2d3319", text_sec="#5a6640", text_hint="#829069",
                 border="#c5d6a0", border_focus="#5a8c32",
                 tab_bg="#e4edcf", statusbar_bg="#f0f5e6",
                 btn_bg="#5a8c32",
@@ -293,7 +295,7 @@ class ThemeManager:
                 bg="#0a0a14", bg_white="#12121f", bg_hover="#1e1e30",
                 bg_selected="#2a2520", primary="#d4a843",
                 primary_dark="#b8860b", primary_light="#1a1510",
-                text="#d4a843", text_sec="#a08050", text_hint="#6b5d3a",
+                text="#d4a843", text_sec="#a08050", text_hint="#71633d",
                 border="#2a2520", border_focus="#d4a843",
                 tab_bg="#12121f", statusbar_bg="#0a0a14",
                 btn_bg="#1a1510", btn_fg="#d4a843",

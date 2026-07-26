@@ -161,9 +161,9 @@ class ImportContinuationDialog(QDialog):
         self.btn_ok = QPushButton("✓ 开始导入")
         self.btn_ok.setMinimumWidth(140)
         self.btn_ok.setStyleSheet(
-            "QPushButton { background:#27ae60; color:white; padding:8px 16px; "
+            "QPushButton { background:#1f8b4d; color:white; padding:8px 16px; "
             "border-radius:3px; font-weight:bold; } "
-            "QPushButton:hover { background:#1e8449; }")
+            "QPushButton:hover { background:#186f3d; }")
         self.btn_ok.clicked.connect(self.accept)
         btn_row.addWidget(self.btn_ok)
         lay.addLayout(btn_row)

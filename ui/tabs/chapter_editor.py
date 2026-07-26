@@ -49,12 +49,12 @@ class ChapterEditor(QWidget):
         # 盘古超级系统:3 个新功能按钮
         self.btn_pangu_lint = QPushButton("🛡️ 本地词扫")
         self.btn_pangu_lint.setStyleSheet(
-            "background:#27ae60;color:white;padding:4px 10px;border-radius:3px;")
+            "background:#1f8b4d;color:white;padding:4px 10px;border-radius:3px;")
         self.btn_pangu_lint.setToolTip("0-token 本地检测:禁用词/长句/破折号/三连点")
         self.btn_pangu_lint.clicked.connect(self._on_pangu_lint)
         self.btn_pangu_qcheck = QPushButton("📊 智能质检")
         self.btn_pangu_qcheck.setStyleSheet(
-            "background:#e67e22;color:white;padding:4px 10px;border-radius:3px;")
+            "background:#b8651b;color:white;padding:4px 10px;border-radius:3px;")
         self.btn_pangu_qcheck.setToolTip(
             "📊 智能质检(38 项 = 30 项原盘古 + 8 大坑专项)\n"
             "发 AI 深度审稿,返回 JSON:\n"
@@ -76,7 +76,7 @@ class ChapterEditor(QWidget):
         from PyQt5.QtWidgets import QSpinBox, QLabel
         from PyQt5.QtCore import QSettings
         self._laodao_target_lbl = QLabel("目标弃书率≤")
-        self._laodao_target_lbl.setStyleSheet("font-size:11px; color:#8fa3c4;")
+        self._laodao_target_lbl.setStyleSheet("font-size:11px; color:#6d7c95;")
         self.spn_laodao_target = QSpinBox()
         self.spn_laodao_target.setRange(10, 80)
         self.spn_laodao_target.setSuffix("%")
@@ -91,7 +91,7 @@ class ChapterEditor(QWidget):
             lambda v: QSettings("NovelAI", "Laodao").setValue("target_quit_rate", v))
 
         self._laodao_max_lbl = QLabel("最多")
-        self._laodao_max_lbl.setStyleSheet("font-size:11px; color:#8fa3c4;")
+        self._laodao_max_lbl.setStyleSheet("font-size:11px; color:#6d7c95;")
         self.spn_laodao_max = QSpinBox()
         self.spn_laodao_max.setRange(1, 8)
         self.spn_laodao_max.setSuffix("轮")
@@ -130,7 +130,7 @@ class ChapterEditor(QWidget):
         # v1.10:TTS 朗读控件 — 单独一组,右侧对齐
         self.btn_tts_play = QPushButton("🔊 朗读本章")
         self.btn_tts_play.setStyleSheet(
-            "background:#27ae60;color:white;padding:4px 10px;border-radius:3px;"
+            "background:#1f8b4d;color:white;padding:4px 10px;border-radius:3px;"
             "font-weight:bold;")
         self.btn_tts_play.setToolTip(
             "用 TTS 朗读当前章节(后端在 创作设置 → TTS 朗读 里配置)\n"
@@ -144,7 +144,7 @@ class ChapterEditor(QWidget):
         self.btn_tts_stop.setEnabled(False)  # 没在朗读时禁用
         # 速度滑块
         self.lbl_tts_speed = QLabel("速度 1.0x")
-        self.lbl_tts_speed.setStyleSheet("color:#8fa3c4;font-size:11px;")
+        self.lbl_tts_speed.setStyleSheet("color:#6d7c95;font-size:11px;")
         self.slider_tts_speed = QSlider(Qt.Horizontal)
         self.slider_tts_speed.setRange(50, 200)  # 0.5x ~ 2.0x
         self.slider_tts_speed.setValue(100)       # 默认 1.0x
@@ -157,7 +157,7 @@ class ChapterEditor(QWidget):
             ))
         # TTS 状态 label(显示"合成中 3/10"之类)
         self.lbl_tts_status = QLabel("")
-        self.lbl_tts_status.setStyleSheet("color:#27ae60;font-size:11px;")
+        self.lbl_tts_status.setStyleSheet("color:#1f8b4d;font-size:11px;")
         btn_row.addWidget(self.btn_tts_play)
         btn_row.addWidget(self.btn_tts_stop)
         btn_row.addWidget(self.lbl_tts_speed)
@@ -177,7 +177,7 @@ class ChapterEditor(QWidget):
         self.btn_editor_reset = QPushButton("↺")
         self.btn_editor_reset.setToolTip("重置编辑器颜色为默认(跟随当前主题)")
         self.btn_editor_reset.setStyleSheet(
-            "background:#95a5a6;color:white;padding:4px 8px;border-radius:3px;")
+            "background:#6d7b7c;color:white;padding:4px 8px;border-radius:3px;")
         self.btn_editor_reset.clicked.connect(self._reset_editor_colors)
         btn_row.addWidget(self.btn_editor_fg)
         btn_row.addWidget(self.btn_editor_bg)
@@ -216,8 +216,8 @@ class ChapterEditor(QWidget):
             "📌 本章元信息(钩子/爽点/伏笔/下一章选项)— 已自动从正文剥离,会引导下一章生成")
         self.pangu_meta_box.setStyleSheet(
             "QGroupBox { border: 2px solid #b4884e; margin-top: 8px; padding-top: 14px; "
-            "  background: #fffbf2; } "
-            "QGroupBox::title { color: #b4884e; font-weight: bold; left: 10px; "
+            "  background: #fffbf2; color:#3a3f47; } "
+            "QGroupBox::title { color: #977242; font-weight: bold; left: 10px; "
             "  font-size: 13px; }")
         pml = QVBoxLayout(self.pangu_meta_box)
         pml.setContentsMargins(8, 4, 8, 6)
@@ -228,23 +228,23 @@ class ChapterEditor(QWidget):
             "你也可以点下方按钮手动指定下一章开局。")
         tip.setWordWrap(True)
         tip.setStyleSheet(
-            "color:#5b8dee; padding:4px 6px; background:#eaf3ff; "
+            "color:#4e79cd; padding:4px 6px; background:#eaf3ff; "
             "border-left:3px solid #1a4480; font-size:11px;")
         pml.addWidget(tip)
         self.pangu_hook_label = QLabel("断章钩子: —")
         self.pangu_hook_label.setWordWrap(True)
-        self.pangu_hook_label.setStyleSheet("color:#444; padding:2px 4px;")
+        self.pangu_hook_label.setStyleSheet("color:#6d6d6d; padding:2px 4px;")
         pml.addWidget(self.pangu_hook_label)
         self.pangu_cool_label = QLabel("本章爽点: —")
         self.pangu_cool_label.setWordWrap(True)
-        self.pangu_cool_label.setStyleSheet("color:#444; padding:2px 4px;")
+        self.pangu_cool_label.setStyleSheet("color:#6d6d6d; padding:2px 4px;")
         pml.addWidget(self.pangu_cool_label)
         self.pangu_seeds_label = QLabel("伏笔: —")
-        self.pangu_seeds_label.setStyleSheet("color:#444; padding:2px 4px;")
+        self.pangu_seeds_label.setStyleSheet("color:#6d6d6d; padding:2px 4px;")
         pml.addWidget(self.pangu_seeds_label)
         # 下一章选项区:3 个按钮,点哪个就用哪个开局生成下一章
         nl = QLabel("下一章选项(点按钮用此选项作为下一章开局指引):")
-        nl.setStyleSheet("color:#8fa3c4; padding:4px 4px 0; font-size:11px;")
+        nl.setStyleSheet("color:#6d7c95; padding:4px 4px 0; font-size:11px;")
         pml.addWidget(nl)
         self.pangu_next_opt_row = QHBoxLayout()
         self.pangu_next_opt_row.setSpacing(4)

@@ -77,7 +77,7 @@ class FanqieRankTab(QWidget):
 
         self.lbl_status = QLabel("尚未扫描")
         self.lbl_status.setStyleSheet(
-            "color:#8fa3c4; font-size:13px; padding-left:12px;")
+            "color:#6d7c95; font-size:13px; padding-left:12px;")
         top_row.addWidget(self.lbl_status)
         top_row.addStretch()
 

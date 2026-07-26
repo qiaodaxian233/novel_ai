@@ -40,13 +40,13 @@ class BookSplitterTab(QWidget):
         self.btn_load_file.clicked.connect(self._on_load_file)
         top_row.addWidget(self.btn_load_file)
         self.lbl_loaded = QLabel("(未加载)")
-        self.lbl_loaded.setStyleSheet("color:#8fa3c4; padding:0 8px;")
+        self.lbl_loaded.setStyleSheet("color:#6d7c95; padding:0 8px;")
         top_row.addWidget(self.lbl_loaded, 1)
         lay.addLayout(top_row)
 
         # 统计条
         self.lbl_stats = QLabel("")
-        self.lbl_stats.setStyleSheet("color:#8fa3c4; font-size:11px; padding:2px;")
+        self.lbl_stats.setStyleSheet("color:#6d7c95; font-size:11px; padding:2px;")
         lay.addWidget(self.lbl_stats)
 
         # ── 主区 ──
@@ -65,9 +65,9 @@ class BookSplitterTab(QWidget):
         btn_batch = QHBoxLayout()
         self.btn_batch_analyze = QPushButton("🔬 批量分析全书")
         self.btn_batch_analyze.setStyleSheet(
-            "QPushButton { background:#e67e22; color:white; padding:6px 12px;"
+            "QPushButton { background:#b8651b; color:white; padding:6px 12px;"
             "border-radius:3px; font-weight:bold; }"
-            "QPushButton:hover { background:#d35400; }")
+            "QPushButton:hover { background:#9a4a12; }")
         self.btn_batch_analyze.clicked.connect(self._on_batch_analyze)
         self.btn_batch_analyze.setEnabled(False)
         btn_batch.addWidget(self.btn_batch_analyze)
@@ -95,16 +95,16 @@ class BookSplitterTab(QWidget):
             "QPushButton { background:#8e44ad; color:white; padding:6px 14px;"
             "border-radius:3px; font-weight:bold; }"
             "QPushButton:hover { background:#6c3483; }"
-            "QPushButton:disabled { background:#ccc; }")
+            "QPushButton:disabled { background:#ccc; color:#5c5c5c; }")
         self.btn_analyze.setEnabled(False)
         self.btn_analyze.clicked.connect(self._on_analyze_current)
         rtop.addWidget(self.btn_analyze)
         self.btn_learn = QPushButton("📝 学习此章技巧")
         self.btn_learn.setStyleSheet(
-            "QPushButton { background:#27ae60; color:white; padding:6px 14px;"
+            "QPushButton { background:#1f8b4d; color:white; padding:6px 14px;"
             "border-radius:3px; font-weight:bold; }"
-            "QPushButton:hover { background:#219a52; }"
-            "QPushButton:disabled { background:#ccc; }")
+            "QPushButton:hover { background:#186f3d; }"
+            "QPushButton:disabled { background:#ccc; color:#5c5c5c; }")
         self.btn_learn.setEnabled(False)
         self.btn_learn.setToolTip("提取本章写作技巧,生成学习笔记")
         self.btn_learn.clicked.connect(self._on_learn_chapter)
@@ -119,7 +119,7 @@ class BookSplitterTab(QWidget):
 
         # 分析结果
         ana_lbl = QLabel("🔬 AI 分析 / 学习笔记")
-        ana_lbl.setStyleSheet("font-weight:bold; color:#8e44ad; padding-top:4px;")
+        ana_lbl.setStyleSheet("font-weight:bold; color:#aa52d0; padding-top:4px;")
         rl.addWidget(ana_lbl)
         self.te_analysis = QPlainTextEdit()
         self.te_analysis.setReadOnly(True)
@@ -151,7 +151,7 @@ class BookSplitterTab(QWidget):
         self.lbl_loaded.setText(
             f"📖 {meta.title} | {meta.chapter_count} 章 | "
             f"{meta.total_words:,} 字 | 编码 {meta.encoding}")
-        self.lbl_loaded.setStyleSheet("color:#27ae60; font-weight:bold;")
+        self.lbl_loaded.setStyleSheet("color:#1f8b4d; font-weight:bold;")
 
         # 统计
         if meta.chapters:

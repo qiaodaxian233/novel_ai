@@ -24,6 +24,47 @@ from PyQt5.QtGui import QFont, QIcon
 APP_VERSION = "v2.23.5"
 
 
+def _launcher_tokens():
+    """从当前主题推导启动页配色(v2.23.6 启动页主题化)。
+
+    此前启动页硬编码配色,且 45ba358 的暗色盲替换只换了 6 处背景、
+    没换文字/悬停/顶栏,产生"深底深字项目名隐形、悬停翻回浅色"的嵌合体
+    (对比度审计: #1a1a2e on #141d35 = 1.0)。改为跟随用户保存的主题,
+    主题读取失败时回退深海暗黑。
+    """
+    qa = {}
+    try:
+        from ui.theme import ThemeManager
+        name = ThemeManager.current()
+        qa = ThemeManager.THEMES.get(
+            name, ThemeManager.THEMES["light"]).get("qss_args", {}) or {}
+    except Exception:
+        pass
+    t = {
+        "bg":            qa.get("bg", "#0a0e1a"),
+        "panel":         qa.get("bg_white", "#141d35"),
+        "hover":         qa.get("bg_hover", "#1e2d50"),
+        "selected":      qa.get("bg_selected", "#1e3a6e"),
+        "text":          qa.get("text", "#e8ecf4"),
+        "text_sec":      qa.get("text_sec", "#8fa3c4"),
+        "text_hint":     qa.get("text_hint", "#4d6080"),
+        "border":        qa.get("border", "#1e2d50"),
+        "primary":       qa.get("primary", "#4a9eff"),
+        "primary_dark":  qa.get("primary_dark", "#3584e4"),
+        "primary_light": qa.get("primary_light", "#0f1628"),
+    }
+    # 亮度感知的语义色:成功绿在浅色主题用深绿、深色主题用亮绿
+    def _lum(hexs):
+        hexs = hexs.lstrip("#")
+        r, g, b = (int(hexs[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+        def lin(c):
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    t["is_dark"] = _lum(t["panel"]) < 0.35
+    t["ok"] = "#4fce7f" if t["is_dark"] else "#1e7e45"
+    return t
+
+
 def _get_app_version():
     """从 novel_ai.py 读取最新版本号(避免硬编码漂移)"""
     try:
@@ -102,17 +143,19 @@ class ProjectCard(QFrame):
         self.setObjectName("project_card")
         self.setCursor(Qt.PointingHandCursor)
         self.setFrameShape(QFrame.StyledPanel)
-        self.setStyleSheet("""
-            #project_card {
-                background: #141d35;
-                border: 1px solid #e0e6ed;
+        tk = _launcher_tokens()
+        self._tk = tk
+        self.setStyleSheet(f"""
+            #project_card {{
+                background: {tk["panel"]};
+                border: 1px solid {tk["border"]};
                 border-radius: 8px;
-            }
-            #project_card:hover {
-                border-color: #4a9eff;
-                background: #f8fbff;
-            }
-            #project_card > QLabel { background: transparent; border: none; }
+            }}
+            #project_card:hover {{
+                border-color: {tk["primary"]};
+                background: {tk["hover"]};
+            }}
+            #project_card > QLabel {{ background: transparent; border: none; }}
         """)
         self.setMinimumHeight(112)
         self.setMaximumHeight(128)
@@ -136,14 +179,14 @@ class ProjectCard(QFrame):
             name_display = name
         name_lbl = QLabel(name_display)
         name_lbl.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
-        name_lbl.setStyleSheet("color:#1a1a2e;")
+        name_lbl.setStyleSheet(f"color:{tk['text']};")
         name_lbl.setToolTip(path.name)
         title_row.addWidget(name_lbl, 1)
 
         if is_last:
             badge = QLabel("上次")
             badge.setStyleSheet(
-                "background:#4a9eff; color:white; border-radius:3px;"
+                f"background:{tk['primary_dark']}; color:white; border-radius:3px;"
                 "padding:1px 6px; font-size:10px; border:none;")
             title_row.addWidget(badge)
         lay.addLayout(title_row)
@@ -158,7 +201,7 @@ class ProjectCard(QFrame):
 
         stats_lbl = QLabel("   ·   ".join(stat_text) or "(空项目)")
         stats_lbl.setStyleSheet(
-            "color:#8fa3c4; font-size:11px; padding-left:24px;")
+            f"color:{tk['text_sec']}; font-size:11px; padding-left:24px;")
         lay.addWidget(stats_lbl)
 
         # 路径(灰色小字,截断)
@@ -169,7 +212,7 @@ class ProjectCard(QFrame):
             short = full_str
         path_lbl = QLabel(short)
         path_lbl.setStyleSheet(
-            "color:#4d6080; font-size:10px; padding-left:24px;")
+            f"color:{tk['text_hint']}; font-size:10px; padding-left:24px;")
         path_lbl.setToolTip(full_str)
         lay.addWidget(path_lbl)
 
@@ -214,7 +257,9 @@ class ProjectLauncher(QDialog):
         if os.path.exists(_icon):
             self.setWindowIcon(QIcon(_icon))
 
-        self.setStyleSheet("QDialog { background: #0f1628; }")
+        self._tk = _launcher_tokens()
+        _tk = self._tk
+        self.setStyleSheet(f"QDialog {{ background: {_tk['bg']}; }}")
 
         main_lay = QVBoxLayout(self)
         main_lay.setContentsMargins(0, 0, 0, 0)
@@ -238,13 +283,13 @@ class ProjectLauncher(QDialog):
     def _build_header(self, parent_lay):
         header = QFrame()
         header.setFixedHeight(48)
-        header.setStyleSheet("""
-            QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #f8f9ff, stop:1 #eef2ff);
-                border-bottom: 1px solid #e0e4ef;
-            }
-            QFrame > QLabel { background:transparent; border:none; }
+        _tk = self._tk
+        header.setStyleSheet(f"""
+            QFrame {{
+                background: {_tk["panel"]};
+                border-bottom: 1px solid {_tk["border"]};
+            }}
+            QFrame > QLabel {{ background:transparent; border:none; }}
         """)
         h_lay = QHBoxLayout(header)
         h_lay.setContentsMargins(16, 0, 16, 0)
@@ -255,12 +300,12 @@ class ProjectLauncher(QDialog):
 
         name_lbl = QLabel("盘古写作引擎")
         name_lbl.setFont(QFont("Microsoft YaHei", 13, QFont.Bold))
-        name_lbl.setStyleSheet("color:#1a1a2e;")
+        name_lbl.setStyleSheet(f"color:{_tk['text']};")
         h_lay.addWidget(name_lbl)
 
         ver_lbl = QLabel(f" {self._app_version} ")
         ver_lbl.setStyleSheet(
-            "background:#4a9eff; color:white; border-radius:4px;"
+            f"background:{_tk['primary_dark']}; color:white; border-radius:4px;"
             "padding:2px 8px; font-size:11px; font-weight:bold; border:none;")
         h_lay.addWidget(ver_lbl)
 
@@ -270,9 +315,9 @@ class ProjectLauncher(QDialog):
         btn_about.setFlat(True)
         btn_about.setCursor(Qt.PointingHandCursor)
         btn_about.setStyleSheet(
-            "QPushButton { color:#8fa3c4; font-size:12px; padding:4px 8px;"
+            f"QPushButton {{ color:{_tk['text_sec']}; font-size:12px; padding:4px 8px;"
             "border:none; background:transparent; }"
-            "QPushButton:hover { color:#1a73e8; }")
+            f"QPushButton:hover {{ color:{_tk['primary']}; }}")
         btn_about.clicked.connect(self._on_about)
         h_lay.addWidget(btn_about)
 
@@ -283,8 +328,9 @@ class ProjectLauncher(QDialog):
     def _build_left_panel(self, parent_lay):
         panel = QFrame()
         panel.setFixedWidth(220)
+        _tk = self._tk
         panel.setStyleSheet(
-            "QFrame { background: #141d35; border-right: 1px solid #e0e4ef; }"
+            f"QFrame {{ background: {_tk['panel']}; border-right: 1px solid {_tk['border']}; }}"
             "QFrame > QLabel { background:transparent; border:none; }")
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(16, 20, 16, 16)
@@ -293,15 +339,15 @@ class ProjectLauncher(QDialog):
         # 新建项目(主按钮)
         btn_new = QPushButton("📁  新建项目")
         btn_new.setCursor(Qt.PointingHandCursor)
-        btn_new.setStyleSheet("""
-            QPushButton {
-                background: #4a9eff; color: white;
+        btn_new.setStyleSheet(f"""
+            QPushButton {{
+                background: {_tk["primary_dark"]}; color: white;
                 padding: 14px; font-size: 13px; font-weight: bold;
                 border-radius: 8px; border: none;
                 text-align: left;
-            }
-            QPushButton:hover { background: #3584e4; }
-            QPushButton:pressed { background: #2563cc; }
+            }}
+            QPushButton:hover {{ background: {_tk["primary"]}; }}
+            QPushButton:pressed {{ background: {_tk["primary_dark"]}; }}
         """)
         btn_new.clicked.connect(self._on_new)
         lay.addWidget(btn_new)
@@ -309,14 +355,14 @@ class ProjectLauncher(QDialog):
         # 继续上次(强调按钮)
         btn_last = QPushButton("▶  继续上次")
         btn_last.setCursor(Qt.PointingHandCursor)
-        btn_last.setStyleSheet("""
-            QPushButton {
-                background: #eef5ff; color: #1a73e8;
+        btn_last.setStyleSheet(f"""
+            QPushButton {{
+                background: {_tk["selected"]}; color: {_tk["text"]};
                 padding: 12px; font-size: 13px; font-weight: bold;
-                border-radius: 8px; border: 1px solid #c8def5;
+                border-radius: 8px; border: 1px solid {_tk["primary"]};
                 text-align: left;
-            }
-            QPushButton:hover { background: #dceaff; border-color: #4a9eff; }
+            }}
+            QPushButton:hover {{ background: {_tk["hover"]}; border-color: {_tk["primary_dark"]}; }}
         """)
         btn_last.clicked.connect(self._on_continue_last)
         lay.addWidget(btn_last)
@@ -324,15 +370,15 @@ class ProjectLauncher(QDialog):
         # 打开项目(次要按钮)
         btn_open = QPushButton("📂  浏览打开")
         btn_open.setCursor(Qt.PointingHandCursor)
-        btn_open.setStyleSheet("""
-            QPushButton {
-                background: #141d35; color: #8fa3c4;
+        btn_open.setStyleSheet(f"""
+            QPushButton {{
+                background: {_tk["panel"]}; color: {_tk["text_sec"]};
                 padding: 12px; font-size: 13px;
-                border-radius: 8px; border: 1px solid #e0e6ed;
+                border-radius: 8px; border: 1px solid {_tk["border"]};
                 text-align: left;
-            }
-            QPushButton:hover { background: #f5f8ff;
-                border-color: #4a9eff; color: #1a73e8; }
+            }}
+            QPushButton:hover {{ background: {_tk["hover"]};
+                border-color: {_tk["primary"]}; color: {_tk["text"]}; }}
         """)
         btn_open.clicked.connect(self._on_browse)
         lay.addWidget(btn_open)
@@ -342,27 +388,27 @@ class ProjectLauncher(QDialog):
         # 项目目录信息
         dir_lbl = QLabel("📁 项目目录")
         dir_lbl.setStyleSheet(
-            "color:#8fa3c4; font-size:11px; padding:4px 0;")
+            f"color:{_tk['text_sec']}; font-size:11px; padding:4px 0;")
         lay.addWidget(dir_lbl)
 
         dir_path = str(self.project_dir)
         if len(dir_path) > 30:
             dir_path = dir_path[:14] + "..." + dir_path[-14:]
         dir_path_lbl = QLabel(dir_path)
-        dir_path_lbl.setStyleSheet("color:#aaa; font-size:10px;")
+        dir_path_lbl.setStyleSheet(f"color:{_tk['text_hint']}; font-size:10px;")
         dir_path_lbl.setToolTip(str(self.project_dir))
         lay.addWidget(dir_path_lbl)
 
         btn_change_dir = QPushButton("更改目录")
         btn_change_dir.setCursor(Qt.PointingHandCursor)
-        btn_change_dir.setStyleSheet("""
-            QPushButton {
-                background: transparent; color: #4a9eff;
+        btn_change_dir.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {_tk["primary"]};
                 padding: 6px; font-size: 11px;
-                border: 1px dashed #4a9eff;
+                border: 1px dashed {_tk["primary"]};
                 border-radius: 4px;
-            }
-            QPushButton:hover { background: #eef5ff; }
+            }}
+            QPushButton:hover {{ background: {_tk["hover"]}; }}
         """)
         btn_change_dir.clicked.connect(self._on_change_project_dir)
         lay.addWidget(btn_change_dir)
@@ -375,18 +421,19 @@ class ProjectLauncher(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet("""
-            QScrollArea { border: none; background: #0f1628; }
-            QScrollBar:vertical {
+        _tk = self._tk
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background: {_tk["bg"]}; }}
+            QScrollBar:vertical {{
                 width: 8px; background: transparent;
-            }
-            QScrollBar::handle:vertical {
-                background: #c0c8d0; border-radius: 4px; min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover { background: #a0a8b0; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            }}
+            QScrollBar::handle:vertical {{
+                background: {_tk["border"]}; border-radius: 4px; min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: {_tk["text_hint"]}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
                 height: 0px;
-            }
+            }}
         """)
 
         content = QWidget()
@@ -397,13 +444,13 @@ class ProjectLauncher(QDialog):
         # ── 紧凑 hero(只占 72px,不浪费空间) ──
         hero = QFrame()
         hero.setFixedHeight(76)
-        hero.setStyleSheet("""
-            QFrame {
+        hero.setStyleSheet(f"""
+            QFrame {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #4a9eff, stop:1 #6eb5ff);
+                    stop:0 {_tk["primary_dark"]}, stop:1 {_tk["primary"]});
                 border-radius: 10px;
-            }
-            QFrame > QLabel { background:transparent; border:none; color:white; }
+            }}
+            QFrame > QLabel {{ background:transparent; border:none; color:white; }}
         """)
         hero_lay = QHBoxLayout(hero)
         hero_lay.setContentsMargins(20, 12, 20, 12)
@@ -444,11 +491,12 @@ class ProjectLauncher(QDialog):
         section_row = QHBoxLayout()
         section_title = QLabel("📚 最近项目")
         section_title.setFont(QFont("Microsoft YaHei", 13, QFont.Bold))
-        section_title.setStyleSheet("color:#1a1a2e;")
+        section_title.setStyleSheet(f"color:{_tk['text']};")
         section_row.addWidget(section_title)
         section_row.addStretch()
         self._lbl_section_hint = QLabel("双击卡片打开 · 单击选择")
-        self._lbl_section_hint.setStyleSheet("color:#6a85a8; font-size:11px;")
+        self._lbl_section_hint.setStyleSheet(
+            f"color:{_tk['text_sec']}; font-size:11px;")
         section_row.addWidget(self._lbl_section_hint)
         lay.addLayout(section_row)
 
@@ -469,23 +517,24 @@ class ProjectLauncher(QDialog):
     def _build_footer(self, parent_lay):
         footer = QFrame()
         footer.setFixedHeight(28)
-        footer.setStyleSheet("""
-            QFrame {
-                background: #141d35;
-                border-top: 1px solid #e0e4ef;
-            }
-            QFrame > QLabel { background:transparent; border:none; }
+        _tk = self._tk
+        footer.setStyleSheet(f"""
+            QFrame {{
+                background: {_tk["panel"]};
+                border-top: 1px solid {_tk["border"]};
+            }}
+            QFrame > QLabel {{ background:transparent; border:none; }}
         """)
         f_lay = QHBoxLayout(footer)
         f_lay.setContentsMargins(16, 0, 16, 0)
 
         status = QLabel("✅ 系统正常")
-        status.setStyleSheet("font-size:11px; color:#27ae60;")
+        status.setStyleSheet(f"font-size:11px; color:{_tk['ok']};")
         f_lay.addWidget(status)
         f_lay.addStretch()
 
         ver_lbl = QLabel(self._app_version)
-        ver_lbl.setStyleSheet("font-size:11px; color:#6a85a8;")
+        ver_lbl.setStyleSheet(f"font-size:11px; color:{_tk['text_sec']};")
         f_lay.addWidget(ver_lbl)
 
         parent_lay.addWidget(footer)
@@ -535,12 +584,13 @@ class ProjectLauncher(QDialog):
         if not projects:
             # 空状态
             empty_widget = QFrame()
-            empty_widget.setStyleSheet("""
-                QFrame {
-                    background: #141d35; border: 2px dashed #253352;
+            _tk = self._tk
+            empty_widget.setStyleSheet(f"""
+                QFrame {{
+                    background: {_tk["panel"]}; border: 2px dashed {_tk["border"]};
                     border-radius: 12px;
-                }
-                QFrame > QLabel { background:transparent; border:none; }
+                }}
+                QFrame > QLabel {{ background:transparent; border:none; }}
             """)
             empty_widget.setMinimumHeight(200)
             ev = QVBoxLayout(empty_widget)
@@ -548,18 +598,18 @@ class ProjectLauncher(QDialog):
 
             empty_icon = QLabel("📚")
             empty_icon.setAlignment(Qt.AlignCenter)
-            empty_icon.setStyleSheet("font-size:40px; color:#4d6080;")
+            empty_icon.setStyleSheet(f"font-size:40px; color:{_tk['text_hint']};")
             ev.addWidget(empty_icon)
 
             empty_title = QLabel("还没有项目")
             empty_title.setAlignment(Qt.AlignCenter)
             empty_title.setStyleSheet(
-                "color:#8fa3c4; font-size:14px; font-weight:bold; padding:4px;")
+                f"color:{_tk['text_sec']}; font-size:14px; font-weight:bold; padding:4px;")
             ev.addWidget(empty_title)
 
             empty_sub = QLabel('点击左侧"新建项目"开始你的第一个故事')
             empty_sub.setAlignment(Qt.AlignCenter)
-            empty_sub.setStyleSheet("color:#6a85a8; font-size:11px;")
+            empty_sub.setStyleSheet(f"color:{_tk['text_hint']}; font-size:11px;")
             ev.addWidget(empty_sub)
 
             self.cards_grid.addWidget(empty_widget, 0, 0, 1, 2)
@@ -579,25 +629,27 @@ class ProjectLauncher(QDialog):
         if self._selected_card is card:
             return
         if self._selected_card is not None:
-            self._selected_card.setStyleSheet("""
-                #project_card {
-                    background: #141d35;
-                    border: 1px solid #e0e6ed;
+            _tk = self._tk
+            self._selected_card.setStyleSheet(f"""
+                #project_card {{
+                    background: {_tk["panel"]};
+                    border: 1px solid {_tk["border"]};
                     border-radius: 8px;
-                }
-                #project_card:hover {
-                    border-color: #4a9eff;
-                    background: #f8fbff;
-                }
-                #project_card > QLabel { background: transparent; border: none; }
+                }}
+                #project_card:hover {{
+                    border-color: {_tk["primary"]};
+                    background: {_tk["hover"]};
+                }}
+                #project_card > QLabel {{ background: transparent; border: none; }}
             """)
-        card.setStyleSheet("""
-            #project_card {
-                background: #eef5ff;
-                border: 2px solid #4a9eff;
+        _tk = self._tk
+        card.setStyleSheet(f"""
+            #project_card {{
+                background: {_tk["selected"]};
+                border: 2px solid {_tk["primary"]};
                 border-radius: 8px;
-            }
-            #project_card > QLabel { background: transparent; border: none; }
+            }}
+            #project_card > QLabel {{ background: transparent; border: none; }}
         """)
         self._selected_card = card
 

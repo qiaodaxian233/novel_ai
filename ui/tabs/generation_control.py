@@ -46,7 +46,7 @@ class GenerationControl(QWidget):
 
         title = QLabel("生成控制 — 挂载真实浏览器 · Selenium 自动化")
         title.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #1a4480; padding-bottom: 2px;")
+            "font-size: 16px; font-weight: bold; color: #2a6dcd; padding-bottom: 2px;")
         layout.addWidget(title)
 
         # ═══════════════════════════════════════════════
@@ -81,9 +81,9 @@ class GenerationControl(QWidget):
             "在AI网站开启新对话,清空上下文\n"
             "建议: 改完大纲/名字后点一下,防止AI用旧名字")
         self.btn_new_chat.setStyleSheet(
-            "QPushButton { background:#e67e22; color:white; padding:6px 12px;"
+            "QPushButton { background:#b8651b; color:white; padding:6px 12px;"
             "border-radius:3px; font-weight:bold; }"
-            "QPushButton:hover { background:#d35400; }")
+            "QPushButton:hover { background:#9a4a12; }")
         self.chk_hide_browser = QCheckBox("🫥 隐藏浏览器")
         self.chk_hide_browser.setChecked(False)
         self.chk_hide_browser.setToolTip(
@@ -149,7 +149,7 @@ class GenerationControl(QWidget):
         b3.addWidget(self.btn_open_aux)
         # 状态指示
         self.aux_status_label = QLabel("●")
-        self.aux_status_label.setStyleSheet("color:#aaa; font-size:14px;")
+        self.aux_status_label.setStyleSheet("color:#7a7a7a; font-size:14px;")
         self.aux_status_label.setToolTip("● 灰 = 未启用 | ● 绿 = 已启用 | ● 蓝 = 副 AI 正在工作")
         b3.addWidget(self.aux_status_label)
         blay.addLayout(b3)
@@ -161,10 +161,10 @@ class GenerationControl(QWidget):
             _aux_settings.setValue("url", self.aux_url_input.text().strip())
             # 更新状态指示
             if self.chk_aux_ai.isChecked():
-                self.aux_status_label.setStyleSheet("color:#27ae60; font-size:14px;")
+                self.aux_status_label.setStyleSheet("color:#1f8b4d; font-size:14px;")
                 self.aux_status_label.setToolTip(f"● 副 AI 已启用 ({self.aux_site_combo.currentText()})")
             else:
-                self.aux_status_label.setStyleSheet("color:#aaa; font-size:14px;")
+                self.aux_status_label.setStyleSheet("color:#7a7a7a; font-size:14px;")
                 self.aux_status_label.setToolTip("● 副 AI 未启用")
 
         # 站点切换时自动填 URL
@@ -181,7 +181,7 @@ class GenerationControl(QWidget):
 
         self.status_label = QLabel("状态:未启动")
         self.status_label.setStyleSheet(
-            "padding:4px 10px; background:#eee; border-radius:3px; color:#8fa3c4;")
+            "padding:4px 10px; background:#eee; border-radius:3px; color:#6d7c95;")
         blay.addWidget(self.status_label)
         layout.addWidget(bbox)
         self.site_combo.currentTextChanged.connect(self._on_site_changed)
@@ -199,7 +199,7 @@ class GenerationControl(QWidget):
         row1 = QHBoxLayout()
         self.btn_gen_one = QPushButton("📖 生成第一章")
         self.btn_gen_one.setStyleSheet(
-            "background:#27ae60; color:white; padding:7px 14px;"
+            "background:#1f8b4d; color:white; padding:7px 14px;"
             "font-weight:bold; border-radius:3px;")
         self.btn_gen_three = QPushButton("生成黄金三章")
         self.btn_regen_three = QPushButton("重生成黄金三章")
@@ -218,7 +218,7 @@ class GenerationControl(QWidget):
         # 分隔线
         _sep = QLabel("")
         _sep.setFixedHeight(1)
-        _sep.setStyleSheet("background: #ddd;")
+        _sep.setStyleSheet("background: #ddd; color:#3a3f47;")
         gen_lay.addWidget(_sep)
 
         # 行 2:连续生成参数 + 启停(醒目大按钮)
@@ -274,7 +274,7 @@ class GenerationControl(QWidget):
         self.auto_save_project.setChecked(True)
         self.auto_save_project.setToolTip("每章后立即写盘 + 每60秒定时保存")
         self.auto_save_project.setStyleSheet(
-            "QCheckBox { color: #2ecc71; font-weight: bold; }")
+            "QCheckBox { color: #1f8b4d; font-weight: bold; }")
         self.auto_save = QCheckBox("保存TXT")
         self.auto_save.setChecked(True)
         self.auto_grab = QCheckBox("自动抓取回填")
@@ -375,7 +375,7 @@ class GenerationControl(QWidget):
 
         self.prev_ctx_estimate = QLabel("📊 预估注入字数:—(写完第 1 章后实时显示)")
         self.prev_ctx_estimate.setStyleSheet(
-            "color:#5b8dee; font-weight:bold;"
+            "color:#4e79cd; font-weight:bold;"
             "padding:3px 8px; background:#eef4fb; border-radius:3px;")
         self.prev_ctx_estimate.setWordWrap(True)
         ctx_lay.addWidget(self.prev_ctx_estimate)
@@ -407,7 +407,7 @@ class GenerationControl(QWidget):
         self.log_edit.setMinimumHeight(120)
         self.log_edit.setStyleSheet(
             "font-family: Consolas, 'Courier New', monospace;"
-            "font-size: 12px; background: #fafafa;")
+            "font-size: 12px; background: #fafafa; color:#3a3f47;")
         ll.addWidget(self.log_edit)
         layout.addWidget(log_box, 1)
 

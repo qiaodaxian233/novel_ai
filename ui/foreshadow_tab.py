@@ -36,7 +36,7 @@ class ForeshadowTab(QWidget):
             "跟踪所有埋下的伏笔,超过设定章数未回收的自动标红。"
             "写章节时自动扫描关键词,检测是否已触及。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#8fa3c4; font-size:13px; padding-bottom:8px;")
+        hint.setStyleSheet("color:#6d7c95; font-size:13px; padding-bottom:8px;")
         lay.addWidget(hint)
 
         # 配置行

@@ -27,14 +27,14 @@ class SkillLibrary(QWidget):
         layout.setContentsMargins(15, 15, 15, 15)
 
         title = QLabel("技能库 — 自定义专用提示词 + 触发条件")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #1a4480;")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #2a6dcd;")
         layout.addWidget(title)
 
         intro = QLabel(
             "把常用提示词做成可复用技能。触发方式:\n"
             "  · 手动:章节编辑器右键菜单调用,或下方「测试运行」\n"
             "  · 章节生成后自动:每章生成后自动跑(目标 = log_only 时不污染章节)")
-        intro.setStyleSheet("color: #555; padding: 6px 0;")
+        intro.setStyleSheet("color: #7a7a7a; padding: 6px 0;")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 

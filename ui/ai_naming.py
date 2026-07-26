@@ -113,7 +113,7 @@ class AINamingDialog(QDialog):
         self._name_buttons = []
         gen_lay.addLayout(self.names_layout)
         self.lbl_status = QLabel("填好角色信息后点生成,或直接手动输入")
-        self.lbl_status.setStyleSheet("color:#8fa3c4; font-size:11px;")
+        self.lbl_status.setStyleSheet("color:#6d7c95; font-size:11px;")
         gen_lay.addWidget(self.lbl_status)
         layout.addWidget(gen_box)
 
@@ -127,9 +127,9 @@ class AINamingDialog(QDialog):
         manual_lay.addWidget(self.input_custom)
         btn_use = QPushButton("✅ 用这个替换全文")
         btn_use.setStyleSheet(
-            "QPushButton { background:#27ae60; color:white; padding:6px 14px;"
+            "QPushButton { background:#1f8b4d; color:white; padding:6px 14px;"
             "font-weight:bold; border-radius:4px; } "
-            "QPushButton:hover { background:#219a52; }")
+            "QPushButton:hover { background:#186f3d; }")
         btn_use.clicked.connect(self._on_use_custom)
         manual_lay.addWidget(btn_use)
         layout.addWidget(manual_box)
@@ -139,9 +139,9 @@ class AINamingDialog(QDialog):
         self.btn_replace = QPushButton("✅ 用选中名字替换全文")
         self.btn_replace.setEnabled(False)
         self.btn_replace.setStyleSheet(
-            "QPushButton { background:#27ae60; color:white; padding:8px 16px;"
+            "QPushButton { background:#1f8b4d; color:white; padding:8px 16px;"
             "font-weight:bold; border-radius:4px; } "
-            "QPushButton:hover { background:#219a52; }")
+            "QPushButton:hover { background:#186f3d; }")
         self.btn_replace.clicked.connect(self._on_replace)
         bottom.addWidget(self.btn_replace)
         bottom.addStretch()
@@ -247,7 +247,7 @@ class AINamingDialog(QDialog):
             btn.setStyleSheet(
                 "QPushButton { padding:8px 14px; font-size:13px; border:2px solid #ccc;"
                 "border-radius:6px; } "
-                "QPushButton:checked { border-color:#1a73e8; background:#e3f0ff;"
+                "QPushButton:checked { border-color:#1a73e8; background:#e3f0ff; color:#3a3f47;"
                 "font-weight:bold; } "
                 "QPushButton:hover { border-color:#8fa3c4; }")
             btn.clicked.connect(

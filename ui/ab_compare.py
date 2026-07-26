@@ -31,7 +31,7 @@ class ABCompareDialog(QDialog):
         len_b = len(text_b.replace(" ", "").replace("\n", ""))
         stats = QLabel(f"A 版 {len_a} 字 | B 版 {len_b} 字")
         stats.setAlignment(Qt.AlignCenter)
-        stats.setStyleSheet("color:#8fa3c4; font-size:12px; padding:4px;")
+        stats.setStyleSheet("color:#6d7c95; font-size:12px; padding:4px;")
         layout.addWidget(stats)
 
         # 左右分栏
@@ -42,7 +42,7 @@ class ABCompareDialog(QDialog):
         lay_a = QVBoxLayout(panel_a)
         lay_a.setContentsMargins(4, 4, 4, 4)
         lbl_a = QLabel(f"📄 {title_a}")
-        lbl_a.setStyleSheet("font-weight:bold; font-size:14px; color:#3498db;")
+        lbl_a.setStyleSheet("font-weight:bold; font-size:14px; color:#2c80b8;")
         lay_a.addWidget(lbl_a)
         self.edit_a = QPlainTextEdit()
         self.edit_a.setPlainText(text_a)

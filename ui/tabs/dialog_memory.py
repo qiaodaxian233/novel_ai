@@ -35,7 +35,7 @@ class DialogMemory(QWidget):
         layout.setSpacing(12)
 
         title = QLabel("对话记忆 — 让 AI 写到第 100 章也不忘第 1 章")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #1a4480;")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #2a6dcd;")
         layout.addWidget(title)
 
         intro = QLabel(
@@ -43,7 +43,7 @@ class DialogMemory(QWidget):
             "「角色档案 + 章节摘要 + 最近 N 章详细回顾 + 长期伏笔」打包注入到提示词,"
             "保证 AI 持续掌握剧情脉络,人设不崩、伏笔不断。"
         )
-        intro.setStyleSheet("color: #8fa3c4; padding: 4px;")
+        intro.setStyleSheet("color: #6d7c95; padding: 4px;")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -58,7 +58,7 @@ class DialogMemory(QWidget):
             "适合首次使用、导入旧项目、或长篇小说里手动整理记忆。"
         )
         full_tip.setWordWrap(True)
-        full_tip.setStyleSheet("color: #8fa3c4; padding: 4px;")
+        full_tip.setStyleSheet("color: #6d7c95; padding: 4px;")
         full_lay.addWidget(full_tip)
 
         full_btn_row = QHBoxLayout()
@@ -76,7 +76,7 @@ class DialogMemory(QWidget):
 
         self.full_memory_progress = QLabel("就绪")
         self.full_memory_progress.setStyleSheet(
-            "padding: 6px 10px; background: #f4f4f4; border-radius: 3px; color: #555;")
+            "padding: 6px 10px; background: #f4f4f4; border-radius: 3px; color: #7a7a7a;")
         full_lay.addWidget(self.full_memory_progress)
         layout.addWidget(full_box)
 
@@ -167,7 +167,7 @@ class DialogMemory(QWidget):
         self.btn_preview = QPushButton("🔍 刷新预览")
         prow.addWidget(self.btn_preview); prow.addStretch()
         info = QLabel("(下次生成章节时会自动注入这段内容)")
-        info.setStyleSheet("color: #8fa3c4;")
+        info.setStyleSheet("color: #6d7c95;")
         prow.addWidget(info)
         pvl.addLayout(prow)
         self.preview_edit = QPlainTextEdit()

@@ -1112,7 +1112,7 @@ class MainWindow(QMainWindow):
         self.setStatusBar(sb)
         sb.addWidget(QLabel(f"© 2026 {APP_NAME} {APP_VERSION}"))
         self._status_stats = QLabel("0章 · 0字")
-        self._status_stats.setStyleSheet("padding:2px 10px; color:#666;")
+        self._status_stats.setStyleSheet("padding:2px 10px; color:#7a7a7a;")
         sb.addPermanentWidget(self._status_stats)
         # 任务计时器(中间)
         self._status_task = QLabel("")
@@ -1127,7 +1127,7 @@ class MainWindow(QMainWindow):
         # 状态指示器(右侧)
         self._status_indicator = QLabel("● 空闲")
         self._status_indicator.setStyleSheet(
-            "color: #999; font-weight: bold; padding: 2px 8px;")
+            "color: #7a7a7a; font-weight: bold; padding: 2px 8px;")
         sb.addPermanentWidget(self._status_indicator)
 
     def _connect_signals(self):
@@ -1583,10 +1583,10 @@ class MainWindow(QMainWindow):
                     "color:#e74c3c; font-weight:bold; padding:2px 8px;")
             elif "✅" in status:
                 self._status_indicator.setStyleSheet(
-                    "color:#27ae60; font-weight:bold; padding:2px 8px;")
+                    "color:#1f8b4d; font-weight:bold; padding:2px 8px;")
             elif "🔄" in status:
                 self._status_indicator.setStyleSheet(
-                    "color:#e67e22; font-weight:bold; padding:2px 8px;")
+                    "color:#b8651b; font-weight:bold; padding:2px 8px;")
             else:
                 self._status_indicator.setStyleSheet(
                     "color:#1a73e8; font-weight:bold; padding:2px 8px;")
@@ -1625,7 +1625,7 @@ class MainWindow(QMainWindow):
                     "padding:2px 12px; color:#e74c3c; font-weight:bold;")
             elif secs > 30:
                 self._status_task.setStyleSheet(
-                    "padding:2px 12px; color:#e67e22; font-weight:bold;")
+                    "padding:2px 12px; color:#b8651b; font-weight:bold;")
             else:
                 self._status_task.setStyleSheet(
                     "padding:2px 12px; color:#1a73e8; font-weight:bold;")
@@ -2140,7 +2140,7 @@ class MainWindow(QMainWindow):
             if (hasattr(self.tab_generation, "chk_aux_ai")
                 and self.tab_generation.chk_aux_ai.isChecked()):
                 self.tab_generation.aux_status_label.setStyleSheet(
-                    "color:#27ae60; font-size:14px;")
+                    "color:#1f8b4d; font-size:14px;")
                 self.tab_generation.aux_status_label.setToolTip(
                     f"● 副 AI 已启用 ({self.tab_generation.aux_site_combo.currentText()})")
         except Exception:
@@ -3089,7 +3089,7 @@ class MainWindow(QMainWindow):
         elif overall_int >= 90:
             btn_autofix.setText("✓ 整体已达 90+,无需重写(仍可点)")
             btn_autofix.setStyleSheet(
-                "QPushButton { background:#27ae60; color:white; padding:8px 16px; "
+                "QPushButton { background:#1f8b4d; color:white; padding:8px 16px; "
                 "border-radius:3px; font-weight:bold; }")
 
         def _on_dc_autofix():
@@ -3337,13 +3337,13 @@ class MainWindow(QMainWindow):
         txt.setReadOnly(True)
         txt.setStyleSheet(
             "font-family: 'Microsoft YaHei', sans-serif; font-size: 13px; "
-            "line-height: 1.6; background: #fff9f9; padding: 10px;")
+            "line-height: 1.6; background: #fff9f9; color:#3a3f47; padding: 10px;")
         lay.addWidget(txt, 1)
         # 按钮区
         btn_row = QHBoxLayout()
         btn_autofix = QPushButton("🔧 按老刀建议重写本章")
         btn_autofix.setStyleSheet(
-            "background:#e67e22;color:white;padding:8px 16px;border-radius:3px;"
+            "background:#b8651b;color:white;padding:8px 16px;border-radius:3px;"
             "font-weight:bold;font-size:14px;")
         btn_autofix.setToolTip(
             "把老刀的整段点评 + 章节原文发给 AI,让它按老刀的批评和改法直接重写本章。\n"
@@ -3606,7 +3606,7 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(dlg)
         viewer = QPlainTextEdit()
         viewer.setReadOnly(True)
-        viewer.setStyleSheet("font-family:'Consolas','Microsoft YaHei';font-size:12px;background:#fafafa;")
+        viewer.setStyleSheet("font-family:'Consolas','Microsoft YaHei';font-size:12px;background:#fafafa; color:#3a3f47;")
         viewer.setPlainText(preview_prompt)
         lay.addWidget(viewer)
         bb = QDialogButtonBox(QDialogButtonBox.Close)
@@ -3682,13 +3682,13 @@ class MainWindow(QMainWindow):
 
         # 顶部得分行
         score_lab = QLabel(f"<h2>得分:{score}/100</h2><b>失败项:</b>{failed}")
-        score_lab.setStyleSheet("color:#1a4480; padding:6px;")
+        score_lab.setStyleSheet("color:#2a6dcd; padding:6px;")
         lay.addWidget(score_lab)
 
         # 建议(可滚动)
         advice_lab = QLabel(f"<b>建议:</b><br>{advice}")
         advice_lab.setWordWrap(True)
-        advice_lab.setStyleSheet("padding:8px; background:#f7f7f7; border:1px solid #ddd;")
+        advice_lab.setStyleSheet("padding:8px; background:#f7f7f7; color:#3a3f47; border:1px solid #ddd;")
         advice_scroll = QScrollArea()
         advice_scroll.setWidget(advice_lab)
         advice_scroll.setWidgetResizable(True)
@@ -3737,16 +3737,16 @@ class MainWindow(QMainWindow):
             k_lab = QLabel("".join(k_lines))
             k_lab.setWordWrap(True)
             k_lab.setStyleSheet(
-                "padding:8px; background:#fffbe6; border:1px solid #f0c36d;")
+                "padding:8px; background:#fffbe6; color:#3a3f47; border:1px solid #f0c36d;")
             lay.addWidget(k_lab)
 
         # 按钮区
         btn_row = QHBoxLayout()
         btn_autofix = QPushButton("🔧 让 AI 自动修复这些问题")
         btn_autofix.setStyleSheet(
-            "QPushButton { background:#e67e22; color:white; padding:8px 16px; "
+            "QPushButton { background:#b8651b; color:white; padding:8px 16px; "
             "border-radius:3px; font-weight:bold; font-size:14px; } "
-            "QPushButton:hover { background:#d35400; }")
+            "QPushButton:hover { background:#9a4a12; }")
         btn_autofix.setToolTip(
             "把章节正文 + 失败项 + 建议发给 AI,让它直接重写有问题的部分。\n"
             "完成后修复版本会自动覆盖当前章节内容(原版本通过项目备份找回:菜单 → 🕓 恢复历史版本)。")
@@ -3758,7 +3758,7 @@ class MainWindow(QMainWindow):
             btn_autofix.setEnabled(False)
             btn_autofix.setText("✓ 已无失败项,无需修复")
             btn_autofix.setStyleSheet(
-                "QPushButton { background:#2ecc71; color:white; padding:8px 16px; "
+                "QPushButton { background:#1f8b4d; color:white; padding:8px 16px; "
                 "border-radius:3px; font-weight:bold; }")
 
         def _on_autofix():
@@ -4212,7 +4212,7 @@ class MainWindow(QMainWindow):
             "  · 女角色基调 / 适合平台\n"
             "保存后会持久化到本机,覆盖内置规则。点【恢复内置】可还原。"
         )
-        info.setStyleSheet("color:#666;padding:6px;background:#f5f5f5;border-radius:4px;")
+        info.setStyleSheet("color:#7a7a7a;padding:6px;background:#f5f5f5;border-radius:4px;")
         lay.addWidget(info)
 
         table = QTableWidget()
@@ -4951,14 +4951,14 @@ class MainWindow(QMainWindow):
                             cl.lbl_hero_source.setText(
                                 f"📌 数据来源:AI 自动同步({n}/5 字段更新)")
                             cl.lbl_hero_source.setStyleSheet(
-                                "color: #1a4480; font-size: 11px; "
+                                "color: #2a6dcd; font-size: 11px; "
                                 "padding: 2px 4px; font-weight:bold;")
                         else:
                             # AI 返回了 hero_state 字典但 5 字段全空 → 仍算同步过
                             cl.lbl_hero_source.setText(
                                 "📌 数据来源:AI 已同步(本章主角状态无变化)")
                             cl.lbl_hero_source.setStyleSheet(
-                                "color: #666; font-size: 11px; "
+                                "color: #7a7a7a; font-size: 11px; "
                                 "padding: 2px 4px;")
                     except Exception:
                         pass
@@ -6093,7 +6093,7 @@ class MainWindow(QMainWindow):
                     self.tab_canon.lbl_last_extract.setText(
                         f"✅ 最近抽取:第{ch_num}章 +{count} 条新设定 @ {ts}")
                     self.tab_canon.lbl_last_extract.setStyleSheet(
-                        "color: #1a4480; font-size: 11px; padding: 4px 6px; "
+                        "color: #2a6dcd; font-size: 11px; padding: 4px 6px; "
                         "background: #e8f0fe; border: 1px solid #88aaff; "
                         "border-radius: 3px; font-weight:bold;")
                 else:
@@ -6101,7 +6101,7 @@ class MainWindow(QMainWindow):
                     self.tab_canon.lbl_last_extract.setText(
                         f"📭 最近抽取:第{ch_num}章 AI 返回空数组(本章无新设定) @ {ts}")
                     self.tab_canon.lbl_last_extract.setStyleSheet(
-                        "color: #666; font-size: 11px; padding: 4px 6px; "
+                        "color: #7a7a7a; font-size: 11px; padding: 4px 6px; "
                         "background: #f5f5f5; border: 1px solid #ddd; border-radius: 3px;")
             except Exception:
                 pass
@@ -9846,7 +9846,7 @@ class MainWindow(QMainWindow):
                 "QPushButton { text-align:left; padding:10px 14px;"
                 "font-size:13px; border:2px solid #ccc; border-radius:6px;"
                 "margin:2px; } "
-                "QPushButton:hover { border-color:#1a73e8; background:#e8f0fe; }")
+                "QPushButton:hover { border-color:#1a73e8; background:#e8f0fe; color:#3a3f47; }")
             btn.clicked.connect(
                 lambda _, o=opt, d=dlg: (
                     selected.__setitem__(0, o), d.accept()))
@@ -10083,7 +10083,7 @@ class MainWindow(QMainWindow):
         btn_preview.setStyleSheet("background:#3498db;color:white;padding:6px 14px;border-radius:3px;")
         btn_apply = QPushButton("✓ 应用替换(写盘 + 自动保存)")
         btn_apply.setStyleSheet(
-            "background:#27ae60;color:white;padding:6px 14px;border-radius:3px;font-weight:bold;")
+            "background:#1f8b4d;color:white;padding:6px 14px;border-radius:3px;font-weight:bold;")
         btn_cancel = QPushButton("取消")
         btn_cancel.clicked.connect(dlg.reject)
 
@@ -11348,7 +11348,7 @@ class MainWindow(QMainWindow):
             "拖滑块到你舒服的位置,点确定,**关闭程序重新打开**生效。\n"
             "(Qt 字体只能在启动时设,运行中没法即时变)")
         tip.setWordWrap(True)
-        tip.setStyleSheet("color:#666; padding:6px; background:#f4f4f4; border-radius:3px;")
+        tip.setStyleSheet("color:#7a7a7a; padding:6px; background:#f4f4f4; border-radius:3px;")
         lay.addWidget(tip)
 
         # 读当前值
@@ -11369,7 +11369,7 @@ class MainWindow(QMainWindow):
         row.addWidget(slider, 1)
         lab = QLabel(f"×{cur:.2f}")
         lab.setMinimumWidth(60)
-        lab.setStyleSheet("font-weight:bold; font-size:14px; color:#b4884e;")
+        lab.setStyleSheet("font-weight:bold; font-size:14px; color:#977242;")
         row.addWidget(lab)
         lay.addLayout(row)
 
@@ -11477,7 +11477,7 @@ class MainWindow(QMainWindow):
         from PyQt5.QtWidgets import QLabel
         tip = QLabel("✅ 分镜脚本生成完成。场景 JSON 可直接用于 AI 生图，视频提示词可用于可灵/Sora/Runway。")
         tip.setWordWrap(True)
-        tip.setStyleSheet("color:#5b8dee; font-size:12px; padding:4px;")
+        tip.setStyleSheet("color:#4e79cd; font-size:12px; padding:4px;")
         lay.addWidget(tip)
         edit = QPlainTextEdit()
         edit.setPlainText(content.strip())
@@ -11600,7 +11600,7 @@ class MainWindow(QMainWindow):
         if scored == 0:
             from PyQt5.QtWidgets import QLabel
             hint = QLabel(f"暂无情绪数据(0/{total}章)。连续生成新章节后自动评分。")
-            hint.setStyleSheet("color:#999; padding:20px;")
+            hint.setStyleSheet("color:#7a7a7a; padding:20px;")
             lay.addWidget(hint)
         dlg.exec_()
 
@@ -11799,7 +11799,7 @@ class MainWindow(QMainWindow):
         btn_row.addStretch()
         btn_ok = QPushButton(f"✅ 替换勾选的")
         btn_ok.setStyleSheet(
-            "QPushButton { background:#27ae60; color:white; padding:8px 16px;"
+            "QPushButton { background:#1f8b4d; color:white; padding:8px 16px;"
             "font-weight:bold; border-radius:4px; }")
         btn_ok.clicked.connect(dlg.accept)
         btn_row.addWidget(btn_ok)
@@ -11945,7 +11945,7 @@ class MainWindow(QMainWindow):
         btn_pick = QPushButton("🎯 改用现场拾取")
         btn_pick.clicked.connect(lambda: (dlg.accept(), self.start_dom_picker()))
         btn_pick.setStyleSheet(
-            "QPushButton { background:#e67e22; color:white; padding:6px 14px; "
+            "QPushButton { background:#b8651b; color:white; padding:6px 14px; "
             "border-radius:3px; font-weight:bold; }")
         btn_close = QPushButton("关闭")
         btn_close.clicked.connect(dlg.accept)
@@ -11980,7 +11980,7 @@ class MainWindow(QMainWindow):
             "<li>浏览器里按 ESC 退出拾取模式</li>"
             "</ol>")
         guide.setWordWrap(True)
-        guide.setStyleSheet("background:#f5f5f5; padding:10px; border-radius:3px;")
+        guide.setStyleSheet("background:#f5f5f5; color:#3a3f47; padding:10px; border-radius:3px;")
         lay.addWidget(guide)
 
         # 当前已采集的字段
@@ -12022,7 +12022,7 @@ class MainWindow(QMainWindow):
         btn_row = QHBoxLayout()
         btn_save = QPushButton("💾 保存覆盖到 QSettings(立即生效)")
         btn_save.setStyleSheet(
-            "QPushButton { background:#2ecc71; color:white; padding:8px 16px; "
+            "QPushButton { background:#1f8b4d; color:white; padding:8px 16px; "
             "border-radius:3px; font-weight:bold; }")
         def _save():
             overrides = {k: e.text().strip() for k, e in fields.items() if e.text().strip()}
@@ -12124,7 +12124,7 @@ class MainWindow(QMainWindow):
 
         btn_row = QHBoxLayout()
         btn_ok = QPushButton("💾 保存覆盖")
-        btn_ok.setStyleSheet("QPushButton { background:#2ecc71; color:white; padding:6px 14px; }")
+        btn_ok.setStyleSheet("QPushButton { background:#1f8b4d; color:white; padding:6px 14px; }")
         def _ok():
             overrides = {k: e.text().strip() for k, e in fields.items() if e.text().strip()}
             if overrides:
