@@ -321,9 +321,12 @@ class GenerationControl(QWidget):
         self.chk_crit_ai_style = QCheckBox("AI文风")
         self.chk_crit_ai_style.setChecked(True)
         self.chk_crit_ai_style.setToolTip("写完后AI自检文风:句子节奏/段落均匀/细节/角色区分/情绪/留白")
+        self.chk_crit_mru = QCheckBox("代入感")
+        self.chk_crit_mru.setChecked(False)
+        self.chk_crit_mru.setToolTip("写完后AI检查\"刺激→感受→反应\"顺序:无源反应/顺序颠倒/刺激模糊")
         for w in (self.chk_crit_words, self.chk_crit_hook,
                   self.chk_crit_canon, self.chk_crit_rhythm, self.chk_crit_char,
-                  self.chk_crit_ai_style):
+                  self.chk_crit_ai_style, self.chk_crit_mru):
             orow2.addWidget(w)
         orow2.addStretch()
         opt_lay.addLayout(orow2)
@@ -432,6 +435,7 @@ class GenerationControl(QWidget):
             ("crit.rhythm", self.chk_crit_rhythm, "isChecked", "setChecked", "stateChanged", False),
             ("crit.char", self.chk_crit_char, "isChecked", "setChecked", "stateChanged", False),
             ("crit.ai_style", self.chk_crit_ai_style, "isChecked", "setChecked", "stateChanged", True),
+            ("crit.mru", self.chk_crit_mru, "isChecked", "setChecked", "stateChanged", False),
             ("site.last_model", self.site_combo, "currentText", "setCurrentText", "currentTextChanged", "DeepSeek"),
             ("tts.auto_read", self.chk_auto_tts, "isChecked", "setChecked", "stateChanged", False),
             ("browser.auto_start", self.chk_auto_start, "isChecked", "setChecked", "stateChanged", False),
@@ -497,6 +501,7 @@ class GenerationControl(QWidget):
             "rhythm":     self.chk_crit_rhythm.isChecked(),
             "character":  self.chk_crit_char.isChecked(),
             "ai_style":   self.chk_crit_ai_style.isChecked(),
+            "mru":        self.chk_crit_mru.isChecked(),
         }
 
     def _emit_ctx_changed(self, *args):
