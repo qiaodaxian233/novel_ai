@@ -76,7 +76,8 @@ SECONDARY_AI_TARGETS = {
     "chapter_to_plot_node",
     "import_extract", "book_chapter_analysis",
     # —— 稽核/打分类 ——
-    "critique_rhythm", "critique_character", "critique_mru", "style_audit",
+    "critique_rhythm", "critique_character", "critique_mru",
+    "critique_mismatch", "critique_pov_lock", "style_audit",
     "arc_advance_check", "relation_change_check",
     "foreshadow_check", "foreshadow_reeval",
     "promise_check", "promise_reeval",
@@ -2268,6 +2269,18 @@ class MainWindow(QMainWindow):
                 target = "critique_mru"
                 if not meta.get("ch_num"):
                     meta = {"target": target, "ch_num": _ast_active.get("meta", {}).get("ch_num", 0)}
+            elif "错位稽核" in _tid or "mismatch" in _tid.lower():
+                if target != "critique_mismatch":
+                    print(f"[BUG-077] 覆写 target: {target!r} → critique_mismatch (task={_tid!r})", flush=True)
+                target = "critique_mismatch"
+                if not meta.get("ch_num"):
+                    meta = {"target": target, "ch_num": _ast_active.get("meta", {}).get("ch_num", 0)}
+            elif "视角稽核" in _tid or "pov_lock" in _tid.lower():
+                if target != "critique_pov_lock":
+                    print(f"[BUG-077] 覆写 target: {target!r} → critique_pov_lock (task={_tid!r})", flush=True)
+                target = "critique_pov_lock"
+                if not meta.get("ch_num"):
+                    meta = {"target": target, "ch_num": _ast_active.get("meta", {}).get("ch_num", 0)}
             elif "Canon稽核" in _tid:
                 if target != "canon_audit":
                     print(f"[BUG-077] 覆写 target: {target!r} → canon_audit (task={_tid!r})", flush=True)
@@ -2558,6 +2571,12 @@ class MainWindow(QMainWindow):
         elif target == "critique_mru":
             ch_num = meta.get("ch_num", 0)
             self._on_critique_score_response(content, "mru", ch_num)
+        elif target == "critique_mismatch":
+            ch_num = meta.get("ch_num", 0)
+            self._on_critique_score_response(content, "mismatch", ch_num)
+        elif target == "critique_pov_lock":
+            ch_num = meta.get("ch_num", 0)
+            self._on_critique_score_response(content, "pov_lock", ch_num)
         elif target == "skill_run":
             self._on_skill_response(content, meta)
 
@@ -2654,6 +2673,10 @@ class MainWindow(QMainWindow):
             audit_state["remaining"].append("character")
         if cfg.get("mru"):
             audit_state["remaining"].append("mru")
+        if cfg.get("mismatch"):
+            audit_state["remaining"].append("mismatch")
+        if cfg.get("pov_lock"):
+            audit_state["remaining"].append("pov_lock")
         self._audit_state = audit_state
         self._continue_ai_audit_chain()
 
@@ -2711,6 +2734,22 @@ class MainWindow(QMainWindow):
             prompt = PROMPTS["critique_mru"].format(content=content[:6000])
             self._send_to_ai(prompt, _label_mru,
                              target="critique_mru", ch_num=ch_num)
+        elif next_kind == "mismatch":
+            # v2.24.1 角色三层错位稽核:说/想/做 不能全程一致
+            _label_mm = f"错位稽核-第{ch_num}章"
+            # BUG-077 终极修复:同上
+            self._critique_audit_callback = ("mismatch", ch_num)
+            prompt = PROMPTS["critique_mismatch"].format(content=content[:6000])
+            self._send_to_ai(prompt, _label_mm,
+                             target="critique_mismatch", ch_num=ch_num)
+        elif next_kind == "pov_lock":
+            # v2.24.1 情境视角锁定稽核:场景内不切视角
+            _label_pov = f"视角稽核-第{ch_num}章"
+            # BUG-077 终极修复:同上
+            self._critique_audit_callback = ("pov_lock", ch_num)
+            prompt = PROMPTS["critique_pov_lock"].format(content=content[:6000])
+            self._send_to_ai(prompt, _label_pov,
+                             target="critique_pov_lock", ch_num=ch_num)
 
     def _on_critique_score_response(self, content, kind, ch_num):
         """处理节奏 / 人设打分回复"""
@@ -2724,7 +2763,8 @@ class MainWindow(QMainWindow):
             score = int(data.get("score", 10))
             reason = (data.get("reason", "") or "")[:120]
             label = {"rhythm": "节奏", "character": "人设",
-                     "mru": "代入感"}[kind]
+                     "mru": "代入感", "mismatch": "三层错位",
+                     "pov_lock": "视角锁定"}[kind]
             self.tab_generation.log(
                 f"  {label}打分:{score}/10 — {reason}", "info")
             if score < threshold:

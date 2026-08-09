@@ -324,9 +324,16 @@ class GenerationControl(QWidget):
         self.chk_crit_mru = QCheckBox("代入感")
         self.chk_crit_mru.setChecked(False)
         self.chk_crit_mru.setToolTip("写完后AI检查\"刺激→感受→反应\"顺序:无源反应/顺序颠倒/刺激模糊")
+        self.chk_crit_mismatch = QCheckBox("三层错位")
+        self.chk_crit_mismatch.setChecked(False)
+        self.chk_crit_mismatch.setToolTip("写完后AI检查角色\"说/想/做\"是否全程心口如一(纸片人信号)")
+        self.chk_crit_pov = QCheckBox("视角锁定")
+        self.chk_crit_pov.setChecked(False)
+        self.chk_crit_pov.setToolTip("写完后AI检查场景内是否乱切视角/上帝视角乱入")
         for w in (self.chk_crit_words, self.chk_crit_hook,
                   self.chk_crit_canon, self.chk_crit_rhythm, self.chk_crit_char,
-                  self.chk_crit_ai_style, self.chk_crit_mru):
+                  self.chk_crit_ai_style, self.chk_crit_mru,
+                  self.chk_crit_mismatch, self.chk_crit_pov):
             orow2.addWidget(w)
         orow2.addStretch()
         opt_lay.addLayout(orow2)
@@ -436,6 +443,8 @@ class GenerationControl(QWidget):
             ("crit.char", self.chk_crit_char, "isChecked", "setChecked", "stateChanged", False),
             ("crit.ai_style", self.chk_crit_ai_style, "isChecked", "setChecked", "stateChanged", True),
             ("crit.mru", self.chk_crit_mru, "isChecked", "setChecked", "stateChanged", False),
+            ("crit.mismatch", self.chk_crit_mismatch, "isChecked", "setChecked", "stateChanged", False),
+            ("crit.pov", self.chk_crit_pov, "isChecked", "setChecked", "stateChanged", False),
             ("site.last_model", self.site_combo, "currentText", "setCurrentText", "currentTextChanged", "DeepSeek"),
             ("tts.auto_read", self.chk_auto_tts, "isChecked", "setChecked", "stateChanged", False),
             ("browser.auto_start", self.chk_auto_start, "isChecked", "setChecked", "stateChanged", False),
@@ -502,6 +511,8 @@ class GenerationControl(QWidget):
             "character":  self.chk_crit_char.isChecked(),
             "ai_style":   self.chk_crit_ai_style.isChecked(),
             "mru":        self.chk_crit_mru.isChecked(),
+            "mismatch":   self.chk_crit_mismatch.isChecked(),
+            "pov_lock":   self.chk_crit_pov.isChecked(),
         }
 
     def _emit_ctx_changed(self, *args):
