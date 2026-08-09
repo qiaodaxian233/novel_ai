@@ -105,6 +105,9 @@ class BrowserWorker(QObject):
     # detail_batch_done: 整批详情抓完 emit (task_id, success_count, fail_count)
     detail_progress = pyqtSignal(str, int, int, str)      # task_id, cur, total, book_id
     detail_batch_done = pyqtSignal(str, int, int)         # task_id, success, fail
+    # v2.25.0: 镜像登录帧信号 (png_bytes, css_w, css_h)
+    # 浏览器全程屏外隐藏,登录时把截图流镜像到 Qt 对话框,防提示词露屏
+    mirror_frame = pyqtSignal(object, int, int)
 
     DEBUG_PORT = 9222
 
@@ -568,8 +571,11 @@ class BrowserWorker(QObject):
     # ============ 任务派发 ============
     def _handle(self, task):
         action = task.get("action")
+        # v2.25.0: 镜像任务每 1.5s 一发,静默处理避免状态栏 busy/idle 闪烁
+        _quiet = action in ("mirror_shot", "mirror_click")
         try:
-            self.status_signal.emit("busy")
+            if not _quiet:
+                self.status_signal.emit("busy")
             if action == "navigate":
                 self._goto(task["url"])
             elif action == "goto":
@@ -605,10 +611,50 @@ class BrowserWorker(QObject):
                 # 礼让:每抓完一本检查 task_queue.qsize(),有任务就让位
                 # 主进程通过 task["project_root"] 告诉 worker 缓存目录
                 self._scrape_book_details_batch(task)
-            self.status_signal.emit("idle")
+            elif action == "mirror_shot":
+                # v2.25.0: 隐藏浏览器截一帧 → 镜像登录对话框
+                self._mirror_shot()
+            elif action == "mirror_click":
+                # v2.25.0: 镜像对话框点击 → CDP 派发回真实页面
+                self._mirror_click(task.get("x", 0), task.get("y", 0))
+            if not _quiet:
+                self.status_signal.emit("idle")
         except Exception as e:
             self.log_signal.emit(f"任务执行失败:{e}", "error")
-            self.status_signal.emit("idle")
+            if not _quiet:
+                self.status_signal.emit("idle")
+
+    # ============ v2.25.0 镜像登录(防提示词露屏) ============
+    def _mirror_shot(self):
+        """截当前视口一帧,连同页面 CSS 尺寸发给主线程镜像对话框。
+        CSS 尺寸用于点击坐标换算(截图像素尺寸受系统 DPR 缩放影响,不能直接用)。"""
+        if not self._driver_alive():
+            return
+        png = self.driver.get_screenshot_as_png()
+        try:
+            css_w = int(self.driver.execute_script("return window.innerWidth;") or 0)
+            css_h = int(self.driver.execute_script("return window.innerHeight;") or 0)
+        except Exception:
+            css_w = css_h = 0
+        self.mirror_frame.emit(png, css_w, css_h)
+
+    def _mirror_click(self, x, y):
+        """把镜像对话框里的点击派发回真实页面。
+        优先 CDP(等价原生鼠标事件,登录页组件都认),失败退 JS click 兜底。"""
+        try:
+            for t in ("mousePressed", "mouseReleased"):
+                self.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
+                    "type": t, "x": float(x), "y": float(y),
+                    "button": "left", "clickCount": 1})
+            return
+        except Exception:
+            pass
+        try:
+            self.driver.execute_script(
+                "var el=document.elementFromPoint(arguments[0],arguments[1]);"
+                "if(el){el.click();}", x, y)
+        except Exception as e:
+            self.log_signal.emit(f"镜像点击失败:{e}", "warn")
 
     def _current_url(self):
         try:

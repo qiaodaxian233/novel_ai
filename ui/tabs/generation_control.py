@@ -89,8 +89,14 @@ class GenerationControl(QWidget):
         self.chk_hide_browser.setToolTip(
             "启动时隐藏Chrome窗口(在后台运行)\n"
             "取消勾选后重启浏览器即可显示")
+        self.btn_mirror_login = QPushButton("📱 镜像登录")
+        self.btn_mirror_login.setToolTip(
+            "浏览器保持隐藏,弹出登录页实时镜像\n"
+            "在镜像画面里点击/扫码完成登录,提示词全程不露屏\n"
+            "(建议配合 🫥 隐藏浏览器 使用)")
         b1.addWidget(self.btn_launch); b1.addWidget(self.btn_close)
         b1.addWidget(self.btn_new_chat)
+        b1.addWidget(self.btn_mirror_login)
         b1.addWidget(self.chk_hide_browser)
         b1.addWidget(self.chk_auto_start)
         blay.addLayout(b1)

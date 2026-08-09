@@ -604,6 +604,9 @@ class MainWindow(QMainWindow):
         self.worker.status_signal.connect(self.update_browser_status)
         self.worker.response_received.connect(self._on_response_received)
         self.worker.started.connect(self._on_browser_started)
+        # v2.25.0 镜像登录:worker 截图帧 → 转发给打开中的镜像对话框
+        if hasattr(self.worker, "mirror_frame"):
+            self.worker.mirror_frame.connect(self._on_mirror_frame)
         # v2.22.2 BUG-083: 任务进度 → 主进程,给"卡死提醒"判定用
         # (旧逻辑:90 秒任务没完成就弹窗。新逻辑:90 秒任务字符数还是 0 才弹)
         try:
@@ -1175,6 +1178,9 @@ class MainWindow(QMainWindow):
         self.tab_generation.btn_launch.clicked.connect(self.launch_browser)
         self.tab_generation.btn_close.clicked.connect(self.close_browser)
         self.tab_generation.btn_new_chat.clicked.connect(self._manual_new_chat)
+        if hasattr(self.tab_generation, "btn_mirror_login"):
+            self.tab_generation.btn_mirror_login.clicked.connect(
+                self._open_login_mirror)
         self.tab_generation.btn_go.clicked.connect(self._goto_url)
         self.tab_generation.btn_grab.clicked.connect(self.grab_response)
         # v2.21.5:登录副 AI 按钮
@@ -1333,6 +1339,46 @@ class MainWindow(QMainWindow):
             hasattr(self.tab_generation, 'chk_hide_browser') and
             self.tab_generation.chk_hide_browser.isChecked())
         self.worker.start(channel=ch)
+
+    # ============ v2.25.0 扫码镜像登录(防提示词露屏) ============
+    def _open_login_mirror(self):
+        """浏览器保持隐藏,弹出登录页镜像:worker 截图流 + 点击转发。
+        用户在镜像里扫码/点击完成登录,浏览器窗口全程不露面。"""
+        if not self.worker.is_ready():
+            QMessageBox.information(
+                self, "浏览器未就绪",
+                "请先点「🚀 启动浏览器」(建议勾选 🫥 隐藏浏览器),\n"
+                "浏览器就绪后再打开镜像登录。")
+            return
+        if getattr(self, "_mirror_dlg", None):
+            self._mirror_dlg.raise_()
+            return
+        from ui.login_mirror import LoginMirrorDialog
+        dlg = LoginMirrorDialog(self)
+        dlg.click_requested.connect(
+            lambda x, y: self.worker.submit(
+                {"action": "mirror_click", "x": x, "y": y}))
+        dlg.finished.connect(self._close_login_mirror)
+        self._mirror_dlg = dlg
+        self._mirror_timer = QTimer(self)
+        self._mirror_timer.setInterval(1500)
+        self._mirror_timer.timeout.connect(
+            lambda: self.worker.submit({"action": "mirror_shot"}))
+        self._mirror_timer.start()
+        self.worker.submit({"action": "mirror_shot"})   # 立即出第一帧
+        dlg.show()
+
+    def _on_mirror_frame(self, png_bytes, css_w, css_h):
+        dlg = getattr(self, "_mirror_dlg", None)
+        if dlg:
+            dlg.update_frame(png_bytes, css_w, css_h)
+
+    def _close_login_mirror(self, *_):
+        t = getattr(self, "_mirror_timer", None)
+        if t:
+            t.stop()
+        self._mirror_timer = None
+        self._mirror_dlg = None
 
     def _auto_start_browser(self):
         """启动时自动连接浏览器+导航到上次AI站点"""
