@@ -63,7 +63,7 @@ def main():
         print("      4B 约需 8GB 内存,8B 约需 16GB;显卡不参与,耐心等。", flush=True)
         model = AutoModelForCausalLM.from_pretrained(
             args.base,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             device_map="cpu",
             low_cpu_mem_usage=True,
             trust_remote_code=True,

@@ -118,7 +118,7 @@ def main():
         quantization_config=bnb_cfg,
         device_map="auto",
         trust_remote_code=True,
-        torch_dtype=compute_dtype,
+        dtype=compute_dtype,
     )
     model.config.use_cache = False
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
@@ -146,7 +146,12 @@ def main():
     approximate_steps = math.ceil(len(dataset) / max(1, batch_size * grad_accum) * epochs)
     print(f"[训练] 预计优化器 steps 约 {approximate_steps}（实际以 Trainer 为准）", flush=True)
 
-    ta = TrainingArguments(
+    # transformers v5 对 TrainingArguments 做了大瘦身(比如删掉 warmup_ratio),
+    # 直接传会 TypeError。这里按"当前安装版本实际支持的字段"过滤:
+    # 不支持的丢弃并打日志,warmup_ratio 换算成等价 warmup_steps。
+    import dataclasses
+    _valid = {f.name for f in dataclasses.fields(TrainingArguments)}
+    _kw = dict(
         output_dir=output_dir,
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
@@ -173,6 +178,17 @@ def main():
         dataloader_pin_memory=True,
         remove_unused_columns=False,
     )
+    if "warmup_steps" in _valid:
+        # warmup_ratio 在 v5 已弃用/移除,只要 warmup_steps 可用就主动换算,
+        # 同时躲开"弃用警告"和"已移除报错"两个坑
+        _ratio = _kw.pop("warmup_ratio")
+        _kw["warmup_steps"] = max(1, int(_ratio * approximate_steps))
+        print(f"[兼容] warmup_ratio={_ratio} 已换算为"
+              f" warmup_steps={_kw['warmup_steps']}", flush=True)
+    for _k in [k for k in _kw if k not in _valid]:
+        print(f"[兼容] 此版本 transformers 不支持参数 {_k},已忽略", flush=True)
+        _kw.pop(_k)
+    ta = TrainingArguments(**_kw)
 
     collator = CausalLMCollator(tokenizer.pad_token_id)
     trainer = Trainer(

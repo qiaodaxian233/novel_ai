@@ -32,7 +32,7 @@ def main():
         quantization_config=qcfg,
         device_map="auto",
         trust_remote_code=True,
-        torch_dtype=dtype,
+        dtype=dtype,
     )
     model = PeftModel.from_pretrained(model, args.adapter)
     model.eval()
