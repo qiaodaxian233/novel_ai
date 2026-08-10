@@ -340,6 +340,14 @@ class MainWindow(QMainWindow):
             self.handle_process_line(line.rstrip("\r").split("\r")[-1])
 
     def handle_process_line(self, line: str):
+        # tqdm 用 \r 刷新不换行,子进程的 @@PROGRESS@@ 会粘在它后面
+        # (如 "44.63s/it]@@PROGRESS@@{...}"):把前缀拆出来照常记日志,
+        # JSON 部分照常喂进度条
+        if "@@PROGRESS@@" in line and not line.startswith("@@PROGRESS@@"):
+            prefix, _, rest = line.partition("@@PROGRESS@@")
+            if prefix.strip():
+                self.append_log(prefix)
+            line = "@@PROGRESS@@" + rest
         if line.startswith("@@PROGRESS@@"):
             try:
                 obj = json.loads(line[len("@@PROGRESS@@"):])
