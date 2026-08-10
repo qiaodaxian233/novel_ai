@@ -381,6 +381,9 @@ class MainWindow(QMainWindow):
 
         # 浏览器自动化 worker
         self.worker = BrowserWorker()
+        # v2.26.0 本地模型通道:与 BrowserWorker 并存,发送时按站点选择路由
+        from local_llm_backend import LocalLLMWorker
+        self.local_worker = LocalLLMWorker()
 
         # 流程强化学习(自学习最优等待/重试策略)
         if FLOW_RL_AVAILABLE:
@@ -604,6 +607,11 @@ class MainWindow(QMainWindow):
         self.worker.status_signal.connect(self.update_browser_status)
         self.worker.response_received.connect(self._on_response_received)
         self.worker.started.connect(self._on_browser_started)
+        # v2.26.0 本地模型:三个信号签名与 BrowserWorker 一致,共用下游处理
+        self.local_worker.log_signal.connect(self.tab_generation.log_signal.emit)
+        self.local_worker.response_received.connect(self._on_response_received)
+        self.local_worker.task_progress.connect(self._on_task_progress)
+        self.local_worker.start()
         # v2.25.0 镜像登录:worker 截图帧 → 转发给打开中的镜像对话框
         if hasattr(self.worker, "mirror_frame"):
             self.worker.mirror_frame.connect(self._on_mirror_frame)
@@ -2002,14 +2010,30 @@ class MainWindow(QMainWindow):
                 self.tab_generation.log(
                     f"⚠ 「{label}」已在等待中,跳过重复发送", "warn")
                 return
-        if not SELENIUM_AVAILABLE:
+        # v2.26.0 本地模型通道:主/副 AI 任一命中「本地模型」→ 绕开浏览器,
+        # 不需要 Selenium、不需要启动浏览器、不需要登录
+        _local_route = False
+        try:
+            _main_site = self.tab_generation.site_combo.currentText()
+            _aux_on = (hasattr(self.tab_generation, "chk_aux_ai")
+                       and self.tab_generation.chk_aux_ai.isChecked())
+            if _aux_on and target in SECONDARY_AI_TARGETS:
+                _aux_site = (self.tab_generation.aux_site_combo.currentText()
+                             if hasattr(self.tab_generation, "aux_site_combo")
+                             else "")
+                _local_route = _aux_site.startswith("本地模型")
+            else:
+                _local_route = _main_site.startswith("本地模型")
+        except Exception:
+            _local_route = False
+        if not _local_route and not SELENIUM_AVAILABLE:
             QMessageBox.critical(
                 self, "缺少依赖",
                 "未安装 Selenium,无法自动发送/抓取。\n\n"
                 "请运行:\n"
                 "  pip install -U selenium")
             return
-        if not self.worker.is_ready():
+        if not _local_route and not self.worker.is_ready():
             self._switch_to_tab(self.tab_generation)
             QMessageBox.information(
                 self, "请先启动浏览器",
@@ -2076,7 +2100,7 @@ class MainWindow(QMainWindow):
             print(f"[副 AI 路由] 失败,降级到主 AI: {_e_aux}", flush=True)
         # 读取附件模式开关
         allow_att = self.tab_generation.use_attachment.isChecked() if hasattr(self.tab_generation, 'use_attachment') else True
-        self.worker.submit({
+        _task_payload = {
             "action": "send_prompt",
             "prompt": prompt,
             "task_id": label,
@@ -2091,7 +2115,26 @@ class MainWindow(QMainWindow):
             # (只透传 _xxx 前缀的"内部 meta"字段,跨线程安全的标量/字符串)
             **{k: v for k, v in extra.items()
                if k.startswith("_") and isinstance(v, (str, int, float, bool, type(None)))},
-        })
+        }
+        if _local_route:
+            # v2.26.0:URL 变量此时已是主/副 AI 分流后的服务地址;
+            # 把路由决定记进 pending meta,0字节重试/死磕重写沿用同一路由
+            _local_model = (
+                self.tab_generation.local_model_input.text().strip()
+                if hasattr(self.tab_generation, "local_model_input") else "")
+            _task_payload["base_url"] = url
+            _task_payload["model"] = _local_model
+            try:
+                self._pending_task_targets[label]["_route"] = "local"
+                self._pending_task_targets[label]["_local_base"] = url
+                self._pending_task_targets[label]["_local_model"] = _local_model
+            except Exception:
+                pass
+            self.tab_generation.log(
+                f"  🖥️ 路由到本地模型:{_local_model or '默认'} ({label})", "info")
+            self.local_worker.submit(_task_payload)
+        else:
+            self.worker.submit(_task_payload)
         # v2.22.2 BUG-083:超时报警从"纯时间触发"改为"0字节卡 90 秒才报警"。
         # 旧逻辑:90 秒任务没完成就弹窗 — Qwen 写章节本来就要 4-5 分钟,每次都误报。
         # 新逻辑:90 秒到了去查 worker 报上来的最新字符数,字符数 > 0 → AI 在写字,
@@ -2167,12 +2210,19 @@ class MainWindow(QMainWindow):
                 # 重新发送(用原始prompt)
                 prompt = meta.get("_original_prompt", "")
                 if prompt:
-                    self.worker.submit({
+                    _p0 = {
                         "action": "send_prompt",
                         "prompt": prompt,
                         "task_id": task_id,
                         "url": self.tab_generation.url_input.text().strip(),
-                    })
+                    }
+                    # v2.26.0:本地模型任务的重试必须留在本地通道
+                    if meta.get("_route") == "local":
+                        _p0["base_url"] = meta.get("_local_base", "")
+                        _p0["model"] = meta.get("_local_model", "")
+                        self.local_worker.submit(_p0)
+                    else:
+                        self.worker.submit(_p0)
                     return
             self.tab_generation.log(
                 f"❌ 「{task_id}」连续3次返回空内容,放弃", "warn")
@@ -6509,14 +6559,21 @@ class MainWindow(QMainWindow):
             self.tab_generation.log(f"  · {r}", "warn")
         # 重试时也走附件模式(镜像站审核严,文本会被拒绝)
         # _clear_existing_attachments 会自动清掉旧附件,不会堆积
-        self.worker.submit({
+        _pr = {
             "action": "send_prompt",
             "prompt": stronger,
             "task_id": meta.get("label", "章节"),
             "url": self.tab_generation.url_input.text().strip(),
             "type_delay_ms": 5,
             "allow_attachment": True,  # 镜像站需要附件绕审核
-        })
+        }
+        # v2.26.0:本地模型写的章节,死磕重写也走本地通道,不去碰浏览器
+        if meta.get("_route") == "local":
+            _pr["base_url"] = meta.get("_local_base", "")
+            _pr["model"] = meta.get("_local_model", "")
+            self.local_worker.submit(_pr)
+        else:
+            self.worker.submit(_pr)
 
     def _accept_chapter_and_continue(self, content, meta):
         """章节通过校验或死磕用尽 → 入库并触发后续链"""
@@ -10502,6 +10559,12 @@ class MainWindow(QMainWindow):
             self.tab_generation.log(f"请在浏览器中完成 {ai} 的登录", "info")
 
     def closeEvent(self, event):
+        # v2.26.0:先停本地模型线程(队列 sentinel 唤醒,不阻塞)
+        try:
+            if hasattr(self, "local_worker"):
+                self.local_worker.shutdown()
+        except Exception:
+            pass
         """关闭主窗口时停止浏览器线程,清理临时文件"""
         from PyQt5.QtCore import QSettings
         QSettings("NovelAI", "MainWindow").setValue("geometry", self.saveGeometry())

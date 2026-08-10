@@ -107,6 +107,13 @@ class GenerationControl(QWidget):
         self.site_combo.addItems(list(AI_URLS.keys()))
         self.site_combo.setCurrentText("ChatGPT镜像")
         b2.addWidget(self.site_combo)
+        self.local_model_input = QLineEdit("qwen3:14b")
+        self.local_model_input.setFixedWidth(110)
+        self.local_model_input.setToolTip(
+            "本地模型名(仅当站点选「本地模型」时生效)\n"
+            "Ollama 模型 tag,如 qwen3:14b / qwen3:8b\n"
+            "自训 LoRA 合并导入后填自己的模型名")
+        b2.addWidget(self.local_model_input)
         b2.addWidget(QLabel("URL:"))
         self.url_input = QLineEdit("https://gpt.aimonkey.plus/")
         b2.addWidget(self.url_input, 1)
@@ -451,6 +458,7 @@ class GenerationControl(QWidget):
             ("crit.mru", self.chk_crit_mru, "isChecked", "setChecked", "stateChanged", False),
             ("crit.mismatch", self.chk_crit_mismatch, "isChecked", "setChecked", "stateChanged", False),
             ("crit.pov", self.chk_crit_pov, "isChecked", "setChecked", "stateChanged", False),
+            ("local.model", self.local_model_input, "text", "setText", "textChanged", "qwen3:14b"),
             ("site.last_model", self.site_combo, "currentText", "setCurrentText", "currentTextChanged", "DeepSeek"),
             ("tts.auto_read", self.chk_auto_tts, "isChecked", "setChecked", "stateChanged", False),
             ("browser.auto_start", self.chk_auto_start, "isChecked", "setChecked", "stateChanged", False),

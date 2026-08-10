@@ -15,6 +15,9 @@ AI_URLS = {
     "DeepSeek": "https://chat.deepseek.com/",
     "Qwen":     "https://chat.qwen.ai/",
     "元宝":     "https://yuanbao.tencent.com/",
+    # v2.26.0: 本地模型通道 — 绕开浏览器直连 OpenAI 兼容服务(Ollama/LM Studio)
+    # URL = 服务地址;选中后发送任务走 LocalLLMWorker,不需要 Chrome/登录
+    "本地模型(Ollama)": "http://127.0.0.1:11434",
     # 小米AI 暂无专用 profile，已移除，避免用户选了跑 _default 兜底 selector 失效
 }
 
