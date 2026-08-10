@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt, QUrl
+from PySide6.QtCore import QProcess, QProcessEnvironment, QSettings, QTimer, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
@@ -29,6 +29,7 @@ class MainWindow(QMainWindow):
         self.generated_buffer = ""
         self.proc_buffer = ""
         self._build_ui()
+        self._load_settings()   # 记住上次的全部表单配置
         self._apply_style()
         self.gpu_timer = QTimer(self)
         self.gpu_timer.timeout.connect(self.update_gpu_status)
@@ -244,6 +245,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "正在运行", "已有任务正在运行，请先结束。")
             return False
         self.operation = op
+        self._save_settings()   # 开任务即落盘,GUI 崩了配置也不丢
         self.proc_buffer = ""
         self._prog_t0 = None; self._prog_m0 = 0; self._last_loss = None
         # 增量解码器:QProcess 分块读取会把多字节 UTF-8 字符切成两半,
@@ -441,7 +443,83 @@ class MainWindow(QMainWindow):
         except Exception:
             self.gpu_label.setText("GPU：nvidia-smi 未检测到（训练前请确认 CUDA 驱动正常）")
 
+    # ============ 表单配置持久化(记住上次的设置) ============
+    def _persist_map(self):
+        """(键, 控件, 类型)。断点续训 resume_dir 故意不持久化:
+        它是一次性的,残留旧值会重演'无效存档目录'事故。"""
+        return [
+            ("model_id", self.model_id, "text"),
+            ("model_dir", self.model_dir, "text"),
+            ("data_mode", self.data_mode, "combo"),
+            ("data_path", self.data_path, "text"),
+            ("max_length", self.max_length, "combo"),
+            ("overlap", self.overlap, "spin"),
+            ("clean_titles", self.clean_titles, "check"),
+            ("epochs", self.epochs, "dspin"),
+            ("lr", self.lr, "text"),
+            ("batch", self.batch, "spin"),
+            ("grad_acc", self.grad_acc, "spin"),
+            ("rank", self.rank, "combo"),
+            ("alpha", self.alpha, "combo"),
+            ("dropout", self.dropout, "dspin"),
+            ("targets", self.targets, "combo"),
+            ("precision", self.precision, "combo"),
+            ("save_steps", self.save_steps, "spin"),
+            ("log_steps", self.log_steps, "spin"),
+            ("seed", self.seed, "spin"),
+            ("output_dir", self.output_dir, "text"),
+            ("test_base", self.test_base, "text"),
+            ("test_adapter", self.test_adapter, "text"),
+            ("prompt", self.prompt, "plain"),
+            ("max_new", self.max_new, "spin"),
+            ("temp", self.temp, "dspin"),
+            ("top_p", self.top_p, "dspin"),
+        ]
+
+    def _load_settings(self):
+        qs = QSettings("NovelAITrainer", "GUI")
+        for key, w, kind in self._persist_map():
+            v = qs.value("form/" + key)
+            if v is None:
+                continue
+            try:
+                if kind == "text":
+                    w.setText(str(v))
+                elif kind == "plain":
+                    w.setPlainText(str(v))
+                elif kind == "combo":
+                    idx = w.findText(str(v))
+                    if idx >= 0:
+                        w.setCurrentIndex(idx)
+                elif kind == "spin":
+                    w.setValue(int(v))
+                elif kind == "dspin":
+                    w.setValue(float(v))
+                elif kind == "check":
+                    w.setChecked(str(v).lower() in ("true", "1"))
+            except Exception:
+                pass          # 单项坏值不影响其余项恢复
+
+    def _save_settings(self):
+        qs = QSettings("NovelAITrainer", "GUI")
+        for key, w, kind in self._persist_map():
+            try:
+                if kind == "text":
+                    qs.setValue("form/" + key, w.text())
+                elif kind == "plain":
+                    qs.setValue("form/" + key, w.toPlainText())
+                elif kind == "combo":
+                    qs.setValue("form/" + key, w.currentText())
+                elif kind in ("spin", "dspin"):
+                    qs.setValue("form/" + key, w.value())
+                elif kind == "check":
+                    qs.setValue("form/" + key, w.isChecked())
+            except Exception:
+                pass
+        qs.sync()
+
     def closeEvent(self, event):
+        self._save_settings()
         if self.proc and self.proc.state() != QProcess.NotRunning:
             r = QMessageBox.question(self, "任务运行中", "任务仍在运行。确定直接关闭 GUI 吗？训练进程可能被终止。")
             if r != QMessageBox.Yes:
