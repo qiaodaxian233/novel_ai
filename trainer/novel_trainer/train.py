@@ -244,9 +244,17 @@ def main():
     )
 
     resume = train_cfg.get("resume_from_checkpoint") or None
-    if resume and not os.path.exists(resume):
-        print(f"[警告] 断点目录不存在，忽略：{resume}", flush=True)
-        resume = None
+    if resume:
+        if not os.path.exists(resume):
+            print(f"[警告] 断点目录不存在，忽略：{resume}", flush=True)
+            resume = None
+        elif not os.path.exists(os.path.join(resume, "trainer_state.json")):
+            # 实测踩坑:用户手填了一个普通文件夹,存在性检查放行后 Trainer 直接抛异常
+            print(f"[警告] {resume} 不是有效的训练存档(缺 trainer_state.json),"
+                  f"已忽略,从头开始训练。", flush=True)
+            print("[提示] 断点续训只在'上次训练中断后接着训'时使用,"
+                  "应选 outputs/…/checkpoint-数字 目录;首次训练请留空。", flush=True)
+            resume = None
 
     print("[训练] 开始。", flush=True)
     trainer.train(resume_from_checkpoint=resume)
