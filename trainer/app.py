@@ -334,8 +334,9 @@ class MainWindow(QMainWindow):
         self.proc_buffer += chunk
         while "\n" in self.proc_buffer:
             line, self.proc_buffer = self.proc_buffer.split("\n", 1)
-            # tqdm 用 \r 原地刷新:只保留最后一次刷新的内容,不刷屏
-            self.handle_process_line(line.split("\r")[-1])
+            # 先剥掉 CRLF 行尾的 \r(否则下面 split 会把整行变成空串),
+            # 再取 tqdm 原地刷新(行内 \r)的最后一段
+            self.handle_process_line(line.rstrip("\r").split("\r")[-1])
 
     def handle_process_line(self, line: str):
         if line.startswith("@@PROGRESS@@"):
