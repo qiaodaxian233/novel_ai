@@ -111,7 +111,7 @@ class MainWindow(QMainWindow):
 
         row3 = QHBoxLayout()
         self.save_steps = QSpinBox(); self.save_steps.setRange(10, 100000); self.save_steps.setValue(100); self.save_steps.setSingleStep(50)
-        self.log_steps = QSpinBox(); self.log_steps.setRange(1, 10000); self.log_steps.setValue(5)
+        self.log_steps = QSpinBox(); self.log_steps.setRange(1, 10000); self.log_steps.setValue(1)
         self.seed = QSpinBox(); self.seed.setRange(0, 999999); self.seed.setValue(42)
         row3.addWidget(QLabel("每 N step 存档")); row3.addWidget(self.save_steps)
         row3.addWidget(QLabel("日志 step")); row3.addWidget(self.log_steps)
@@ -238,6 +238,7 @@ class MainWindow(QMainWindow):
             return False
         self.operation = op
         self.proc_buffer = ""
+        self._prog_t0 = None; self._prog_m0 = 0; self._last_loss = None
         # 增量解码器:QProcess 分块读取会把多字节 UTF-8 字符切成两半,
         # 直接 decode 会把 tqdm 进度条的块字符毁成乱码;增量解码跨块拼接
         import codecs
@@ -345,12 +346,33 @@ class MainWindow(QMainWindow):
                 if obj.get("done"):
                     self.progress.setRange(0, 100); self.progress.setValue(100); self.progress.setFormat("训练完成")
                     return
+                if obj.get("loss") is not None:
+                    self._last_loss = float(obj["loss"])   # on_log 事件:记住最新 loss
+                micro = obj.get("micro"); mtotal = obj.get("micro_total")
+                if micro is not None and mtotal:
+                    # micro-batch 级进度(几秒一跳)+ 按速率估算剩余时间
+                    import time as _t
+                    now = _t.monotonic()
+                    if self._prog_t0 is None or micro < self._prog_m0:
+                        self._prog_t0, self._prog_m0 = now, micro
+                    eta_txt = ""
+                    if micro > self._prog_m0 and now > self._prog_t0:
+                        rate = (micro - self._prog_m0) / (now - self._prog_t0)
+                        remain = (mtotal - micro) / max(rate, 1e-9)
+                        h, m = int(remain // 3600), int(remain % 3600 // 60)
+                        eta_txt = f" · 约剩 {h}小时{m:02d}分" if h else f" · 约剩 {m}分钟"
+                    pct = min(100, int(micro * 100 / mtotal))
+                    self.progress.setRange(0, 100); self.progress.setValue(pct)
+                    loss_txt = "" if self._last_loss is None else f" · loss {self._last_loss:.3f}"
+                    step = int(obj.get("step", 0)); max_steps = int(obj.get("max_steps", 0))
+                    self.progress.setFormat(
+                        f"step {step}/{max_steps} · {pct}%{loss_txt}{eta_txt}")
+                    return
                 step = int(obj.get("step", 0)); max_steps = int(obj.get("max_steps", 0))
                 if max_steps > 0:
                     pct = min(100, int(step * 100 / max_steps))
                     self.progress.setRange(0, 100); self.progress.setValue(pct)
-                    loss = obj.get("loss")
-                    loss_txt = "" if loss is None else f" · loss {float(loss):.4f}"
+                    loss_txt = "" if self._last_loss is None else f" · loss {self._last_loss:.4f}"
                     self.progress.setFormat(f"{step}/{max_steps} · {pct}%{loss_txt}")
             except Exception:
                 self.append_log(line)

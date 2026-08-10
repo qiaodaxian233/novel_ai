@@ -25,21 +25,49 @@ def jprint(obj):
 
 
 class GuiCallback(TrainerCallback):
-    def __init__(self, stop_file: str):
+    def __init__(self, stop_file: str, grad_accum: int = 1, loss_log: str | None = None):
         self.stop_file = stop_file
+        self.grad_accum = max(1, int(grad_accum))
+        self.loss_log = loss_log
+        self._micro_in_step = 0   # 当前优化器 step 内已完成的 micro-batch 数
+
+    def _emit_micro(self, state):
+        total = int(state.max_steps or 0) * self.grad_accum
+        if total <= 0:
+            return
+        done = int(state.global_step) * self.grad_accum + self._micro_in_step
+        jprint({
+            "micro": min(done, total), "micro_total": total,
+            "step": int(state.global_step),
+            "max_steps": int(state.max_steps or 0),
+        })
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         logs = logs or {}
-        jprint({
+        rec = {
             "step": int(state.global_step),
             "max_steps": int(state.max_steps or 0),
             "epoch": float(state.epoch or 0),
             "loss": logs.get("loss"),
             "learning_rate": logs.get("learning_rate"),
             "grad_norm": logs.get("grad_norm"),
-        })
+        }
+        jprint(rec)
+        if self.loss_log and rec["loss"] is not None:
+            try:  # loss 曲线落盘,训完可以画图复盘
+                with open(self.loss_log, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            except OSError:
+                pass
+
+    def on_substep_end(self, args, state, control, **kwargs):
+        # 梯度累积的每个 micro-batch 结束都报一次进度(约几秒一跳,看得见盼头)
+        self._micro_in_step += 1
+        self._emit_micro(state)
 
     def on_step_end(self, args, state, control, **kwargs):
+        self._micro_in_step = 0   # global_step 已 +1,micro 计数归零
+        self._emit_micro(state)
         if os.path.exists(self.stop_file):
             print("[控制] 收到停止请求，将在当前 step 后安全停止并保存 LoRA。", flush=True)
             control.should_training_stop = True
@@ -145,6 +173,13 @@ def main():
     epochs = float(train_cfg.get("epochs", 1.0))
     approximate_steps = math.ceil(len(dataset) / max(1, batch_size * grad_accum) * epochs)
     print(f"[训练] 预计优化器 steps 约 {approximate_steps}（实际以 Trainer 为准）", flush=True)
+    # 存档步长钳到总步数的 1/3 以内:65 步的训练配 100 步存档 = 中途从不存档,
+    # 崩了就全丢;钳完至少存 2-3 个中间点
+    _save_steps = int(train_cfg.get("save_steps", 100))
+    _clamp = max(10, approximate_steps // 3)
+    if _save_steps > _clamp:
+        print(f"[兼容] 存档步长 {_save_steps} > 总步数的 1/3,已钳制为 {_clamp}", flush=True)
+        _save_steps = _clamp
 
     # transformers v5 对 TrainingArguments 做了大瘦身(比如删掉 warmup_ratio),
     # 直接传会 TypeError。这里按"当前安装版本实际支持的字段"过滤:
@@ -161,10 +196,10 @@ def main():
         warmup_ratio=float(train_cfg.get("warmup_ratio", 0.03)),
         lr_scheduler_type=train_cfg.get("lr_scheduler", "cosine"),
         logging_strategy="steps",
-        logging_steps=int(train_cfg.get("logging_steps", 5)),
+        logging_steps=int(train_cfg.get("logging_steps", 1)),
         logging_first_step=True,
         save_strategy="steps",
-        save_steps=int(train_cfg.get("save_steps", 100)),
+        save_steps=_save_steps,
         save_total_limit=int(train_cfg.get("save_total_limit", 2)),
         optim="paged_adamw_8bit",
         fp16=use_fp16,
@@ -196,7 +231,8 @@ def main():
         args=ta,
         train_dataset=dataset,
         data_collator=collator,
-        callbacks=[GuiCallback(stop_file)],
+        callbacks=[GuiCallback(stop_file, grad_accum,
+                                os.path.join(output_dir, "loss_history.jsonl"))],
     )
 
     resume = train_cfg.get("resume_from_checkpoint") or None
