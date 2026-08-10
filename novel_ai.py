@@ -768,6 +768,10 @@ class MainWindow(QMainWindow):
         a_override.triggered.connect(self.edit_site_profile_override)
         tm.addAction(a_override)
         tm.addSeparator()
+        a_sft = QAction("🎓 导出SFT训练语料(JSONL)...", self)
+        a_sft.triggered.connect(self._export_sft_corpus)
+        tm.addAction(a_sft)
+        tm.addSeparator()
         a_emotion = QAction("📊 查看情绪曲线", self)
         a_emotion.triggered.connect(self._show_emotion_curve)
         tm.addAction(a_emotion)
@@ -5355,6 +5359,50 @@ class MainWindow(QMainWindow):
             self._batch_paused = True
             self._batch_remaining = 0
             self.tab_generation.log("用户取消,批量生成已停止", "warn")
+
+    # ============ v2.27.0 SFT 语料导出(训练线与写作线的合流点) ============
+    def _export_sft_corpus(self):
+        """把库内成章配对"本章大纲+前情摘要",导出 trainer 可直接用的 JSONL。
+        构造逻辑在 project_io.build_sft_records(纯函数,守护测试覆盖)。"""
+        from project_io import build_sft_records
+        chapters = self.chapters or []
+        if not any((c.get("content") or "").strip() for c in chapters):
+            QMessageBox.information(self, "没有可导出的章节",
+                                    "当前书没有已完成的章节正文。")
+            return
+        try:
+            sums = self.tab_memory.parse_summaries()
+        except Exception:
+            sums = {}
+        records, skipped = build_sft_records(
+            chapters,
+            chapter_outline=self.tab_outline.chapter_outline_edit.toPlainText(),
+            summaries=sums,
+            book_title=self.tab_settings.get_title(),
+            genre="/".join(self.tab_settings.get_selected_genres() or []),
+        )
+        if not records:
+            QMessageBox.information(self, "没有可导出的章节",
+                                    f"全部 {skipped} 章都太短(<600字),不适合做语料。")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出 SFT 训练语料",
+            f"{self.tab_settings.get_title() or 'sft'}_语料.jsonl",
+            "JSONL (*.jsonl)")
+        if not path:
+            return
+        import json as _json
+        with open(path, "w", encoding="utf-8") as f:
+            for r in records:
+                f.write(_json.dumps(r, ensure_ascii=False) + "\n")
+        QMessageBox.information(
+            self, "导出完成",
+            f"✅ 导出 {len(records)} 条训练对(跳过 {skipped} 条短章)\n\n"
+            f"文件:{path}\n\n"
+            "下一步:\n"
+            "1. 把文件放进训练器 data/sft/ 目录\n"
+            "2. 训练器里数据类型选「小说 SFT(JSONL)」\n"
+            "3. 建议先跑完正文续训阶段,再做 SFT")
 
     def _build_prev_context(self, ch_num):
         """v1.22 BUG-040 / v1.63 多章注入:构造【前情提要】块,注入到 chapter prompt

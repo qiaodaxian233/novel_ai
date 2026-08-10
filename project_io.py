@@ -389,3 +389,66 @@ def make_backup_zip(folder: str | Path, keep: int = 10) -> Path | None:
         except Exception:
             pass
     return zip_path
+
+
+# ============================================================
+# v2.27.0 SFT 语料导出(纯函数,GUI 只负责收集输入和写文件)
+# 用途:把库内成章(=质检通过入库的)配对"本章大纲+前情摘要",
+# 导出为 trainer SFT 阶段可直接使用的 messages 格式 JSONL,
+# 相当于把网页大模型的产出蒸馏进本地 LoRA。
+# ============================================================
+
+_SFT_SYSTEM = "你是一名中文网文作者,按大纲写章节,只输出正文。"
+
+
+def _slice_chapter_outline(co_full: str, n: int) -> str:
+    """从全书章纲文本里切出第 n 章的段落:
+    定位"第n章"字样,截到下一个"第X章"或文本末尾;找不到返回空串。"""
+    import re
+    if not co_full:
+        return ""
+    m = re.search(rf"第\s*{n}\s*章", co_full)
+    if not m:
+        return ""
+    nxt = re.search(r"第\s*\d+\s*章", co_full[m.end():])
+    end = m.end() + nxt.start() if nxt else len(co_full)
+    return co_full[m.start():end].strip()
+
+
+def build_sft_records(chapters, chapter_outline="", summaries=None,
+                      book_title="", genre="", min_chars=600):
+    """构造 SFT 训练对列表。
+
+    chapters: [{"title":..., "content":...}, ...](按全书顺序,含空章)
+    chapter_outline: 全书章纲整段文本
+    summaries: {章号: 摘要} 前情用
+    返回 (records, skipped):records 为 messages 格式 dict 列表
+    """
+    summaries = summaries or {}
+    records, skipped = [], 0
+    for i, ch in enumerate(chapters or [], 1):
+        content = (ch.get("content") or "").strip()
+        if len(content) < min_chars:      # 空章/残章不进语料
+            skipped += 1
+            continue
+        title = (ch.get("title") or "").strip()
+        head = (f"请写《{book_title or '未命名'}》"
+                f"({genre or '网文'})第{i}章"
+                f"{('《' + title + '》') if title else ''},"
+                f"只输出正文,约{max(500, round(len(content), -2))}字。")
+        parts = [head]
+        o = _slice_chapter_outline(chapter_outline, i)
+        if o:
+            parts.append("【本章大纲】\n" + o[:800])
+        elif (chapter_outline or "").strip():
+            parts.append("【全书章纲(节选)】\n" + chapter_outline.strip()[:600])
+        prev_bits = [f"第{k}章:{summaries[k]}"
+                     for k in (i - 2, i - 1) if k >= 1 and summaries.get(k)]
+        if prev_bits:
+            parts.append("【前情】\n" + "\n".join(prev_bits)[:500])
+        records.append({"messages": [
+            {"role": "system", "content": _SFT_SYSTEM},
+            {"role": "user", "content": "\n\n".join(parts)},
+            {"role": "assistant", "content": content},
+        ]})
+    return records, skipped
