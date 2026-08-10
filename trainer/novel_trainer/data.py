@@ -31,9 +31,51 @@ def _read_text(path: Path) -> str:
 
 def _normalize_text(text: str) -> str:
     text = text.replace("\x00", "")
+    # 盗版站源常见:行首/行内混入 BOM 和零宽字符,肉眼不可见但污染分词
+    text = re.sub(r"[\ufeff\u200b\u200c\u200d\u2060]", "", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"\n{4,}", "\n\n\n", text)
     return text.strip()
+
+
+# 章节标题行:第 + 中文/阿拉伯数字 + 章
+_CHAPTER_RE = re.compile(r"^\s*第\s*[0-9零〇一二三四五六七八九十百千万两]+\s*章")
+_DECOR_CHARS = set("-—–=_*~·.。 　")
+
+
+def _norm_title(t: str) -> str:
+    """标题归一化:去所有空白/冒号顿号,剥尾部装饰符,便于跨行比对"""
+    t = re.sub(r"[\s:：、,，]+", "", t)
+    return t.strip("".join(_DECOR_CHARS))
+
+
+def dedup_chapter_titles(text: str):
+    """站点源清洗:同一章标题连报两遍(中文序号一遍/站点阿拉伯序号一遍,
+    数字常对不上但'章'后标题相同)→ 相邻重复只留第一个;纯装饰行删除。
+    返回 (清洗后文本, 删除行数)。"""
+    out, removed = [], 0
+    last_title = None          # 最近章节头的归一化标题;空行不打断相邻判断
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            out.append(line)
+            continue
+        if len(stripped) >= 4 and all(c in _DECOR_CHARS for c in stripped):
+            removed += 1       # ------------ 之类的装饰线
+            continue
+        m = _CHAPTER_RE.match(stripped)
+        if m:
+            norm = _norm_title(stripped[m.end():])
+            if not norm:       # 光杆"第X章":用整行(去空白)参与比对
+                norm = re.sub(r"\s+", "", stripped)
+            if norm == last_title:
+                removed += 1
+                continue
+            last_title = norm
+        else:
+            last_title = None  # 出现正文,前面的标题不再算"相邻"
+        out.append(line)
+    return "\n".join(out), removed
 
 
 def collect_text_files(folder: str) -> List[Path]:
@@ -140,7 +182,7 @@ def _cache_valid(meta_path: Path, fingerprint: str, required: List[Path]) -> boo
         return False
 
 
-def prepare_cpt_dataset(tokenizer, data_path: str, cache_dir: str, max_length: int, min_length: int, overlap: int) -> Tuple[BinaryTokenDataset, Dict[str, Any]]:
+def prepare_cpt_dataset(tokenizer, data_path: str, cache_dir: str, max_length: int, min_length: int, overlap: int, clean_titles: bool = True) -> Tuple[BinaryTokenDataset, Dict[str, Any]]:
     files = collect_text_files(data_path)
     if not files:
         raise FileNotFoundError(f"没有在 {data_path} 找到 TXT/MD 小说文件。")
@@ -157,6 +199,7 @@ def prepare_cpt_dataset(tokenizer, data_path: str, cache_dir: str, max_length: i
         "max_length": max_length,
         "min_length": min_length,
         "overlap": overlap,
+        "clean_titles": clean_titles,
         "tokenizer": getattr(tokenizer, "name_or_path", "unknown"),
     })
 
@@ -179,6 +222,10 @@ def prepare_cpt_dataset(tokenizer, data_path: str, cache_dir: str, max_length: i
     with token_bin.open("wb") as fout:
         for i, path in enumerate(files, 1):
             text = _normalize_text(_read_text(path))
+            if clean_titles and text:
+                text, _n_removed = dedup_chapter_titles(text)
+                if _n_removed:
+                    log(f"[清洗] {path.name}:删除 {_n_removed} 行重复标题/装饰线")
             if not text:
                 continue
             raw_chars += len(text)

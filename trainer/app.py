@@ -77,7 +77,14 @@ class MainWindow(QMainWindow):
         grid.addWidget(QLabel("数据类型"), 0, 0); grid.addWidget(self.data_mode, 0, 1, 1, 2)
         grid.addWidget(QLabel("数据路径"), 1, 0); grid.addWidget(self.data_path, 1, 1); grid.addWidget(btn_data, 1, 2)
         grid.addWidget(QLabel("Context"), 2, 0); grid.addWidget(self.max_length, 2, 1)
+        self.clean_titles = QCheckBox("清洗重复章节标题/装饰线(推荐)")
+        self.clean_titles.setChecked(True)
+        self.clean_titles.setToolTip(
+            "站点源常见脏数据:同一章标题连报两遍(中文序号+站点阿拉伯序号)、\n"
+            "行首隐形 BOM、------ 装饰线。勾选后预处理时自动清除。\n"
+            "改动此项会重建数据缓存(重新分词一次)。")
         grid.addWidget(QLabel("相邻块重叠 token"), 3, 0); grid.addWidget(self.overlap, 3, 1)
+        grid.addWidget(self.clean_titles, 3, 2)
         self.data_hint = QLabel("建议：每本小说一个 TXT；程序会在每本末尾加 EOS，不会把两本书直接粘连。")
         self.data_hint.setWordWrap(True)
         grid.addWidget(self.data_hint, 4, 0, 1, 3)
@@ -277,6 +284,7 @@ class MainWindow(QMainWindow):
                 "max_length": int(self.max_length.currentText()),
                 "min_length": 256,
                 "overlap": int(self.overlap.value()) if mode == "cpt" else 0,
+                "clean_titles": bool(self.clean_titles.isChecked()),
                 "min_response_tokens": 16,
             },
             "training": {
