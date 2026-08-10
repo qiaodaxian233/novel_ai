@@ -103,6 +103,14 @@ def main():
         os.remove(stop_file)
 
     print(f"[GPU] {torch.cuda.get_device_name(0)}", flush=True)
+    # 显存护栏:12G 卡 + 大上下文极易溢出到系统内存 — 驱动不报错,
+    # 只是悄悄走 PCIe,速度掉两个数量级(实测单 step 46 分钟)
+    _total_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+    _ctx = int(cfg["data"].get("max_length", 2048))
+    if _total_gb < 13 and _ctx > 2048:
+        print(f"[警告] {_total_gb:.0f}GB 显存 + Context {_ctx} 很可能溢出到系统内存,"
+              f"速度会慢 50-100 倍(单 step 超过 5 分钟即是此症状)。\n"
+              f"[警告] 正文续训(CPT)建议 Context=2048;4096 留给 SFT 阶段。", flush=True)
     print(f"[模型] {model_source}", flush=True)
     print(f"[输出] {output_dir}", flush=True)
 
