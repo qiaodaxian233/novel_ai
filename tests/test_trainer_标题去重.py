@@ -77,7 +77,8 @@ def test_cpt_pipeline_accepts_flag():
     src = io.open(Path(__file__).resolve().parent.parent
                   / "trainer/novel_trainer/data.py", encoding="utf-8").read()
     assert "clean_titles: bool = True" in src
-    assert '"clean_titles": clean_titles' in src   # 进缓存指纹
+    assert '"v2" if clean_titles else False' in src   # 进缓存指纹(v2 版本化,行为变更强制重建)
+    assert '"strip_titles": strip_titles' in src
 
 
 def test_author_notes_stripped():
