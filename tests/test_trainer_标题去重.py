@@ -78,3 +78,23 @@ def test_cpt_pipeline_accepts_flag():
                   / "trainer/novel_trainer/data.py", encoding="utf-8").read()
     assert "clean_titles: bool = True" in src
     assert '"clean_titles": clean_titles' in src   # 进缓存指纹
+
+
+def test_author_notes_stripped():
+    """v2:作者留言剥除(实测污染:CPT 后试写冒出'第三更到!')"""
+    text = ("第三更到!\nPS：今天有事\n求月票求推荐票!\n"
+            "感谢\"书友123\"的打赏!\n正文里说他更强了不受影响。\n")
+    cleaned, removed = _clean(text)
+    assert removed == 4
+    assert "第三更到" not in cleaned and "求月票" not in cleaned
+    assert "他更强了不受影响" in cleaned      # 正文含'更'不误删
+
+
+def test_strip_all_titles_mode():
+    """v2:纯风格续训模式删全部章节标题行"""
+    from novel_trainer import data as d
+    text = "第一章 初见\n刀口贴上脖子。\n第二章 反杀\n他退了半步。\n"
+    cleaned, removed = d.dedup_chapter_titles(text, strip_all_titles=True)
+    assert removed == 2
+    assert "第一章" not in cleaned and "第二章" not in cleaned
+    assert "刀口贴上脖子" in cleaned and "他退了半步" in cleaned

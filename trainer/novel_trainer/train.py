@@ -129,6 +129,7 @@ def main():
             int(data_cfg.get("min_length", 256)),
             int(data_cfg.get("overlap", 0)),
             clean_titles=bool(data_cfg.get("clean_titles", True)),
+            strip_titles=bool(data_cfg.get("strip_titles", False)),
         )
     else:
         dataset, meta = prepare_sft_dataset(

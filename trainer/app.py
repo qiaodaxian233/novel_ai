@@ -86,6 +86,12 @@ class MainWindow(QMainWindow):
             "改动此项会重建数据缓存(重新分词一次)。")
         grid.addWidget(QLabel("相邻块重叠 token"), 3, 0); grid.addWidget(self.overlap, 3, 1)
         grid.addWidget(self.clean_titles, 3, 2)
+        self.strip_titles = QCheckBox("删全部章节标题行(纯风格续训推荐)")
+        self.strip_titles.setChecked(True)
+        self.strip_titles.setToolTip(
+            "保留标题会让模型学会在正文里报章节号(实测:试写冒出'第三百零二章')。\n"
+            "纯风格续训不需要标题;主软件写章时标题由软件负责。")
+        grid.addWidget(self.strip_titles, 3, 3)
         self.data_hint = QLabel("建议：每本小说一个 TXT；程序会在每本末尾加 EOS，不会把两本书直接粘连。")
         self.data_hint.setWordWrap(True)
         grid.addWidget(self.data_hint, 4, 0, 1, 3)
@@ -287,6 +293,7 @@ class MainWindow(QMainWindow):
                 "min_length": 256,
                 "overlap": int(self.overlap.value()) if mode == "cpt" else 0,
                 "clean_titles": bool(self.clean_titles.isChecked()),
+                "strip_titles": bool(self.strip_titles.isChecked()),
                 "min_response_tokens": 16,
             },
             "training": {
@@ -455,6 +462,7 @@ class MainWindow(QMainWindow):
             ("max_length", self.max_length, "combo"),
             ("overlap", self.overlap, "spin"),
             ("clean_titles", self.clean_titles, "check"),
+            ("strip_titles", self.strip_titles, "check"),
             ("epochs", self.epochs, "dspin"),
             ("lr", self.lr, "text"),
             ("batch", self.batch, "spin"),

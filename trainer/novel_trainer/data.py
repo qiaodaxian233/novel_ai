@@ -42,6 +42,22 @@ def _normalize_text(text: str) -> str:
 _CHAPTER_RE = re.compile(r"^\s*第\s*[0-9零〇一二三四五六七八九十百千万两]+\s*章")
 _DECOR_CHARS = set("-—–=_*~·.。 　")
 
+# 作者留言行(实测污染:模型试写时冒出"第三更到!"):
+# 更新报数/求票/感谢打赏/PS 附言/请假加更 — 仅匹配 ≤40 字的短行,防误伤正文
+_AUTHOR_NOTE_RES = [
+    re.compile(r"^第?[0-9一二三四五六七八九十两]+更(到|送上|奉上|完)?\s*[!！~～。.]*$"),
+    re.compile(r"(求|谢|投)\s*(月票|推荐票|订阅|收藏|打赏|票票|个票)"),
+    re.compile(r"^(PS|Ps|ps)\s*[:：]"),
+    re.compile(r"^感谢.{0,24}(打赏|月票|推荐票|盟主|催更|支持)"),
+    re.compile(r"(上架感言|请假一天|今天请假|欠更|补更|加更规则|新书求)"),
+]
+
+
+def _is_author_note(line: str) -> bool:
+    if len(line) > 40:
+        return False
+    return any(p.search(line) for p in _AUTHOR_NOTE_RES)
+
 
 def _norm_title(t: str) -> str:
     """标题归一化:去所有空白/冒号顿号,剥尾部装饰符,便于跨行比对"""
@@ -49,9 +65,15 @@ def _norm_title(t: str) -> str:
     return t.strip("".join(_DECOR_CHARS))
 
 
-def dedup_chapter_titles(text: str):
-    """站点源清洗:同一章标题连报两遍(中文序号一遍/站点阿拉伯序号一遍,
-    数字常对不上但'章'后标题相同)→ 相邻重复只留第一个;纯装饰行删除。
+def dedup_chapter_titles(text: str, strip_all_titles: bool = False,
+                         strip_author_notes: bool = True):
+    """站点源清洗 v2:
+    - 同一章标题连报两遍(中文序号一遍/站点阿拉伯序号一遍,数字常对不上
+      但'章'后标题相同)→ 相邻重复只留第一个;纯装饰行删除
+    - strip_author_notes:删"第三更到!/求月票/感谢打赏/PS:"等作者留言短行
+      (实测污染:CPT 后模型试写时会冒出"第三更到!")
+    - strip_all_titles:删除全部章节标题行(纯风格续训推荐,
+      否则模型学会在正文里报章节号)
     返回 (清洗后文本, 删除行数)。"""
     out, removed = [], 0
     last_title = None          # 最近章节头的归一化标题;空行不打断相邻判断
@@ -63,8 +85,14 @@ def dedup_chapter_titles(text: str):
         if len(stripped) >= 4 and all(c in _DECOR_CHARS for c in stripped):
             removed += 1       # ------------ 之类的装饰线
             continue
+        if strip_author_notes and _is_author_note(stripped):
+            removed += 1       # "第三更到!/求月票"等作者留言
+            continue
         m = _CHAPTER_RE.match(stripped)
         if m:
+            if strip_all_titles:
+                removed += 1
+                continue
             norm = _norm_title(stripped[m.end():])
             if not norm:       # 光杆"第X章":用整行(去空白)参与比对
                 norm = re.sub(r"\s+", "", stripped)
@@ -182,7 +210,7 @@ def _cache_valid(meta_path: Path, fingerprint: str, required: List[Path]) -> boo
         return False
 
 
-def prepare_cpt_dataset(tokenizer, data_path: str, cache_dir: str, max_length: int, min_length: int, overlap: int, clean_titles: bool = True) -> Tuple[BinaryTokenDataset, Dict[str, Any]]:
+def prepare_cpt_dataset(tokenizer, data_path: str, cache_dir: str, max_length: int, min_length: int, overlap: int, clean_titles: bool = True, strip_titles: bool = False) -> Tuple[BinaryTokenDataset, Dict[str, Any]]:
     files = collect_text_files(data_path)
     if not files:
         raise FileNotFoundError(f"没有在 {data_path} 找到 TXT/MD 小说文件。")
@@ -199,7 +227,8 @@ def prepare_cpt_dataset(tokenizer, data_path: str, cache_dir: str, max_length: i
         "max_length": max_length,
         "min_length": min_length,
         "overlap": overlap,
-        "clean_titles": clean_titles,
+        "clean_titles": ("v2" if clean_titles else False),  # v2:清洗行为升级,强制重建旧缓存
+        "strip_titles": strip_titles,
         "tokenizer": getattr(tokenizer, "name_or_path", "unknown"),
     })
 
@@ -223,7 +252,8 @@ def prepare_cpt_dataset(tokenizer, data_path: str, cache_dir: str, max_length: i
         for i, path in enumerate(files, 1):
             text = _normalize_text(_read_text(path))
             if clean_titles and text:
-                text, _n_removed = dedup_chapter_titles(text)
+                text, _n_removed = dedup_chapter_titles(
+                    text, strip_all_titles=strip_titles)
                 if _n_removed:
                     log(f"[清洗] {path.name}:删除 {_n_removed} 行重复标题/装饰线")
             if not text:
